@@ -864,10 +864,64 @@ function renderHome() {
   `;
 }
 
+function getTodayTeacherAttendanceRow() {
+  var today = agTodayISO();
+  var nip = String(appState.teacherNip || '').trim();
+  var rows = (appState.supabaseModules && appState.supabaseModules.presensiGuru) ? appState.supabaseModules.presensiGuru : [];
+  rows = Array.isArray(rows) ? rows : [];
+  return rows.find(function(r){
+    if (!r) return false;
+    var sameDate = guruRowDate(r) === today;
+    var rowNip = String(r.nip || r.nip_guru || r.NIP || '').trim();
+    return sameDate && (!nip || !rowNip || rowNip === nip);
+  }) || null;
+}
+
+function syncTeacherAttendanceFromTodayRow(row) {
+  if (!row) return false;
+  var att = appState.teacherAttendance || (appState.teacherAttendance = {});
+  att.status = row.status || att.status || 'hadir';
+  att.checkIn = row.jam_masuk || row.checkIn || row.masuk || att.checkIn || '';
+  att.checkOut = row.jam_pulang || row.checkOut || row.pulang || att.checkOut || '';
+  att.sesi = row.sesi || att.sesi || 'Hari Kerja Biasa';
+  att.keterangan = row.keterangan || row.ket || att.keterangan || '';
+  att.note = 'Presensi guru hari ini sudah tersimpan dan dikunci.';
+  att.lockedToday = true;
+  att.lockedDate = agTodayISO();
+  return true;
+}
+
+function isTeacherAttendanceLockedToday() {
+  if (appState.teacherAttendance && appState.teacherAttendance.lockedToday && appState.teacherAttendance.lockedDate === agTodayISO()) return true;
+  return !!getTodayTeacherAttendanceRow();
+}
+
+function resetTeacherAttendanceIfNewDay() {
+  var att = appState.teacherAttendance || (appState.teacherAttendance = {});
+  if (att.lockedDate && att.lockedDate !== agTodayISO()) {
+    appState.teacherAttendance = {
+      status: 'hadir',
+      checkIn: '',
+      checkOut: '',
+      sesi: att.sesi || 'Hari Kerja Biasa',
+      keterangan: '',
+      isLate: false,
+      lateMinutes: 0,
+      note: 'Silakan lakukan presensi hari ini.',
+      lockedToday: false,
+      lockedDate: ''
+    };
+  }
+}
+
 function renderTeacherAttendance() {
+  resetTeacherAttendanceIfNewDay();
+  const todayRow = getTodayTeacherAttendanceRow();
+  if (todayRow) syncTeacherAttendanceFromTodayRow(todayRow);
   const att = appState.teacherAttendance;
-  const isCheckedIn  = Boolean(att.checkIn);
-  const isCheckedOut = Boolean(att.checkOut);
+  const lockedToday = isTeacherAttendanceLockedToday();
+  const isCheckedIn  = Boolean(att.checkIn) || lockedToday;
+  const isCheckedOut = Boolean(att.checkOut) || lockedToday;
   const checkInText  = att.checkIn  || '--:--';
   const checkOutText = att.checkOut || '--:--';
 
@@ -890,7 +944,7 @@ function renderTeacherAttendance() {
     <section class="section">
       <article class="teacher-attendance-card ag-main-card">
         <div class="ag-card-top">
-          <span class="attendance-status ${statusTone}">${isCheckedIn ? agStatusLabel(autoStatus) : 'Belum presensi'}</span>
+          <span class="attendance-status ${lockedToday ? 'green' : statusTone}">${lockedToday ? 'Sudah presensi' : (isCheckedIn ? agStatusLabel(autoStatus) : 'Belum presensi')}</span>
           <span class="ag-date-chip">${agTodayLabel()}</span>
         </div>
         <h3 class="attendance-title">${appState.syncMode === 'supabase-empty' ? 'Presensi Guru' : ('Presensi ' + (appState.teacherName || 'Guru'))}</h3>
@@ -951,16 +1005,19 @@ function renderTeacherAttendance() {
 
         <!-- Tombol aksi -->
         <div class="ag-actions">
-          ${!isCheckedIn ? `
+          ${lockedToday ? `
+            <div class="ag-done-chip">&#10003; Presensi guru hari ini sudah tersimpan dan dikunci</div>
+            <p class="ag-cutoff-note">Input ulang untuk tanggal yang sama tidak diperbolehkan.</p>` : ''}
+          ${!lockedToday && !isCheckedIn ? `
             <button type="button" class="primary-btn" data-attendance-action="checkIn">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:7px"><path d="M4 8.5a2 2 0 0 1 2-2h1.6l1-1.5a1 1 0 0 1 .8-.4h5.2a1 1 0 0 1 .8.4l1 1.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/></svg>Check-in &mdash; catat jam masuk sekarang
             </button>
             <p class="ag-cutoff-note">Batas tepat waktu: <strong>${AG_CUTOFF} WIB</strong>. Check-in setelah jam ini otomatis tercatat <em>Terlambat</em>.</p>` : ''}
-          ${isCheckedIn && !isCheckedOut ? `
+          ${!lockedToday && isCheckedIn && !isCheckedOut ? `
             <button type="button" class="ghost-btn dark" data-attendance-action="checkOut">
               Check-out &mdash; catat jam pulang
             </button>` : ''}
-          ${isCheckedOut ? `
+          ${!lockedToday && isCheckedOut ? `
             <div class="ag-done-chip">&#10003; Presensi hari ini selesai</div>` : ''}
         </div>
       </article>
@@ -1276,7 +1333,9 @@ function guruModuleDataKey(moduleId) {
     'absensi-siswa': 'absensi',
     'nilai': 'nilai',
     'jurnal-guru': 'jurnal',
-    'jurnal-kelas': 'jurnal',
+    // Jurnal Kelas harus baca key sendiri. Sebelumnya ikut 'jurnal' (jurnal_guru),
+    // akibatnya data masuk tabel jurnal_kelas tapi riwayat modul Jurnal Kelas kosong.
+    'jurnal-kelas': 'jurnalKelas',
     'catatan-siswa': 'catatan',
     'hafalan': 'hafalan',
     'ibadah': 'ibadah',
@@ -1438,10 +1497,15 @@ function renderStudentAttendanceModule(detail) {
   const as = getAbsenSiswaState();
   const siswaDiKelas = getSiswaByKelas(as.kelas);
   const statusMap = appState.absenSiswaStatus || {};
-  const filled = siswaDiKelas.filter(s => statusMap[s.nis]).length;
-  const hadir = siswaDiKelas.filter(s => statusMap[s.nis] === 'H').length;
-  const izinSakit = siswaDiKelas.filter(s => ['I','S'].includes(statusMap[s.nis])).length;
-  const alpa = siswaDiKelas.filter(s => statusMap[s.nis] === 'A').length;
+  const todayMap = getTodayAbsensiMap(as.kelas);
+  const combinedStatusMap = Object.assign({}, statusMap);
+  Object.keys(todayMap).forEach(function(nis){ combinedStatusMap[nis] = todayStatusToCode(todayMap[nis].status); });
+  const filled = siswaDiKelas.filter(s => combinedStatusMap[s.nis]).length;
+  const hadir = siswaDiKelas.filter(s => combinedStatusMap[s.nis] === 'H').length;
+  const izinSakit = siswaDiKelas.filter(s => ['I','S'].includes(combinedStatusMap[s.nis])).length;
+  const alpa = siswaDiKelas.filter(s => combinedStatusMap[s.nis] === 'A').length;
+  const alreadyToday = Object.keys(todayMap).length;
+  const isCompleteToday = siswaDiKelas.length > 0 && alreadyToday >= siswaDiKelas.length;
   return `
     ${moduleIntro(detail)}
 
@@ -1450,7 +1514,8 @@ function renderStudentAttendanceModule(detail) {
         <div>
           <span class="module-summary-kicker">Absensi Kelas ${as.kelas}</span>
           <h3>${filled}/${siswaDiKelas.length || 0} siswa tercatat</h3>
-          <p>Hadir ${hadir} &middot; Izin/Sakit ${izinSakit} &middot; Alpa ${alpa}</p>
+          <p>${alreadyToday ? ('Hari ini sudah tersimpan ' + alreadyToday + ' siswa &middot; ') : ''}Hadir ${hadir} &middot; Izin/Sakit ${izinSakit} &middot; Alpa ${alpa}</p>
+          ${isCompleteToday ? '<p class="absen-locked-note">✓ Absensi kelas ini sudah lengkap hari ini. Input ulang dikunci.</p>' : ''}
         </div>
         <div class="summary-ring" style="--pct:${siswaDiKelas.length ? Math.round((filled/siswaDiKelas.length)*100) : 0}%">
           <span>${siswaDiKelas.length ? Math.round((filled/siswaDiKelas.length)*100) : 0}%</span>
@@ -1478,8 +1543,31 @@ function renderStudentAttendanceModule(detail) {
     </section>
 
     <div class="absen-bottom-spacer"></div>
-    ${(function(){ appState._absenDock = { kelas: as.kelas, filled: filled, total: (siswaDiKelas.length||0) }; return ''; })()}
+    ${(function(){ appState._absenDock = { kelas: as.kelas, filled: filled, total: (siswaDiKelas.length||0), locked: isCompleteToday, savedToday: alreadyToday }; return ''; })()}
   `;
+}
+
+function getTodayAbsensiMap(kelas) {
+  var all = (appState.supabaseModules && appState.supabaseModules.absensi) ? appState.supabaseModules.absensi : [];
+  var today = agTodayISO();
+  var map = {};
+  (Array.isArray(all) ? all : []).forEach(function(r){
+    if (!r) return;
+    var tg = absensiRowDate(r);
+    var rk = String(r.kelas || r.kelas_id || '').trim();
+    var nis = String(r.siswa_id || r.nis || r.nis_siswa || r.siswa_nis || '').trim();
+    if (tg === today && nis && (!kelas || rk === kelas)) map[nis] = r;
+  });
+  return map;
+}
+
+function todayStatusToCode(status) {
+  var st = String(status || '').trim().toLowerCase();
+  if (st === 'h' || st === 'hadir') return 'H';
+  if (st === 'i' || st === 'izin') return 'I';
+  if (st === 's' || st === 'sakit') return 'S';
+  if (st === 'a' || st === 'alpa' || st === 'alpha') return 'A';
+  return st ? st.charAt(0).toUpperCase() : '';
 }
 
 const MAPEL_LIST = ['Matematika','Bahasa Indonesia','IPA','IPS','PKn','PAI','PJOK','SBdP','Fiqih','Quran Hadits','Akidah Akhlak','SKI','Bahasa Arab'];
@@ -1545,19 +1633,24 @@ function stickyActionBar(label, meta, attr, extraClass) {
 
 function premiumAttendanceRow(student, activeStatus) {
   const labels = { H:'Hadir', I:'Izin', S:'Sakit', A:'Alpa' };
+  const as = getAbsenSiswaState();
+  const todayMap = getTodayAbsensiMap(as.kelas);
+  const savedToday = todayMap[String(student.nis)] || null;
+  const finalStatus = savedToday ? todayStatusToCode(savedToday.status) : activeStatus;
   return `
-    <article class="premium-att-row ${activeStatus ? 'is-filled' : ''}">
+    <article class="premium-att-row ${finalStatus ? 'is-filled' : ''} ${savedToday ? 'is-saved-today' : ''}">
       <div class="pa-student">
         <span class="sp-avatar">${initalsOf(student.name)}</span>
         <div>
           <strong>${student.name}</strong>
-          <small>NIS ${student.nis}${activeStatus ? ' &middot; '+labels[activeStatus] : ''}</small>
+          <small>NIS ${student.nis}${finalStatus ? ' &middot; '+(labels[finalStatus] || finalStatus) : ''}${savedToday ? ' &middot; sudah diabsen hari ini' : ''}</small>
         </div>
       </div>
       <div class="pa-status-group">
         ${['H','I','S','A'].map(st => `
-          <button type="button" class="absen-chip ${st.toLowerCase()} ${activeStatus===st?'active':''}" data-absen-status="${st}" data-absen-nis="${student.nis}" aria-label="${labels[st]} ${student.name}">${st}</button>`).join('')}
+          <button type="button" class="absen-chip ${st.toLowerCase()} ${finalStatus===st?'active':''}" data-absen-status="${st}" data-absen-nis="${student.nis}" ${savedToday ? 'disabled aria-disabled="true" title="Sudah diabsen hari ini"' : ''} aria-label="${labels[st]} ${student.name}">${st}</button>`).join('')}
       </div>
+      ${savedToday ? '<span class="absen-saved-badge">✓ Sudah absen hari ini</span>' : ''}
     </article>`;
 }
 
@@ -3233,7 +3326,16 @@ function ensureAnnStyles(){
   (document.head || document.documentElement).appendChild(st);
 }
 
+function ensureAbsenTodayStyles(){
+  if(document.getElementById('absen-today-lock-styles')) return;
+  var st = document.createElement('style');
+  st.id = 'absen-today-lock-styles';
+  st.textContent = '#appFloating .premium-att-row.is-saved-today{border-color:#16a34a;background:linear-gradient(135deg,rgba(22,163,74,.10),rgba(15,23,42,.02))}#appFloating .premium-att-row.is-saved-today .absen-chip:disabled,#appFloating .absen-save-dock.is-locked .sticky-save-btn:disabled{opacity:.55;cursor:not-allowed;filter:grayscale(.25)}#appFloating .absen-saved-badge{display:inline-flex;align-items:center;gap:4px;margin:8px 0 0 52px;padding:5px 9px;border-radius:999px;background:#dcfce7;color:#166534;font-size:11px;font-weight:800}#appFloating .absen-locked-note{margin-top:6px;color:#166534;font-weight:800}';
+  (document.head || document.documentElement).appendChild(st);
+}
+
 function renderFloating() {
+  ensureAbsenTodayStyles();
   const toastHtml = appState.toast ? `
     <div class="premium-snackbar ${appState.toast.tone || 'success'}" role="status">
       <span class="snack-icon">${appState.toast.icon || '&#10003;'}</span>
@@ -3242,12 +3344,12 @@ function renderFloating() {
 
   const _dock = appState._absenDock;
   const dockHtml = _dock ? `
-    <div class="sticky-action-bar is-floating absen-save-dock">
+    <div class="sticky-action-bar is-floating absen-save-dock ${_dock.locked ? 'is-locked' : ''}">
       <div>
-        <strong>Simpan Absensi Kelas ${_dock.kelas}</strong>
-        <span>${_dock.filled}/${_dock.total} siswa tercatat</span>
+        <strong>${_dock.locked ? 'Absensi Hari Ini Selesai' : ('Simpan Absensi Kelas ' + _dock.kelas)}</strong>
+        <span>${_dock.filled}/${_dock.total} siswa tercatat${_dock.savedToday ? ' · sudah tersimpan hari ini' : ''}</span>
       </div>
-      <button type="button" class="sticky-save-btn" data-save-absensi>Simpan</button>
+      <button type="button" class="sticky-save-btn" data-save-absensi ${_dock.locked ? 'disabled aria-disabled="true"' : ''}>${_dock.locked ? 'Sudah Absen' : 'Simpan'}</button>
     </div>` : '';
 
   if (!appState.showAnnouncements) {
@@ -3709,8 +3811,11 @@ function bindActions() {
       const siswaKelas = getSiswaByKelas(as.kelas);
       const total = siswaKelas.length;
       const statusMap = appState.absenSiswaStatus || {};
-      const tandai = siswaKelas.filter(function(s){ return statusMap[s.nis]; });
-      if (!tandai.length) { showToast('Tandai status minimal satu siswa dulu.', 'error', '&#9888;'); return; }
+      const todayMap = getTodayAbsensiMap(as.kelas);
+      const tandai = siswaKelas.filter(function(s){ return statusMap[s.nis] && !todayMap[String(s.nis)]; });
+      const sudahHariIni = siswaKelas.filter(function(s){ return todayMap[String(s.nis)]; }).length;
+      if (sudahHariIni >= total && total > 0) { showToast('Absensi kelas ' + as.kelas + ' sudah dilakukan hari ini.', 'error', '&#9888;'); return; }
+      if (!tandai.length) { showToast(sudahHariIni ? 'Siswa yang dipilih sudah diabsen hari ini.' : 'Tandai status minimal satu siswa dulu.', 'error', '&#9888;'); return; }
       // Mode Supabase: simpan setiap siswa yang sudah ditandai ke tabel absensi_siswa sekaligus
       if (appState.syncMode === 'supabase-live' && window.ZymataMobileSupabase && window.ZymataMobileSupabase.createSpecificOrFallback) {
         const labelMap = { H:'Hadir', I:'Izin', S:'Sakit', A:'Alpa' };
@@ -3735,7 +3840,7 @@ function bindActions() {
         appState.riwayatAbsenOpen = true;
         await hydrateGuruFromSupabase();
         if (gagalCount) showToast('Absensi ' + as.kelas + ' tersimpan ' + okCount + ', gagal ' + gagalCount + '.', 'error', '&#9888;');
-        else showToast('Absensi ' + as.kelas + ' tersimpan \u00b7 ' + okCount + ' siswa', 'success', '&#10003;');
+        else showToast('Absensi ' + as.kelas + ' tersimpan \u00b7 ' + okCount + ' siswa' + (sudahHariIni ? ' · ' + sudahHariIni + ' sudah ada' : ''), 'success', '&#10003;');
         return;
       }
       // Mode lokal (tanpa Supabase): simpan draft seperti semula
@@ -3749,6 +3854,10 @@ function bindActions() {
 
     const absenStatusBtn = event.target.closest('[data-absen-status]');
     if (absenStatusBtn) {
+      if (absenStatusBtn.disabled || absenStatusBtn.getAttribute('aria-disabled') === 'true') {
+        showToast('Siswa ini sudah diabsen hari ini.', 'error', '&#9888;');
+        return;
+      }
       appState.absenSiswaStatus = appState.absenSiswaStatus || {};
       appState.absenSiswaStatus[absenStatusBtn.dataset.absenNis] = absenStatusBtn.dataset.absenStatus;
       render();
@@ -3765,6 +3874,10 @@ function bindActions() {
         var found = siswaKelas.find(function(s){ return String(s.nis) === nis; });
         if (!found) {
           showToast('NIS "' + nis + '" tidak ada di kelas ' + as.kelas + '.', 'error', '&#9888;');
+          return;
+        }
+        if (getTodayAbsensiMap(as.kelas)[String(found.nis)]) {
+          showToast(found.name + ' sudah diabsen hari ini.', 'error', '&#9888;');
           return;
         }
         appState.absenSiswaStatus = appState.absenSiswaStatus || {};
@@ -4047,6 +4160,12 @@ function bindActions() {
       if (!text) { showToast('Isi data dulu sebelum simpan.', 'error', '&#9888;'); return; }
       try {
         const payload = { text, status: 'Aktif', role: 'Guru', module: appState.activeTab };
+        // Kirim identitas guru agar Jurnal Guru/Jurnal Kelas tampil nama guru di web admin.
+        payload.__guru = {
+          nama: appState.teacherName || '',
+          nip: appState.teacherNip || '',
+          jabatan: appState.teacherJabatan || ''
+        };
         if (fields.length) payload.fields = fieldPayload;
         // Lengkapi nama & kelas siswa terpilih agar datanya tampil benar di aplikasi web
         try {
@@ -4196,6 +4315,12 @@ function bindActions() {
     const attendanceButton = event.target.closest('[data-attendance-action]');
     if (attendanceButton) {
       appState.showAnnouncements = false;
+      if (isTeacherAttendanceLockedToday()) {
+        showToast('Presensi guru hari ini sudah tersimpan dan dikunci.', 'error', '&#9888;');
+        syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
+        render();
+        return;
+      }
       const updated = await updateTeacherAttendance(attendanceButton.dataset.attendanceAction);
       saveState();
       render();
@@ -4322,6 +4447,12 @@ async function saveTeacherAttendanceToSupabase() {
     showToast('Presensi tersimpan, tapi NIP guru kosong sehingga belum tampil di web.', 'error', '&#9888;');
     return false;
   }
+  var existingToday = getTodayTeacherAttendanceRow();
+  if (existingToday && !att.__allowInitialSave) {
+    syncTeacherAttendanceFromTodayRow(existingToday);
+    showToast('Presensi guru hari ini sudah tersimpan dan dikunci.', 'error', '&#9888;');
+    return false;
+  }
   const isAlpa = att.status === 'alpa';
   const payload = {
     tanggal: agTodayISO(),
@@ -4363,6 +4494,11 @@ async function saveTeacherAttendanceToSupabase() {
 }
 
 async function updateTeacherAttendance(type) {
+  if (isTeacherAttendanceLockedToday()) {
+    syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
+    showToast('Presensi guru hari ini sudah tersimpan dan dikunci.', 'error', '&#9888;');
+    return false;
+  }
   const hhmm = agNowHHMM();
   if (type === 'checkIn' && !appState.teacherAttendance.checkIn) {
     const prevStatus = appState.teacherAttendance.status;
@@ -4399,7 +4535,12 @@ async function updateTeacherAttendance(type) {
         : `Check-in ${hhmm} \u2014 tepat waktu sebelum batas ${AG_CUTOFF}. GPS valid ${gps.distance} m dari sekolah.`;
       showToast(`Check-in valid radius ${gps.distance} m`, 'success', '&#10003;');
     }
-    await saveTeacherAttendanceToSupabase();
+    var saved = await saveTeacherAttendanceToSupabase();
+    if (saved) {
+      appState.teacherAttendance.lockedToday = true;
+      appState.teacherAttendance.lockedDate = agTodayISO();
+      appState.teacherAttendance.note = 'Presensi guru hari ini sudah tersimpan dan dikunci.';
+    }
     return true;
   }
   if (type === 'checkOut' && appState.teacherAttendance.checkIn && !appState.teacherAttendance.checkOut) {
@@ -4810,6 +4951,10 @@ async function hydrateGuruFromSupabase() {
       } catch (_eAll) {}
     }
     if (modulesData) appState.supabaseModules = dedupeModules(modulesData);
+    syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
+    if (kelasUtama && appState.supabaseModules && appState.supabaseModules.absensi) {
+      appState.attendanceDone = Object.keys(getTodayAbsensiMap(kelasUtama)).length;
+    }
     saveDataCache();
     saveState();
     if (!window.__qrScannerOpen) render(); // skip render saat kamera terbuka
