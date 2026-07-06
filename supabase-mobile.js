@@ -658,7 +658,19 @@
           mapped.nilai_akhir = Math.round((Number(mapped.nilai_tugas || 0) + Number(mapped.nilai_ujian || 0)) / 2);
         }
       }
-      // 3d) Catatan siswa (jurnal_siswa): "Kirim ke Wali = Ya" -> status_visibilitas 'terkirim_wali' (sama seperti web).
+      // 3d) Jurnal Guru/Jurnal Kelas: lengkapi nama guru agar kolom Guru di web admin tidak kosong.
+      if(table === 'jurnal_guru' || table === 'jurnal_kelas'){
+        const g = payload.__guru || {};
+        const sess = readSession() || {};
+        const guruNama = clean(g.nama || sess.nama_guru || sess.nama || sess.username || '');
+        if(guruNama){
+          if(!mapped.guru_nama) mapped.guru_nama = guruNama;
+          // tabel jurnal_guru punya kolom guru; jurnal_kelas minimal punya guru_nama.
+          if(table === 'jurnal_guru' && !mapped.guru) mapped.guru = guruNama;
+        }
+        if(!mapped.tanggal) mapped.tanggal = now.slice(0,10);
+      }
+      // 3e) Catatan siswa (jurnal_siswa): "Kirim ke Wali = Ya" -> status_visibilitas 'terkirim_wali' (sama seperti web).
       if(table === 'jurnal_siswa'){
         const kw = String(mapped.kirim_wali || '').toLowerCase();
         delete mapped.kirim_wali;
@@ -749,7 +761,12 @@
     }
 
     if(table === 'pengumuman') return Object.assign(base, { judul: text.slice(0, 120), isi: text, kategori: role || 'mobile', status: 'Aktif' });
-    if(table === 'jurnal_guru') return Object.assign(base, { tanggal: now.slice(0,10), kegiatan: text, materi: text, status: payload.status || 'Draft' });
+    if(table === 'jurnal_guru') {
+      const g = payload.__guru || {};
+      const sess = readSession() || {};
+      const guruNama = clean(g.nama || sess.nama_guru || sess.nama || sess.username || '');
+      return Object.assign(base, { tanggal: now.slice(0,10), guru: guruNama, guru_nama: guruNama, kegiatan: text, materi: text, status: payload.status || 'Draft' });
+    }
     if(table === 'catatan_siswa') return Object.assign(base, { tanggal: now.slice(0,10), isi: text, catatan: text, kategori: role || 'mobile' });
     if(table === 'surat') return Object.assign(base, { tanggal: now.slice(0,10), jenis: role === 'wali' ? 'Izin Wali' : 'Catatan Guru', perihal: text.slice(0,120), isi: text, keterangan: text, pihak: role === 'wali' ? 'Wali Murid' : 'Sekolah', status: payload.status || 'Diajukan' });
     if(table === 'hafalan') return Object.assign(base, { tanggal: now.slice(0,10), catatan: text, keterangan: text, status: payload.status || 'Aktif' });
@@ -765,6 +782,8 @@
   // Tabel yang harus MERGE ke baris yang cocok (mis. wali sudah mengisi) alih-alih membuat baris baru.
   // Mutaba'ah Qur'an: wali mengisi tilawah/murojaah, guru mengisi ziyadah/setoran pada baris siswa+tanggal yang sama.
   const UPSERT_MATCH_COLS = {
+    // Absensi siswa tidak boleh dobel pada tanggal yang sama. Jika sudah ada, jangan insert baris baru.
+    absensi_siswa: ['siswa_id', 'tanggal'],
     mutabaah_quran: ['siswa_id', 'tanggal'],
     mutabaah_rumah: ['siswa_id', 'tanggal']
   };
@@ -782,6 +801,7 @@
           matchCols.forEach(function(c){ q = q.eq(c, body[c]); });
           const existing = await q.limit(1);
           if(existing && !existing.error && Array.isArray(existing.data) && existing.data.length){
+            if(table === 'absensi_siswa') return { table, row: existing.data[0], fallback: false, duplicate: true };
             const upd = await getClient().from(table).update(body).eq('id', existing.data[0].id).select('*').single();
             if(!upd.error && upd.data) return { table, row: upd.data, fallback: false };
             lastError = (upd.error && upd.error.message) ? upd.error.message : lastError;
@@ -889,6 +909,7 @@
       absensi: appRowsToItems(await loadAppModuleRows(appPrefix + 'absensi-siswa')),
       nilai: appRowsToItems(await loadAppModuleRows(appPrefix + 'nilai')),
       jurnal: appRowsToItems(await loadAppModuleRows(appPrefix + 'jurnal-guru')),
+      jurnalKelas: appRowsToItems(await loadAppModuleRows(appPrefix + 'jurnal-kelas')),
       catatan: appRowsToItems(await loadAppModuleRows(appPrefix + 'catatan-siswa')),
       hafalan: appRowsToItems(await loadAppModuleRows(appPrefix + 'hafalan')),
       membaca_quran: appRowsToItems(await loadAppModuleRows(appPrefix + 'membaca-quran')),
@@ -913,6 +934,7 @@
         .concat((await tryFilteredList('ulangan_harian_nilai', allKelasFilters, 120, { noFallback: true })).map(function(r){ return Object.assign({}, r, {__tipe:'ulangan-harian'}); }))
         .concat((await tryFilteredList('ujian_semester_nilai', allKelasFilters, 120, { noFallback: true })).map(function(r){ return Object.assign({}, r, {__tipe:'ujian-semester'}); })),
       jurnal: mobile.jurnal.concat(await tryFilteredList('jurnal_guru', commonGuruFilters, 50, { noFallback: true })),
+      jurnalKelas: mobile.jurnalKelas.concat(await tryFilteredList('jurnal_kelas', allKelasFilters, 80, { noFallback: true })),
       catatan: mobile.catatan.concat(await tryFilteredList('jurnal_siswa', allKelasFilters, 80, { noFallback: true })),
       hafalan: mobile.hafalan.concat(await tryFilteredList('hafalan', allKelasFilters, 80, { noFallback: true })),
       membaca_quran: mobile.membaca_quran.concat(await tryFilteredList('membaca_quran', allKelasFilters, 80, { noFallback: true })),
@@ -1015,6 +1037,13 @@
     try {
       const client = getClient();
       // Merge manual: tidak bergantung pada unique index di DB (yang sering belum dibuat).
+      // Khusus absensi guru: 1 guru hanya boleh punya 1 presensi per tanggal, meskipun sesi diganti.
+      if(table === 'absensi_guru' && body && body.tanggal && body.nip){
+        const existingGuru = await client.from(table).select('*').eq('tanggal', body.tanggal).eq('nip', body.nip).limit(1);
+        if(existingGuru && !existingGuru.error && Array.isArray(existingGuru.data) && existingGuru.data.length){
+          return { data: existingGuru.data, duplicate: true, locked: true };
+        }
+      }
       if(onConflict){
         const cols = String(onConflict).split(',').map(function(c){ return c.trim(); }).filter(Boolean);
         const punyaSemua = cols.length && cols.every(function(c){ return body[c] !== undefined && body[c] !== null && body[c] !== ''; });
@@ -1023,6 +1052,7 @@
           cols.forEach(function(c){ q = q.eq(c, body[c]); });
           const existing = await q.limit(1);
           if(existing && !existing.error && Array.isArray(existing.data) && existing.data.length){
+            if(table === 'absensi_guru') return { data: existing.data, duplicate: true, locked: true };
             return await client.from(table).update(body).eq('id', existing.data[0].id).select();
           }
           return await client.from(table).insert(body).select();
