@@ -450,8 +450,8 @@ function renderHeader() {
 
 // ─── Absensi Guru constants ────────�����───────────────────────────────
 const AG_CUTOFF = '06:55'; // batas tepat waktu
-const AG_RADIUS_M = 50;
-const AG_MAX_ACCURACY_M = 200;
+const AG_RADIUS_M = 75;
+const AG_MAX_ACCURACY_M = 100;
 const AG_LOKASI_KEY = 'sdplus_absensi_guru_lokasi_sekolah_v1';
 const AG_SESI_LIST = ['Hari Kerja Biasa', 'Upacara', 'Rapat Dinas', 'Hari Besar'];
 const AG_STATUS_LIST = [
@@ -606,6 +606,16 @@ function agStatusLabel(value) {
 function agStatusTone(value) {
   const found = AG_STATUS_LIST.find(s => s.value === value);
   return found ? found.tone : 'blue';
+}
+
+function agDbStatus(value) {
+  // UI boleh menampilkan 'terlambat', tapi CHECK constraint tabel absensi_guru
+  // biasanya hanya menerima: hadir, izin, sakit, dinas, alpa.
+  // Jadi terlambat disimpan sebagai hadir; detail terlambat masuk keterangan.
+  const st = String(value || '').trim().toLowerCase();
+  if (st === 'terlambat') return 'hadir';
+  if (['hadir','izin','sakit','dinas','alpa'].includes(st)) return st;
+  return 'hadir';
 }
 
 function agCanUseGps() {
@@ -885,15 +895,23 @@ function syncTeacherAttendanceFromTodayRow(row) {
   att.checkOut = row.jam_pulang || row.checkOut || row.pulang || att.checkOut || '';
   att.sesi = row.sesi || att.sesi || 'Hari Kerja Biasa';
   att.keterangan = row.keterangan || row.ket || att.keterangan || '';
-  att.note = 'Presensi guru hari ini sudah tersimpan dan dikunci.';
-  att.lockedToday = true;
-  att.lockedDate = agTodayISO();
+  var done = !!att.checkOut;
+  att.note = done ? 'Presensi guru hari ini sudah selesai dan dikunci.' : 'Check-in sudah tersimpan. Silakan check-out saat pulang.';
+  att.lockedToday = done;
+  att.lockedDate = done ? agTodayISO() : '';
   return true;
 }
 
 function isTeacherAttendanceLockedToday() {
   if (appState.teacherAttendance && appState.teacherAttendance.lockedToday && appState.teacherAttendance.lockedDate === agTodayISO()) return true;
-  return !!getTodayTeacherAttendanceRow();
+  var r = getTodayTeacherAttendanceRow();
+  return !!(r && (r.jam_pulang || r.checkOut || r.pulang));
+}
+
+function hasTeacherCheckInToday() {
+  var r = getTodayTeacherAttendanceRow();
+  if (r && (r.jam_masuk || r.checkIn || r.masuk)) return true;
+  return !!(appState.teacherAttendance && appState.teacherAttendance.checkIn);
 }
 
 function resetTeacherAttendanceIfNewDay() {
@@ -4522,7 +4540,7 @@ function bindActions() {
 
 // Kirim presensi guru ke Supabase (tabel absensi_guru) agar tampil di web.
 // Kolom & match key disamakan dengan web: tanggal,sesi,nip + status,jam_masuk,jam_pulang,keterangan.
-async function saveTeacherAttendanceToSupabase() {
+async function saveTeacherAttendanceToSupabase(allowExistingUpdate) {
   const att = appState.teacherAttendance || {};
   const nip = String(appState.teacherNip || '').trim();
   if (!nip) {
@@ -4531,23 +4549,43 @@ async function saveTeacherAttendanceToSupabase() {
     return false;
   }
   var existingToday = getTodayTeacherAttendanceRow();
-  if (existingToday && !att.__allowInitialSave) {
+  if (existingToday && !allowExistingUpdate && !att.__allowInitialSave) {
     syncTeacherAttendanceFromTodayRow(existingToday);
-    showToast('Presensi guru hari ini sudah tersimpan dan dikunci.', 'error', '&#9888;');
+    showToast('Check-in guru hari ini sudah tersimpan. Lanjutkan dengan check-out saat pulang.', 'error', '&#9888;');
     return false;
   }
-  const isAlpa = att.status === 'alpa';
+  const dbStatus = agDbStatus(att.status || 'hadir');
+  const isAlpa = dbStatus === 'alpa';
+  const lateKet = (att.status === 'terlambat' || att.isLate)
+    ? ('Terlambat' + (att.lateMinutes ? (' ' + att.lateMinutes + ' menit') : '') + (att.checkIn ? ('; check-in ' + att.checkIn) : ''))
+    : '';
   const payload = {
     tanggal: agTodayISO(),
     sesi: att.sesi || 'Hari Kerja Biasa',
     nip: nip,
-    status: att.status || 'hadir',
+    status: dbStatus,
     jam_masuk: isAlpa ? '' : (att.checkIn || ''),
     jam_pulang: isAlpa ? '' : (att.checkOut || ''),
-    keterangan: att.keterangan || att.ket || att.note || '',
+    keterangan: [att.keterangan || att.ket || '', lateKet, att.note || ''].filter(Boolean).join(' | '),
     client_key: 'default'  // wajib agar web bisa baca (web filter: WHERE client_key = 'default')
   };
   try {
+    if (existingToday && allowExistingUpdate && window.ZymataMobileSupabase && typeof window.ZymataMobileSupabase.getClient === 'function') {
+      var client = window.ZymataMobileSupabase.getClient();
+      var upd = null;
+      if (existingToday.id) {
+        upd = await client.from('absensi_guru').update(payload).eq('id', existingToday.id).select();
+      } else {
+        upd = await client.from('absensi_guru').update(payload).eq('tanggal', payload.tanggal).eq('nip', payload.nip).select();
+      }
+      if (upd && upd.error) {
+        console.warn('[AbsenGuru HP] gagal update checkout:', upd.error.message || upd.error);
+        showToast('Check-out tersimpan lokal, gagal sinkron ke web: ' + (upd.error.message || 'error'), 'error', '&#9888;');
+        return false;
+      }
+      console.log('[AbsenGuru HP] checkout/update tersimpan ke Supabase:', payload.tanggal, '|', payload.nip);
+      return true;
+    }
     let res = null;
     if (window.db && typeof window.db.upsert === 'function') {
       res = await window.db.upsert('absensi_guru', payload, 'tanggal,sesi,nip');
@@ -4577,9 +4615,14 @@ async function saveTeacherAttendanceToSupabase() {
 }
 
 async function updateTeacherAttendance(type) {
-  if (isTeacherAttendanceLockedToday()) {
-    syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
-    showToast('Presensi guru hari ini sudah tersimpan dan dikunci.', 'error', '&#9888;');
+  var todayRow = getTodayTeacherAttendanceRow();
+  if (todayRow) syncTeacherAttendanceFromTodayRow(todayRow);
+  if (type === 'checkIn' && hasTeacherCheckInToday()) {
+    showToast('Check-in guru hari ini sudah tersimpan. Tidak bisa check-in dua kali.', 'error', '&#9888;');
+    return false;
+  }
+  if (type === 'checkOut' && isTeacherAttendanceLockedToday()) {
+    showToast('Check-out guru hari ini sudah tersimpan dan dikunci.', 'error', '&#9888;');
     return false;
   }
   const hhmm = agNowHHMM();
@@ -4618,18 +4661,23 @@ async function updateTeacherAttendance(type) {
         : `Check-in ${hhmm} \u2014 tepat waktu sebelum batas ${AG_CUTOFF}. GPS valid ${gps.distance} m dari sekolah.`;
       showToast(`Check-in valid radius ${gps.distance} m`, 'success', '&#10003;');
     }
-    var saved = await saveTeacherAttendanceToSupabase();
+    var saved = await saveTeacherAttendanceToSupabase(false);
     if (saved) {
-      appState.teacherAttendance.lockedToday = true;
-      appState.teacherAttendance.lockedDate = agTodayISO();
-      appState.teacherAttendance.note = 'Presensi guru hari ini sudah tersimpan dan dikunci.';
+      appState.teacherAttendance.lockedToday = false;
+      appState.teacherAttendance.lockedDate = '';
+      appState.teacherAttendance.note = 'Check-in tersimpan. Silakan check-out saat pulang.';
     }
     return true;
   }
   if (type === 'checkOut' && appState.teacherAttendance.checkIn && !appState.teacherAttendance.checkOut) {
     appState.teacherAttendance.checkOut = hhmm;
     appState.teacherAttendance.note = `Presensi selesai. Pulang pukul ${hhmm}.`;
-    await saveTeacherAttendanceToSupabase();
+    var savedOut = await saveTeacherAttendanceToSupabase(true);
+    if (savedOut) {
+      appState.teacherAttendance.lockedToday = true;
+      appState.teacherAttendance.lockedDate = agTodayISO();
+      appState.teacherAttendance.note = 'Presensi guru hari ini sudah selesai dan dikunci.';
+    }
     return true;
   }
   return false;
