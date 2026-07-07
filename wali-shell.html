@@ -538,9 +538,9 @@ body.wali-shell .lux-link:hover{ color:#C2410C !important; }
    bottom-nav → naik dari bawah (sheet); lainnya → fade+zoom.
    Digerakkan kelas wali-anim-* dari skrip di bawah; matikan page-enter agar tak dobel. */
 body.wali-shell .app-content.page-enter{ animation:none !important; }
-body.wali-shell .app-content.wali-anim-sheet{ animation:waliSheetIn .32s cubic-bezier(.22,1,.36,1) both !important; }
+body.wali-shell .app-content.wali-anim-sheet{ animation:waliSheetIn .46s cubic-bezier(.22,1,.36,1) both !important; }
 @keyframes waliSheetIn{ 0%{ opacity:0; transform:translateY(64px); } 60%{ opacity:1; } 100%{ opacity:1; transform:translateY(0); } }
-body.wali-shell .app-content.wali-anim-fade{ animation:waliFadeZoom .26s cubic-bezier(.22,1,.36,1) both !important; }
+body.wali-shell .app-content.wali-anim-fade{ animation:waliFadeZoom .40s cubic-bezier(.22,1,.36,1) both !important; }
 @keyframes waliFadeZoom{ 0%{ opacity:0; transform:scale(1.06); } 100%{ opacity:1; transform:scale(1); } }
 
 /* ===== KARTU TABUNGAN / FINANCE \u2014 gaya Smart Learn pastel =====
@@ -881,14 +881,11 @@ body.wali-shell .toggle.on{ background:linear-gradient(135deg,#FE8118,#F95E08) !
       if(e.target.closest('[data-module-route],[data-route],[data-action],[data-primary-action]')){ navMode = 'fade'; }
     }, true);
     function applyWaliAnim(){
-      // Transisi hanya untuk navigasi halaman besar.
-      // Tidak pakai forced reflow (offsetWidth), supaya klik input kecil tidak flash/kedip.
       var el = document.getElementById('appContent');
       if(!el) return;
       el.classList.remove('wali-anim-sheet','wali-anim-fade');
-      requestAnimationFrame(function(){
-        el.classList.add(navMode === 'sheet' ? 'wali-anim-sheet' : 'wali-anim-fade');
-      });
+      void el.offsetWidth;
+      el.classList.add(navMode === 'sheet' ? 'wali-anim-sheet' : 'wali-anim-fade');
     }
     function install(){
       var orig = window.animateWaliContent;
