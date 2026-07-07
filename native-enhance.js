@@ -42,7 +42,7 @@
       '@keyframes z-shimmer{100%{transform:translateX(100%)}}',
       '.z-skel-stack>.z-skeleton{margin-bottom:10px}',
       /* Tab transition (hanya saat ganti tab, bukan tiap render) */
-      '.z-tab-anim{animation:z-fade-up .26s cubic-bezier(.22,.61,.36,1)}',
+      '.z-tab-anim{animation:none!important}',
       '@keyframes z-fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}',
       /* Offline banner */
       '.z-offline-banner{position:fixed;left:0;right:0;bottom:-72px;z-index:99999;background:#b91c1c;color:#fff;text-align:center;font-size:13px;font-weight:800;letter-spacing:-.01em;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));box-shadow:0 -4px 16px rgba(0,0,0,.18);transition:bottom .32s cubic-bezier(.22,.61,.36,1)}',
@@ -189,17 +189,9 @@
   document.addEventListener('pointerup', clearPressed, true);
   document.addEventListener('pointercancel', clearPressed, true);
 
-  /* ---------- Tab transition (hanya saat ganti tab) ---------- */
-  document.addEventListener('click', function (ev) {
-    var tabBtn = ev.target && ev.target.closest && ev.target.closest('[data-tab]');
-    if (!tabBtn) return;
-    var content = document.getElementById('appContent') || document.querySelector('.app-content');
-    if (!content) return;
-    requestAnimationFrame(function () {
-      content.classList.remove('z-tab-anim');
-      void content.offsetWidth;
-      content.classList.add('z-tab-anim');
-    });
+  /* ---------- Tab transition dimatikan: mencegah layar berkedip di WebView native ---------- */
+  document.addEventListener('click', function (_ev) {
+    return;
   }, true);
 
   /* ---------- 5. Back button (Android, Capacitor App plugin) ---------- */
