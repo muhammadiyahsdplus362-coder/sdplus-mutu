@@ -1570,6 +1570,49 @@ function todayStatusToCode(status) {
   return st ? st.charAt(0).toUpperCase() : '';
 }
 
+function updateAbsenStatusWithoutFullRender(nis) {
+  // FIX anti-kedip Absensi Siswa: jangan render ulang 1 halaman saat klik H/I/S/A.
+  // Cukup ganti 1 baris siswa + dock simpan agar layar tidak flash/kedip.
+  try {
+    var as = getAbsenSiswaState();
+    var siswaKelas = getSiswaByKelas(as.kelas) || [];
+    var student = siswaKelas.find(function(s){ return String(s.nis) === String(nis); });
+    if (student) {
+      var btn = document.querySelector('[data-absen-nis="' + String(nis).replace(/"/g, '\"') + '"]');
+      var row = btn && btn.closest ? btn.closest('.premium-att-row') : null;
+      if (row) row.outerHTML = premiumAttendanceRow(student, (appState.absenSiswaStatus || {})[student.nis]);
+    }
+    var statusMap = appState.absenSiswaStatus || {};
+    var todayMap = getTodayAbsensiMap(as.kelas);
+    var combined = Object.assign({}, statusMap);
+    Object.keys(todayMap).forEach(function(k){ combined[k] = todayStatusToCode(todayMap[k].status); });
+    var filled = siswaKelas.filter(function(s){ return combined[s.nis]; }).length;
+    var total = siswaKelas.length || 0;
+    var alreadyToday = Object.keys(todayMap).length;
+    var isCompleteToday = total > 0 && alreadyToday >= total;
+    appState._absenDock = { kelas: as.kelas, filled: filled, total: total, locked: isCompleteToday, savedToday: alreadyToday };
+    renderFloating();
+
+    // Update ringkasan angka tanpa rebuild halaman.
+    var summary = document.querySelector('.module-summary.premium');
+    if (summary) {
+      var h3 = summary.querySelector('h3');
+      var p = summary.querySelector('p');
+      var hadir = siswaKelas.filter(function(s){ return combined[s.nis] === 'H'; }).length;
+      var izinSakit = siswaKelas.filter(function(s){ return ['I','S'].indexOf(combined[s.nis]) >= 0; }).length;
+      var alpa = siswaKelas.filter(function(s){ return combined[s.nis] === 'A'; }).length;
+      if (h3) h3.textContent = filled + '/' + total + ' siswa tercatat';
+      if (p) p.innerHTML = (alreadyToday ? ('Hari ini sudah tersimpan ' + alreadyToday + ' siswa · ') : '') + 'Hadir ' + hadir + ' · Izin/Sakit ' + izinSakit + ' · Alpa ' + alpa;
+      var ring = summary.querySelector('.summary-ring');
+      var pct = total ? Math.round((filled / total) * 100) : 0;
+      if (ring) { ring.style.setProperty('--pct', pct + '%'); var sp = ring.querySelector('span'); if (sp) sp.textContent = pct + '%'; }
+    }
+  } catch (e) {
+    console.warn('[Absensi] update ringan gagal, fallback render:', e && e.message ? e.message : e);
+    render();
+  }
+}
+
 const MAPEL_LIST = ['Matematika','Bahasa Indonesia','IPA','IPS','PKn','PAI','PJOK','SBdP','Fiqih','Quran Hadits','Akidah Akhlak','SKI','Bahasa Arab'];
 const NILAI_JENIS = ['Ulangan Harian','PTS','PAS','Tugas','Praktik'];
 const NILAI_SEMESTER = ['Ganjil','Genap'];
@@ -1661,7 +1704,7 @@ function getNilaiState() {
 function moduleScanBlock(moduleId){
   var sel = (appState.moduleScanStudent && appState.moduleScanStudent[moduleId]) || null;
   return `
-    <section class="section section--tight">
+    <section class="section section--tight" data-module-scan-wrap="${moduleId}">
       <button type="button" data-module-scan="${moduleId}" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,#00ffdb,#34e8cf);color:#06231f;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 6px 16px rgba(0,255,219,.28)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#06231f" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px;margin-right:2px"><path d="M4 8.5a2 2 0 0 1 2-2h1.6l1-1.5a1 1 0 0 1 .8-.4h5.2a1 1 0 0 1 .8.4l1 1.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/></svg>Scan QR / Barcode Siswa
       </button>
@@ -3553,6 +3596,44 @@ function updateGuruBottomNav(sectionId) {
 window.guruNav = guruNav;
 window.updateGuruBottomNav = updateGuruBottomNav;
 
+function setActiveInSameGroup(button, selector, activeClass) {
+  if (!button) return;
+  activeClass = activeClass || 'on';
+  var parent = button.closest('.chip-group, .ag-sesi-pills, .ag-status-pills, .kelas-pick-strip, .field-chip-row') || button.parentElement;
+  var scope = parent || document;
+  Array.prototype.forEach.call(scope.querySelectorAll(selector), function(el){
+    el.classList.toggle(activeClass, el === button);
+  });
+}
+
+function saveOnlyNoRender() {
+  // Untuk pilihan kecil (chip/select) DOM browser sudah berubah sendiri.
+  // Jangan panggil render() penuh karena itu membongkar appContent dan terlihat kedip.
+  saveState();
+}
+
+function updateModuleScanNoRender(moduleId) {
+  // Modul perkembangan (hafalan, ibadah, karakter, prestasi, dll):
+  // update hanya kartu hasil scan supaya fungsi sama tapi layar tidak kedip.
+  try {
+    var wrap = document.querySelector('[data-module-scan-wrap="' + String(moduleId).replace(/"/g, '\"') + '"]');
+    if (wrap) {
+      var html = moduleScanBlock(moduleId);
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html.trim();
+      var fresh = tmp.firstElementChild;
+      if (fresh) wrap.replaceWith(fresh);
+    } else {
+      // Kalau modul lama belum punya wrapper, fallback render agar fungsi tetap jalan.
+      render();
+    }
+    saveState();
+  } catch (e) {
+    console.warn('[ModuleScan] update ringan gagal, fallback render:', e && e.message ? e.message : e);
+    render();
+  }
+}
+
 function bindActions() {
   if (actionsBound) return;
   actionsBound = true;
@@ -3615,7 +3696,7 @@ function bindActions() {
         if (!agIsTaughtClass(hit.kelas)) { showToast(hit.name + ' (kelas ' + hit.kelas + ') di luar kelas yang Anda ajar.', 'error', '&#9888;'); return; }
         if (!appState.moduleScanStudent) appState.moduleScanStudent = {};
         appState.moduleScanStudent[mid] = { nis: hit.nis, kelas: hit.kelas, name: hit.name };
-        render();
+        updateModuleScanNoRender(mid);
         showToast(hit.name + ' (' + hit.kelas + ') terpilih', 'success', '&#10003;');
       });
       return;
@@ -3624,7 +3705,7 @@ function bindActions() {
     if (moduleScanClearBtn) {
       const midc = moduleScanClearBtn.dataset.moduleScanClear;
       if (appState.moduleScanStudent) delete appState.moduleScanStudent[midc];
-      render();
+      updateModuleScanNoRender(midc);
       return;
     }
 
@@ -3860,7 +3941,8 @@ function bindActions() {
       }
       appState.absenSiswaStatus = appState.absenSiswaStatus || {};
       appState.absenSiswaStatus[absenStatusBtn.dataset.absenNis] = absenStatusBtn.dataset.absenStatus;
-      render();
+      updateAbsenStatusWithoutFullRender(absenStatusBtn.dataset.absenNis);
+      saveState();
       return;
     }
 
@@ -3882,7 +3964,8 @@ function bindActions() {
         }
         appState.absenSiswaStatus = appState.absenSiswaStatus || {};
         appState.absenSiswaStatus[found.nis] = 'H';
-        render();
+        updateAbsenStatusWithoutFullRender(found.nis);
+        saveState();
         showToast(found.name + ' ditandai Hadir', 'success', '&#10003;');
       });
       return;
@@ -4246,17 +4329,17 @@ function bindActions() {
 
     // Filter Nilai
     const nfSmt = event.target.closest('[data-nf-semester]');
-    if (nfSmt) { getNilaiState().semester = nfSmt.dataset.nfSemester; render(); return; }
+    if (nfSmt) { getNilaiState().semester = nfSmt.dataset.nfSemester; setActiveInSameGroup(nfSmt, '[data-nf-semester]', 'on'); saveOnlyNoRender(); return; }
 
     // Jurnal Guru chips
     const jgJam = event.target.closest('[data-jg-jam]');
-    if (jgJam) { getJurnalGuruState().jamKe = jgJam.dataset.jgJam; render(); return; }
+    if (jgJam) { getJurnalGuruState().jamKe = jgJam.dataset.jgJam; setActiveInSameGroup(jgJam, '[data-jg-jam]', 'on'); saveOnlyNoRender(); return; }
 
     // Jurnal Kelas chips
     const jkJam = event.target.closest('[data-jk-jam]');
-    if (jkJam) { getJurnalKelasState().jamKe = jkJam.dataset.jkJam; render(); return; }
+    if (jkJam) { getJurnalKelasState().jamKe = jkJam.dataset.jkJam; setActiveInSameGroup(jkJam, '[data-jk-jam]', 'on'); saveOnlyNoRender(); return; }
     const jkStatus = event.target.closest('[data-jk-status]');
-    if (jkStatus) { getJurnalKelasState().status = jkStatus.dataset.jkStatus; render(); return; }
+    if (jkStatus) { getJurnalKelasState().status = jkStatus.dataset.jkStatus; setActiveInSameGroup(jkStatus, '[data-jk-status]', 'on'); saveOnlyNoRender(); return; }
 
     // Catatan Siswa - filter kelas + pilih siswa
     const catatanKelas = event.target.closest('[data-catatan-kelas]');
@@ -4267,13 +4350,13 @@ function bindActions() {
       render(); return;
     }
     const catatanSiswa = event.target.closest('[data-catatan-siswa]');
-    if (catatanSiswa) { getCatatanState().siswa = catatanSiswa.dataset.catatanSiswa; render(); return; }
+    if (catatanSiswa) { getCatatanState().siswa = catatanSiswa.dataset.catatanSiswa; setActiveInSameGroup(catatanSiswa, '[data-catatan-siswa]', 'active'); saveOnlyNoRender(); return; }
     const catatanWali = event.target.closest('[data-catatan-toggle-wali]');
     if (catatanWali) { const cs = getCatatanState(); cs.kirimWali = !cs.kirimWali; render(); return; }
 
     // Pengumuman
     const pengFilter = event.target.closest('[data-peng-filter]');
-    if (pengFilter) { getPengState().filter = pengFilter.dataset.pengFilter; render(); return; }
+    if (pengFilter) { getPengState().filter = pengFilter.dataset.pengFilter; setActiveInSameGroup(pengFilter, '[data-peng-filter]', 'on'); saveOnlyNoRender(); return; }
     const pengToggleForm = event.target.closest('[data-peng-toggle-form]');
     if (pengToggleForm) { const ps = getPengState(); ps.showForm = !ps.showForm; render(); return; }
     const pengPrio = event.target.closest('[data-peng-toggle-prio]');
@@ -4296,8 +4379,8 @@ function bindActions() {
     if (agSesiBtn && !agSesiBtn.disabled) {
       appState.showAnnouncements = false;
       appState.teacherAttendance.sesi = agSesiBtn.dataset.agSesi;
-      saveState();
-      render();
+      setActiveInSameGroup(agSesiBtn, '[data-ag-sesi]', 'active');
+      saveOnlyNoRender();
       return;
     }
 
@@ -4306,8 +4389,8 @@ function bindActions() {
     if (agStatusBtn) {
       appState.showAnnouncements = false;
       appState.teacherAttendance.status = agStatusBtn.dataset.agStatus;
-      saveState();
-      render();
+      setActiveInSameGroup(agStatusBtn, '[data-ag-status]', 'active');
+      saveOnlyNoRender();
       return;
     }
 
@@ -4400,13 +4483,13 @@ function bindActions() {
     if (selectEl && selectEl.tagName === 'SELECT') {
       const key = selectEl.dataset.select;
       const val = selectEl.value;
-      if (key === 'nf-mapel') { getNilaiState().mapel = val; render(); return; }
-      if (key === 'nf-jenis') { getNilaiState().jenis = val; render(); return; }
-      if (key === 'jg-mapel') { getJurnalGuruState().mapel = val; render(); return; }
-      if (key === 'jg-metode') { getJurnalGuruState().metode = val; render(); return; }
-      if (key === 'jk-mapel') { getJurnalKelasState().mapel = val; render(); return; }
-      if (key === 'catatan-kat') { getCatatanState().kategori = val; render(); return; }
-      if (key === 'peng-kat') { getPengState().kategori = val; render(); return; }
+      if (key === 'nf-mapel') { getNilaiState().mapel = val; saveOnlyNoRender(); return; }
+      if (key === 'nf-jenis') { getNilaiState().jenis = val; saveOnlyNoRender(); return; }
+      if (key === 'jg-mapel') { getJurnalGuruState().mapel = val; saveOnlyNoRender(); return; }
+      if (key === 'jg-metode') { getJurnalGuruState().metode = val; saveOnlyNoRender(); return; }
+      if (key === 'jk-mapel') { getJurnalKelasState().mapel = val; saveOnlyNoRender(); return; }
+      if (key === 'catatan-kat') { getCatatanState().kategori = val; saveOnlyNoRender(); return; }
+      if (key === 'peng-kat') { getPengState().kategori = val; saveOnlyNoRender(); return; }
       if (key === 'absen-kelas') {
         const as = getAbsenSiswaState();
         as.kelas = val;
@@ -4681,11 +4764,9 @@ function bindNativeBack() {
 
 // ─── Page transition ──────────────────────────────────────────────────────
 function animateContent() {
-  const el = document.getElementById('appContent');
-  if (!el) return;
-  el.classList.remove('page-enter');
-  void el.offsetWidth; // reflow
-  el.classList.add('page-enter');
+  // Transisi dipanggil hanya oleh navigasi halaman besar (navigateTo / initial load).
+  // Implementasi visualnya dibungkus di guru-shell.html agar bisa pilih sheet/fade.
+  return;
 }
 
 function applyGuruEmptyStateData() {
