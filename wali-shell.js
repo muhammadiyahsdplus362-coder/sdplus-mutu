@@ -1619,12 +1619,12 @@ function renderModule(moduleId) {
           + '<summary><span class="perk-group__left"><span class="perk-group__dot"></span>' + perkMonthLabel(g.key) + '</span><span class="perk-group__right"><span class="perk-group__count">' + g.rows.length + ' ' + unitLabel + '</span>' + __CHEV + '</span></summary>'
           + '<div class="perk-group__body">' + devTable(cols, g.rows, rowFn) + '</div></details>';
       }).join('');
-      return '<section class="section">' + sectionHead(title, allRows.length + ' ' + unitLabel) + filterHtml + groupsHtml + perkMoreBtnHtml(catKey, filtered.length - limit) + '</section>';
+      return '<section class="section" data-perk-section="' + catKey + '">' + sectionHead(title, allRows.length + ' ' + unitLabel) + filterHtml + groupsHtml + perkMoreBtnHtml(catKey, filtered.length - limit) + '</section>';
     };
     var perkCatSimple = function(catKey, title, unitLabel, cols, allRows, rowFn){
       var limit = appState.perkembanganLimit[catKey] || 10;
       var visible = allRows.slice(0, limit);
-      return '<section class="section">' + sectionHead(title, allRows.length + ' ' + unitLabel) + devTable(cols, visible, rowFn) + perkMoreBtnHtml(catKey, allRows.length - limit) + '</section>';
+      return '<section class="section" data-perk-section="' + catKey + '">' + sectionHead(title, allRows.length + ' ' + unitLabel) + devTable(cols, visible, rowFn) + perkMoreBtnHtml(catKey, allRows.length - limit) + '</section>';
     };
     var anySorotan = !!(hafalanRows.length || membacaRows.length || ibadahRows.length || karakterRows.length || prestasiRows.length);
     var anyData = anySorotan || pelanggaranRows.length || ekskulRows.length;
@@ -2254,10 +2254,9 @@ function goBackNativeWali() {
 window.zHandleBack = goBackNativeWali;
 
 function animateWaliContent() {
-  if (!contentEl) return;
-  contentEl.classList.remove('page-enter');
-  void contentEl.offsetWidth;
-  contentEl.classList.add('page-enter');
+  // Transisi dipanggil hanya oleh navigasi halaman besar (navigate / back / initial load).
+  // Implementasi visualnya dibungkus di wali-shell.html agar bisa pilih sheet/fade.
+  return;
 }
 
 function updateWaliClock() {
@@ -2274,6 +2273,42 @@ function updateWaliClock() {
   el.textContent = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
 setInterval(updateWaliClock, 10000);
+
+function updateWaliChromeOnly() {
+  // Update header/floating/nav tanpa membongkar appContent.
+  renderHeader();
+  renderFloating();
+  renderNav();
+  saveState();
+}
+
+function updatePerkembanganSectionNoRender(catKey) {
+  // Filter bulan / muat lagi di Perkembangan cukup ganti section terkait.
+  // Jangan render() penuh karena itu membuat layar wali terlihat kedip.
+  try {
+    if (appState.activeTab !== 'module:perkembangan-anak') { render(); return; }
+    var current = document.querySelector('[data-perk-section="' + String(catKey).replace(/"/g, '\"') + '"]');
+    if (!current) { render(); return; }
+    var html = renderModule('perkembangan-anak');
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var fresh = tmp.querySelector('[data-perk-section="' + String(catKey).replace(/"/g, '\"') + '"]');
+    if (fresh) current.replaceWith(fresh);
+    else render();
+    saveState();
+  } catch (e) {
+    console.warn('[WaliPerkembangan] update ringan gagal, fallback render:', e && e.message ? e.message : e);
+    render();
+  }
+}
+
+function updateSettingToggleNoRender(button, key) {
+  try {
+    var t = button && button.querySelector ? button.querySelector('.toggle') : null;
+    if (t) t.classList.toggle('on', !!appState[key]);
+    saveState();
+  } catch (_) { render(); }
+}
 
 function bindActions() {
   if (actionsBound) return;
@@ -2298,7 +2333,7 @@ function bindActions() {
     var perkMonthSel = event.target && event.target.closest && event.target.closest('select[data-select="perk-month"]');
     if (perkMonthSel) {
       var c = perkMonthSel.getAttribute('data-perk-cat');
-      if (c) { appState.perkembanganMonth = appState.perkembanganMonth || {}; appState.perkembanganMonth[c] = perkMonthSel.value; appState.perkembanganLimit = appState.perkembanganLimit || {}; appState.perkembanganLimit[c] = 10; render(); }
+      if (c) { appState.perkembanganMonth = appState.perkembanganMonth || {}; appState.perkembanganMonth[c] = perkMonthSel.value; appState.perkembanganLimit = appState.perkembanganLimit || {}; appState.perkembanganLimit[c] = 10; updatePerkembanganSectionNoRender(c); }
     }
   });
 
@@ -2308,7 +2343,7 @@ function bindActions() {
       var pc = perkMoreBtn.getAttribute('data-perk-more');
       appState.perkembanganLimit = appState.perkembanganLimit || {};
       appState.perkembanganLimit[pc] = (appState.perkembanganLimit[pc] || 10) + 10;
-      render();
+      updatePerkembanganSectionNoRender(pc);
       return;
     }
     const tabButton = event.target.closest('[data-tab]');
@@ -2340,13 +2375,13 @@ function bindActions() {
         } else {
           notifyFeedback('light');
         }
-        render();
+        updateWaliChromeOnly();
         return;
       }
       if (target === 'closeAnnouncements') {
         appState.showAnnouncements = false;
         notifyFeedback('light');
-        render();
+        updateWaliChromeOnly();
         return;
       }
       if (target === 'openRoleChooser') {
@@ -2381,7 +2416,7 @@ function bindActions() {
         appState[key] = !appState[key];
         notifyFeedback(key === 'notificationSound' ? 'success' : 'light');
         try { saveState(); } catch (e) {}
-        render();
+        updateSettingToggleNoRender(settingToggle, key);
         return;
       }
     }
