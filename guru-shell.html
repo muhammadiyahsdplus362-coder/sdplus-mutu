@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="SD PLUS MUTU" />
+  <meta name="apple-mobile-web-app-title" content="Zymata Guru" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="32x32" href="assets/sdplus-app-icon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/sdplus-app-icon-180.png" />
@@ -15,9 +15,9 @@
   <link rel="stylesheet" href="guru-shell-dark.css" />
   <style id="guru-green-transition">
   #appContent.page-enter{ animation:none !important; }
-  #appContent.guru-anim-sheet{ animation:guruSheetIn .46s cubic-bezier(.22,1,.36,1) both !important; }
+  #appContent.guru-anim-sheet{ animation:guruSheetIn .32s cubic-bezier(.22,1,.36,1) both !important; }
   @keyframes guruSheetIn{ 0%{ opacity:0; transform:translateY(64px); } 60%{ opacity:1; } 100%{ opacity:1; transform:translateY(0); } }
-  #appContent.guru-anim-fade{ animation:guruFadeZoom .40s cubic-bezier(.22,1,.36,1) both !important; }
+  #appContent.guru-anim-fade{ animation:guruFadeZoom .26s cubic-bezier(.22,1,.36,1) both !important; }
   @keyframes guruFadeZoom{ 0%{ opacity:0; transform:scale(1.06); } 100%{ opacity:1; transform:scale(1); } }
   </style>
 
@@ -264,11 +264,14 @@
       if(e.target.closest('[data-module-route],[data-route],[data-action],[data-primary-action]')){ navMode = 'fade'; }
     }, true);
     function applyGuruAnim(){
+      // Transisi hanya untuk navigasi halaman besar.
+      // Tidak pakai forced reflow (offsetWidth), supaya klik input kecil tidak flash/kedip.
       var el = document.getElementById('appContent');
       if(!el) return;
       el.classList.remove('guru-anim-sheet','guru-anim-fade');
-      void el.offsetWidth;
-      el.classList.add(navMode === 'sheet' ? 'guru-anim-sheet' : 'guru-anim-fade');
+      requestAnimationFrame(function(){
+        el.classList.add(navMode === 'sheet' ? 'guru-anim-sheet' : 'guru-anim-fade');
+      });
     }
     function install(){
       var orig = window.animateContent;
