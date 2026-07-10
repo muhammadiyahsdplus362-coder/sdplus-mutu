@@ -11,6 +11,7 @@
   function routeForRole(role){
     const r = roleKey(role);
     if(r === 'guru' || r === 'walikelas') return 'guru-shell.html';
+    if(r === 'pegawai' || r === 'staff' || r === 'staf' || r === 'karyawan') return 'pegawai-shell.html';
     if(r === 'wali' || r === 'walimurid' || r === 'orangtua' || r === 'ortu') return 'wali-shell.html';
     return 'index.html?choose=1';
   }
@@ -55,6 +56,10 @@
       guru_id: user.guru_id || null,
       guru_nip: user.guru_nip || user.nip_guru || null,
       nama_guru: user.nama_guru || null,
+      nip: user.nip || user.nip_pegawai || user.pegawai_nip || user.guru_nip || user.nip_guru || user.username || null,
+      pegawai_nip: user.pegawai_nip || user.nip_pegawai || user.nip || user.guru_nip || user.nip_guru || user.username || null,
+      jabatan: user.jabatan || user.jabatan_pegawai || user.posisi || null,
+      nama_pegawai: user.nama_pegawai || user.nama || user.name || null,
       siswa_id: user.siswa_id || null,
       nis_siswa: user.nis_siswa || null,
       nama_siswa: user.nama_siswa || null,
@@ -101,19 +106,34 @@
     return profile;
   }
 
+  function cachedEmailKey(username){ return 'siakad_login_email:' + clean(username).toLowerCase(); }
+
   async function signIn(username, password){
     const client = getClient();
     const errors = [];
-    for(const email of emailCandidates(username)){
+    // Coba email yang terakhir berhasil dulu (login ulang = 1 request /token, hindari banjir 429).
+    let candidates = emailCandidates(username);
+    try {
+      const cached = localStorage.getItem(cachedEmailKey(username));
+      if(cached) candidates = [cached].concat(candidates.filter((e) => e !== cached));
+    } catch(_) {}
+    for(const email of candidates){
       const res = await client.auth.signInWithPassword({ email, password });
       if(!res.error && res.data && res.data.user) {
         const profile = await loadProfile(res.data.user, username);
         if(!profile) throw new Error('Login berhasil, tapi profil pengguna belum ada di tabel profiles. Hubungi admin.');
         if(String(profile.status || 'Aktif').toLowerCase() === 'nonaktif') throw new Error('Akun Anda dinonaktifkan.');
+        try { localStorage.setItem(cachedEmailKey(username), email); } catch(_) {}
         const user = saveSession(Object.assign({}, profile, { id: profile.id || res.data.user.id, email }));
         return { user, profile, authUser: res.data.user };
       }
-      if(res.error) errors.push(res.error.message);
+      if(res.error) {
+        errors.push(res.error.message);
+        // Kena rate limit -> STOP, jangan tembak kandidat lain.
+        if(res.error.status === 429 || /rate limit/i.test(res.error.message || '')) {
+          throw new Error('Terlalu banyak percobaan login. Tunggu beberapa menit lalu coba lagi.');
+        }
+      }
     }
     throw new Error(errors[0] || 'Username atau password salah.');
   }
