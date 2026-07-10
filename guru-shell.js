@@ -749,7 +749,7 @@ function renderHome() {
   const todaySched = getTodaySchedules();
   const agendaCount = todaySched.length;
   const dayIdx = now.getDay();
-  const isWeekend = dayIdx === 0 || dayIdx === 6;
+  const isWeekend = dayIdx === 0;
   const priorities = getDashboardPriorities();
 
   // Sesi berikutnya
@@ -1061,7 +1061,7 @@ function renderTeacherAttendance() {
         <ul class="ag-rules-list">
           <li>Batas check-in tepat waktu: <strong>${AG_CUTOFF} WIB</strong></li>
           <li>Masuk setelah ${AG_CUTOFF} &rarr; otomatis <em>Terlambat</em></li>
-          <li>Status <em>Alpa</em> tidak dipotong dari gaji; izin dan sakit tidak dipotong</li>
+          <li>Status <em>Alpa</em> dipotong dari gaji; izin dan sakit tidak dipotong</li>
           <li>Status <em>Dinas</em> untuk keperluan luar sekolah resmi</li>
           <li>Check-in hanya bisa dilakukan di hari yang sama</li>
           <li>Keterangan wajib diisi jika status bukan Hadir</li>
@@ -1131,10 +1131,10 @@ function renderSchedule() {
   const todayIdx = now.getDay();
   const selectedDay = appState.jadwalSelectedDay !== undefined ? appState.jadwalSelectedDay : todayIdx;
   const daySchedule = getScheduleByDay(selectedDay);
-  const isWeekend = selectedDay === 0 || selectedDay === 6;
+  const isWeekend = selectedDay === 0;
   const DAYS = [
     { idx:1, label:'Sen' }, { idx:2, label:'Sel' }, { idx:3, label:'Rab' },
-    { idx:4, label:'Kam' }, { idx:5, label:'Jum' }
+    { idx:4, label:'Kam' }, { idx:5, label:'Jum' }, { idx:6, label:'Sab' }
   ];
   const DAY_NAMES = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
   const selectedDayName = DAY_NAMES[selectedDay];
@@ -1184,7 +1184,7 @@ function renderSchedule() {
         <article class="jadwal-empty-day">
           <span>🏠</span>
           <p>Tidak ada jadwal mengajar</p>
-          <small>${selectedDayName} adalah hari libur.</small>
+          <small>${isWeekend ? selectedDayName + ' adalah hari libur.' : 'Belum ada jadwal untuk ' + selectedDayName + '.'}</small>
         </article>` : `
       <div class="jadwal-timeline">
         ${daySchedule.map((sesi, idx) => {
@@ -1202,8 +1202,8 @@ function renderSchedule() {
               ${state !== 'is-done' ? `
               <div class="jadwal-quick-actions">
                 <button type="button" class="jq-btn" data-module-route="module:absensi-siswa">✓ Absensi</button>
-                <button type="button" class="jq-btn" data-module-route="module:jurnal-guru">✎ Jurnal</button>
-                <button type="button" class="jq-btn" data-module-route="module:nilai">↗ Nilai</button>
+                <button type="button" class="jq-btn" data-module-route="module:jurnal-kelas">☰ Jurnal Kelas</button>
+                <button type="button" class="jq-btn" data-module-route="module:catatan-siswa">✎ Catatan Siswa</button>
               </div>` : '<p class="jsc-done-label">Sesi selesai</p>'}
             </div>
           </article>`;
@@ -4958,7 +4958,19 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
     var hasGuruCol = allRows.some(function(r){ return r.guru || r.nama_guru || r.guru_nama; });
     var rows = allRows;
     if (teacherKey && hasGuruCol) {
-      var mine = allRows.filter(function(r){ return normName(r.guru || r.nama_guru || r.guru_nama) === teacherKey; });
+      var teacherNipKey = String((typeof appState !== 'undefined' && appState.teacherNip) || '').trim();
+      var mine = allRows.filter(function(r){
+        // Cocokkan via NIP (paling andal) - dukung co-teaching: nip dipisah / , & atau "dan"
+        var gnip = String(r.guru_nip || r.nip_guru || r.nip || '').trim();
+        if (teacherNipKey && gnip) {
+          if (gnip.split(/\s*(?:\/|,|&|\bdan\b)\s*/).map(function(x){ return x.trim(); }).indexOf(teacherNipKey) !== -1) return true;
+        }
+        // Cocokkan via nama - dukung co-teaching: nama bisa dipisah / , & atau "dan"
+        var g = normName(r.guru || r.nama_guru || r.guru_nama);
+        if (!g) return false;
+        if (g === teacherKey) return true;
+        return g.split(/\s*(?:\/|,|&|\bdan\b)\s*/).map(function(x){ return x.trim(); }).indexOf(teacherKey) !== -1;
+      });
       if (mine.length) rows = mine;
     }
     Object.keys(JADWAL_MINGGUAN).forEach(function(k) {
@@ -4982,11 +4994,14 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
       });
       sorted.forEach(function(r) {
         var ji = parseInt(r.jam_index);
-        var jamLabel = (ji >= 0 && ji < JAM_LABELS.length) ? JAM_LABELS[ji] : ('Jam '+(ji+1));
+        // FIX: utamakan jam_label asli dari database (jam per-hari), jangan pakai daftar jam lama.
+        var rawLabel = (r.jam_label != null && String(r.jam_label).trim()) ? String(r.jam_label).trim() : ((ji >= 0 && ji < JAM_LABELS.length) ? JAM_LABELS[ji] : ('Jam '+(ji+1)));
         var mapel = r.mapel || '-';
-        if (mapel === '-' || /istirahat/i.test(mapel)) return;
+        if (mapel === '-' || /istirahat/i.test(mapel) || /istirahat/i.test(rawLabel)) return;
+        // Waktu mulai untuk logika status butuh format HH:MM, jadi titik diubah jadi titik dua.
+        var startPart = (String(rawLabel).split('-')[0] || rawLabel).trim().replace(/\./g, ':');
         var entry = {
-          time: jamLabel.split('-')[0] || jamLabel,
+          time: startPart || rawLabel,
           title: mapel,
           meta: 'Kelas ' + (r.kelas || '-') + (r.guru ? ' · ' + r.guru : ''),
           status: 'Mapel',
