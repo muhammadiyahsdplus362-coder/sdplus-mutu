@@ -123,7 +123,6 @@ const moduleGroups = {
   ],
   mutabaah: [
     ['Input ringan', 'Wali cukup isi poin rumah yang paling penting.'],
-    ['Shared flow', 'Mutabaah Quran membedakan input wali dan review guru.'],
     ['Progress pekanan', 'Arah kebiasaan rumah tetap mudah dibaca.']
   ],
   more: [
@@ -156,7 +155,7 @@ const ICONS = {
 const academicModules = [
   { id: 'absensi-anak',     icon: ICONS.absensi,    title: 'Absensi',       meta: 'Hadir, izin, sakit, dan rekap',            route: 'module:absensi-anak',     group: 'Akademik' },
   { id: 'nilai-anak',       icon: ICONS.nilai,      title: 'Nilai',         meta: 'Ringkasan tugas, ujian, dan capaian',      route: 'module:nilai-anak',       group: 'Akademik' },
-  { id: 'perkembangan-anak',icon: ICONS.tumbuh,     title: 'Perkembangan',  meta: 'Hafalan, ibadah, karakter, prestasi',      route: 'module:perkembangan-anak',group: 'Akademik' },
+  { id: 'perkembangan-anak',icon: ICONS.tumbuh,     title: 'Perkembangan',  meta: 'Ibadah, karakter, prestasi',      route: 'module:perkembangan-anak',group: 'Akademik' },
   { id: 'catatan-anak',     icon: ICONS.catatan,    title: 'Catatan Anak',  meta: 'Pesan dan tindak lanjut dari sekolah',     route: 'module:catatan-anak',     group: 'Akademik' },
   { id: 'jadwal-anak',      icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/></svg>`, title: 'Jadwal Pelajaran', meta: 'Jadwal mata pelajaran mingguan', route: 'module:jadwal-anak', group: 'Akademik' }
 ];
@@ -200,7 +199,7 @@ const moduleDetails = {
   'perkembangan-anak': {
     eyebrow: 'Perkembangan',
     title: 'Perkembangan Anak',
-    subtitle: 'Halaman agregat progres anak: hafalan, ibadah, karakter, prestasi, pelanggaran, dan highlight mutabaah.',
+    subtitle: 'Halaman agregat progres anak: ibadah, karakter, prestasi, pelanggaran, dan highlight mutabaah.',
     stats: [["Belum", "0"]],
     focus: [],
     modules: [
@@ -208,7 +207,7 @@ const moduleDetails = {
       ['Karakter', 'Belum ada data'],
       ['Prestasi', 'Belum ada data'],
       ['Pelanggaran', 'Tidak ada catatan baru'],
-      ['Highlight Mutabaah', 'Rumah & Quran']
+      ['Highlight Mutabaah', 'Rumah']
     ]
   },
   'catatan-anak': {
@@ -229,13 +228,6 @@ const moduleDetails = {
     eyebrow: 'Mutabaah',
     title: 'Mutabaah Tahfidz',
     subtitle: 'Wali mengisi setoran hafalan anak (Ziyadah, Muroja\'ah, Tilawah) dan memantau setoran sekolah dari guru (hanya baca).',
-    stats: [["Belum", "0"]],
-    focus: []
-  },
-  'membaca-quran': {
-    eyebrow: 'Mutabaah',
-    title: 'Membaca Quran',
-    subtitle: 'Input progres membaca Al-Quran anak di rumah: surah, juz, dan penilaian.',
     stats: [["Belum", "0"]],
     focus: []
   },
@@ -843,7 +835,6 @@ function renderHome() {
           });
         }
         pushFrom(sm.mutabaahRumah, 'Mutabaah Rumah', 'green');
-        pushFrom(sm.mutabaahQuran, 'Mutabaah Quran', 'gold');
         pushFrom(sm.karakter, 'Karakter', 'blue');
         pushFrom(sm.prestasi, 'Prestasi', 'green');
         pushFrom(sm.pelanggaran, 'Pelanggaran', 'red');
@@ -921,11 +912,6 @@ function renderChild() {
           <span class="wrc-lbl">Mutabaah</span>
           <span class="wrc-sub">Pekan ini</span>
         </article>
-        <article class="wrc-card" data-module-route="module:perkembangan-anak">
-          <span class="wrc-val purple">${appState.hafalanSurah}</span>
-          <span class="wrc-lbl">Hafalan aktif</span>
-          <span class="wrc-sub">${appState.hafalanProgress}</span>
-        </article>
       </div>
     </section>
 
@@ -971,11 +957,6 @@ function renderAcademic() {
           <span class="wrc-lbl">Catatan baru</span>
           <span class="wrc-sub">Dari sekolah</span>
         </article>
-        <article class="wrc-card" data-module-route="module:perkembangan-anak">
-          <span class="wrc-val purple">${appState.hafalanSurah}</span>
-          <span class="wrc-lbl">Hafalan</span>
-          <span class="wrc-sub">${appState.hafalanProgress}</span>
-        </article>
       </div>
     </section>
 
@@ -993,7 +974,7 @@ function renderMutabaah() {
   // Tab Mutabaah HANYA menampilkan data mutabaah asli (mutabaah_rumah & mutabaah_quran).
   // hafalan & ibadah adalah input admin pada tabel terpisah, jadi tidak diikutkan di sini.
   var rumahRows = Array.isArray(sm.mutabaahRumah)?sm.mutabaahRumah.slice():[];
-  var quranRows = Array.isArray(sm.mutabaahQuran)?sm.mutabaahQuran.slice():[];
+  var quranRows = [];
   var _wkAgo = Date.now()-7*24*3600*1000;
   var _inWeek = function(r){ var d=Date.parse(r.tanggal||r.created_at||''); return !isNaN(d) && d>=_wkAgo; };
   var rumahWeek = rumahRows.filter(_inWeek).length;
@@ -1014,11 +995,6 @@ function renderMutabaah() {
         <div class="wali-stat-item">
           <span class="wali-stat-val">${rumahWeek}</span>
           <span class="wali-stat-lbl">Rumah</span>
-        </div>
-        <div class="wali-stat-div"></div>
-        <div class="wali-stat-item">
-          <span class="wali-stat-val">${quranWeek}</span>
-          <span class="wali-stat-lbl">Quran</span>
         </div>
       </div>
     </section>
@@ -1130,7 +1106,6 @@ function waliModuleDataKey(moduleId) {
     'catatan-anak': 'catatan',
     'perkembangan-anak': 'catatan',
     'mutabaah-rumah': 'mutabaahRumah',
-    'mutabaah-quran': 'mutabaahQuran',
     'keuangan': 'keuangan',
     'pengumuman-wali': 'pengumuman',
     'surat-wali': 'surat'
@@ -1290,11 +1265,12 @@ function renderWaliMutabaahRumahRiwayat(list){
     + '<div class="riwayat-absen-body" style="padding-top:8px">'+cards+'</div></details></section>';
 }
 
+// renderWaliMutabaahQuranRiwayat dihapus — modul Mutabaah Quran sudah tidak dipakai.
 function renderWaliMutabaahQuranRiwayat(list){
   var arr = Array.isArray(list) ? list : [];
   var esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
   var sumOpen = '<summary class="riwayat-absen-summary" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:800;list-style:none;-webkit-tap-highlight-color:transparent">';
-  var head = '\uD83D\uDCC5 Riwayat Mutabaah Quran';
+  var head = '\uD83D\uDCC5 Riwayat';
   if(!arr.length){
     return '<section class="section"><details class="riwayat-absen-toggle" style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
       + sumOpen + '<span class="riwayat-absen-title">'+head+'</span><span class="riwayat-absen-hint" style="font-size:11px;color:#94a3b8;font-weight:700">Lihat detail \u203A</span></summary>'
@@ -1337,7 +1313,7 @@ function renderSupabaseWaliFormModule(detail, rows, moduleId, crudKey) {
       </article>
     </section>
     ${renderModuleForm(crudKey)}
-    ${moduleId === 'mutabaah-rumah' ? renderWaliMutabaahRumahRiwayat(list) : (moduleId === 'mutabaah-quran' ? renderWaliMutabaahQuranRiwayat(list) : renderWaliModuleRiwayat(list, detail.title, crudKey))}
+    ${moduleId === 'mutabaah-rumah' ? renderWaliMutabaahRumahRiwayat(list) : renderWaliModuleRiwayat(list, detail.title, crudKey)}
   `;
 }
 
@@ -1545,8 +1521,8 @@ function renderModule(moduleId) {
   if (moduleId === 'perkembangan-anak') {
     // Ambil data real dari Supabase
     const sm = appState.supabaseModules || {};
-    const hafalanRows = Array.isArray(sm.hafalan) ? sm.hafalan : [];
-    const membacaRows = Array.isArray(sm.membaca_quran) ? sm.membaca_quran : [];
+    const hafalanRows = [];
+    const membacaRows = [];
     const ibadahRows = Array.isArray(sm.ibadah) ? sm.ibadah : [];
     const karakterRows = Array.isArray(sm.karakter) ? sm.karakter : [];
     const prestasiRows = Array.isArray(sm.prestasi) ? sm.prestasi : [];
@@ -1632,7 +1608,7 @@ function renderModule(moduleId) {
           <article class="db-ready-card">
             <span class="status-pill green">Belum ada catatan</span>
             <h3 class="card-title">Belum ada catatan perkembangan</h3>
-            <p class="card-meta">Catatan hafalan, membaca Al-Quran, ibadah, karakter, prestasi, dan kegiatan anak akan tampil di sini setelah sekolah mengisinya. \u2728</p>
+            <p class="card-meta">Catatan ibadah, karakter, prestasi, dan kegiatan anak akan tampil di sini setelah sekolah mengisinya. \u2728</p>
           </article>
         </section>
       `;
@@ -1713,32 +1689,6 @@ function renderModule(moduleId) {
         </div>
       </section>
     `;
-  }
-
-  if (moduleId === 'mutabaah-quran') {
-    if (appState.syncMode === 'supabase-live' && dataKey) return renderSupabaseWaliFormModule(detail, appState.supabaseModules && appState.supabaseModules[dataKey], moduleId, 'wali:mutabaah-quran');
-    return `
-      ${moduleIntro(detail, moduleParentTab(moduleId))}
-      <section class="section">
-        <article class="db-ready-card">
-          <span class="status-pill gold">Shared Flow</span>
-          <h3 class="card-title">Wali mengisi tilawah rumah, guru meninjau sisi sekolah</h3>
-          <p class="card-meta">Dua alur tampil dalam desain yang sama tapi konteksnya dibedakan jelas.</p>
-        </article>
-      </section>
-      ${renderModuleForm('wali:mutabaah-quran')}
-      <section class="section">
-        ${sectionHead('Ringkasan mutabaah quran', 'Detail')}
-        <div class="timeline">
-          ${detail.focus.map(scheduleCard).join('')}
-        </div>
-      </section>
-    `;
-  }
-
-  if (moduleId === 'membaca-quran') {
-    // Membaca Quran sekarang ada di dalam Perkembangan Anak.
-    return arguments.callee ? '' : '';
   }
 
   if (moduleId === 'keuangan' || moduleId === 'keuangan-spp' || moduleId === 'keuangan-tabungan' || moduleId === 'keuangan-umum') {
@@ -1966,10 +1916,9 @@ function renderModule(moduleId) {
 }
 
 function moduleParentTab(moduleId) {
-  if (moduleId === 'membaca-quran') { appState.activeTab = 'module:perkembangan-anak'; return 'academic'; }
   if (['keuangan-spp', 'keuangan-tabungan', 'keuangan-umum'].includes(moduleId)) return 'home';
   if (['absensi-anak', 'nilai-anak', 'perkembangan-anak', 'catatan-anak', 'jadwal-anak'].includes(moduleId)) return 'academic';
-  if (['mutabaah-rumah', 'mutabaah-quran', 'mutabaah-tahfidz'].includes(moduleId)) return 'mutabaah';
+  if (['mutabaah-rumah', 'mutabaah-tahfidz'].includes(moduleId)) return 'mutabaah';
   return 'more';
 }
 
@@ -2712,7 +2661,7 @@ function computeWaliRecap(){
   var sum=0, cnt=0;
   nilai.forEach(function(r){ var n=Number(r.nilai||r.nilai_akhir||r.nilai_rapor||r.nilai_angka||r.rata_rata||r.skor||r.nilai_ujian||r.nilai_tugas||0); if(n>0){ sum+=n; cnt++; } });
   appState.homeScoreAverage = cnt ? Math.round(sum/cnt) : 0;
-  var mut=[].concat(Array.isArray(sm.mutabaahRumah)?sm.mutabaahRumah:[], Array.isArray(sm.mutabaahQuran)?sm.mutabaahQuran:[], Array.isArray(sm.ibadah)?sm.ibadah:[]);
+  var mut=[].concat(Array.isArray(sm.mutabaahRumah)?sm.mutabaahRumah:[], Array.isArray(sm.ibadah)?sm.ibadah:[]);
   var weekAgo=Date.now()-7*24*3600*1000, recent=0;
   mut.forEach(function(r){ var d=Date.parse(_d(r)); if(!isNaN(d) && d>=weekAgo) recent++; });
   appState.homeMutabaahProgress = Math.min(100, Math.round((recent/7)*100));
