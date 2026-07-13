@@ -128,12 +128,14 @@ function buildGuruModules(){
     { id: 'guru-absensi-guru', icon: '&#9711;', title: 'Absensi Guru', meta: 'Check-in/out harian', route: 'teacherAttendance', group: 'Presensi' },
     { id: 'guru-jadwal', icon: '&#9633;', title: 'Jadwal Mengajar', meta: 'Agenda & mapel hari ini', route: 'schedule', group: 'Akademik' },
     { id: 'guru-kalender', icon: '&#9671;', title: 'Kalender Akademik', meta: 'Agenda sekolah & libur', route: 'module:kalender-akademik', group: 'Akademik' },
+    { id: 'guru-perangkat-pembelajaran', icon: '&#9636;', title: 'Perangkat Pembelajaran', meta: 'Prota, modul ajar & media', route: 'module:perangkat-pembelajaran', group: 'Akademik' },
     { id: 'guru-absensi-siswa', icon: '&#10003;', title: 'Absensi Siswa', meta: 'Kehadiran kelas', route: 'module:absensi-siswa', group: 'Input' },
     { id: 'guru-nilai', icon: '&#8599;', title: 'Nilai', meta: 'Input nilai siswa', route: 'module:nilai', group: 'Input' },
     { id: 'guru-jurnal-guru', icon: '&#9998;', title: 'Jurnal Guru', meta: 'Catatan kegiatan guru', route: 'module:jurnal-guru', group: 'Input' },
     { id: 'guru-jurnal-kelas', icon: '&#9776;', title: 'Jurnal Kelas', meta: 'Kegiatan belajar kelas', route: 'module:jurnal-kelas', group: 'Input' },
     { id: 'guru-kelola-halaqah', icon: '&#9782;', title: 'Kelola Halaqah', meta: 'Kelompok tahfidz binaan', route: 'module:kelola-halaqah', group: 'Perkembangan' },
     { id: 'guru-mutabaah-tahfidz', icon: '&#9789;', title: "Mutaba'ah Tahfidz", meta: 'Setoran hafalan sekolah', route: 'module:mutabaah-tahfidz', group: 'Perkembangan' },
+    { id: 'guru-program-sekolah', icon: '&#9745;', title: 'Program Sekolah', meta: 'Program & kegiatan sekolah', route: 'module:program-sekolah', group: 'Perkembangan' },
     { id: 'guru-ibadah', icon: '&#10022;', title: 'Ibadah', meta: 'Catatan ibadah siswa', route: 'module:ibadah', group: 'Perkembangan' },
     { id: 'guru-karakter', icon: '&#9671;', title: 'Karakter', meta: 'Sikap & akhlak', route: 'module:karakter', group: 'Perkembangan' },
     { id: 'guru-prestasi', icon: '&#9733;', title: 'Prestasi', meta: 'Capaian siswa', route: 'module:prestasi', group: 'Perkembangan' },
@@ -483,63 +485,6 @@ async function agServerNowMs() {
     return isNaN(ms) ? null : ms;
   } catch (e) { return null; }
 }
-// [ZYMATA] ID device stabil: pakai plugin @capacitor/device bila ada, fallback id lokal.
-async function agGetDeviceId() {
-  try {
-    var Cap = window.Capacitor;
-    if (Cap && Cap.Plugins && Cap.Plugins.Device && typeof Cap.Plugins.Device.getId === 'function') {
-      var r = await Cap.Plugins.Device.getId();
-      var id = r && (r.identifier || r.uuid);
-      if (id) return String(id);
-    }
-  } catch (e) {}
-  try {
-    var k = 'sdplus_device_id_v1';
-    var v = localStorage.getItem(k);
-    if (!v) {
-      v = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-      localStorage.setItem(k, v);
-    }
-    return v;
-  } catch (e) { return null; }
-}
-// [ZYMATA] Deteksi lokasi palsu (fake GPS). Andal bila plugin native MockLocation terpasang.
-async function agIsMockLocationNow(pos) {
-  try {
-    if (pos && pos.coords && pos.coords.mocked === true) return true;
-    if (pos && pos.mocked === true) return true;
-  } catch (e) {}
-  try {
-    var Cap = window.Capacitor;
-    if (Cap && Cap.Plugins && Cap.Plugins.MockLocation && typeof Cap.Plugins.MockLocation.check === 'function') {
-      var r = await Cap.Plugins.MockLocation.check();
-      if (r && (r.isMock === true || r.mock === true)) return true;
-    }
-  } catch (e) {}
-  return false;
-}
-// [ZYMATA] Device-binding: 1 HP hanya untuk 1 NIP (anti titip absen). Gagal-terbuka bila infra tak terjangkau.
-async function agEnforceDeviceBinding(nip) {
-  try {
-    if (!nip) return { blocked: false };
-    var _db = window.db || window.ZymataMobileSupabase;
-    if (!_db || typeof _db.select !== 'function') return { blocked: false };
-    var id = await agGetDeviceId();
-    if (!id) return { blocked: false };
-    var res = await _db.select('device_guru_binding', { eq: { device_id: id }, limit: 1 });
-    var row = res && Array.isArray(res.data) ? res.data[0] : null;
-    if (row && row.nip && String(row.nip) !== String(nip)) {
-      return { blocked: true, message: 'HP ini sudah terdaftar untuk NIP ' + row.nip + '. Satu HP hanya bisa dipakai absen untuk satu guru. Hubungi admin bila keliru.' };
-    }
-    if (!row && typeof _db.insert === 'function') {
-      await _db.insert('device_guru_binding', { device_id: id, nip: String(nip), bound_at: new Date().toISOString() });
-    }
-    return { blocked: false };
-  } catch (e) {
-    console.warn('[AbsenGuru HP] device-binding tak bisa dicek (lanjut tanpa blokir):', e && e.message ? e.message : e);
-    return { blocked: false };
-  }
-}
 function agEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function agTodayISO() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function agFillSiswaOptions(selectEl, kelas) {
@@ -609,7 +554,8 @@ function agAddStudentRow(row){
   var nis = String(row.nis || row.nisn || row.id || '').trim();
   if (!SISWA_PER_KELAS[kelas]) SISWA_PER_KELAS[kelas] = [];
   if (!SISWA_PER_KELAS[kelas].some(function(s){ return String(s.nis) === nis; })) {
-    SISWA_PER_KELAS[kelas].push({ nis: nis, name: nama });
+    var sidAg = String(row.id || row.siswa_id || '').trim();
+    SISWA_PER_KELAS[kelas].push({ nis: nis, name: nama, id: sidAg });
   }
   if (typeof KELAS_LIST !== 'undefined' && Array.isArray(KELAS_LIST) && KELAS_LIST.indexOf(kelas) === -1) KELAS_LIST.push(kelas);
   return { nis: nis, name: nama, kelas: kelas };
@@ -765,10 +711,6 @@ async function agValidateGpsForCheckIn() {
   const sekolah = await agGetLokasiSekolah();
   if (!sekolah) throw new Error('Titik GPS sekolah belum tersedia. Set lokasi di web Zymata terlebih dulu, lalu sinkronkan Supabase.');
   const pos = await agGetGeoPosition();
-  // [ZYMATA] Anti fake-GPS: tolak bila lokasi terdeteksi palsu (mock provider).
-  if (await agIsMockLocationNow(pos)) {
-    throw new Error('Lokasi palsu (fake GPS) terdeteksi. Matikan aplikasi lokasi palsu / "Mock location" di pengaturan HP, lalu coba lagi.');
-  }
   const coords = pos.coords || {};
   const accuracy = Math.round(Number(coords.accuracy || 9999));
   if (accuracy > AG_MAX_ACCURACY_M) {
@@ -797,7 +739,6 @@ function getDashboardPriorities() {
   else if (pct < 100) items.push({ icon: '✓', label: 'Absensi belum selesai', meta: `${appState.attendanceDone}/${appState.attendanceTotal} siswa tercatat`, route: 'module:absensi-siswa', tone: 'orange' });
   else items.push({ icon: '✓', label: 'Absensi sudah lengkap', meta: `${appState.attendanceTotal}/${appState.attendanceTotal} siswa tercatat`, route: 'module:absensi-siswa', tone: 'green' });
   if (drafts > 0) items.push({ icon: '📄', label: `${drafts} draft menunggu sinkron`, meta: 'Tersimpan lokal · akan sync saat online', route: 'menu', tone: 'gold' });
-  if (msgs > 0) items.push({ icon: '✉', label: `${msgs} pesan wali belum dibaca`, meta: 'Ada pertanyaan dari orang tua siswa', route: 'messages', tone: 'blue' });
   return items;
 }
 
@@ -856,6 +797,22 @@ function renderHome() {
         </div>
       </div>` : ''}
     </div>
+
+    ${appState.unreadMessages > 0 ? `
+    <!-- Notifikasi Pesan Wali (merah) -->
+    <section class="section section--tight">
+      <button type="button" data-tab="pesanLama" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid #7f1d1d;border-radius:16px;background:linear-gradient(135deg,#b91c1c,#7f1d1d);cursor:pointer;box-shadow:0 6px 18px rgba(185,28,28,.38)">
+        <span style="position:relative;display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;background:rgba(255,255,255,.16);font-size:20px;flex:0 0 auto">
+          &#9993;
+          <span style="position:absolute;top:-7px;right:-7px;min-width:21px;height:21px;padding:0 5px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:#fff;color:#b91c1c;font-size:11px;font-weight:800;border:2px solid #b91c1c;box-shadow:0 1px 3px rgba(0,0,0,.25)">${appState.unreadMessages}</span>
+        </span>
+        <span style="text-align:left;line-height:1.3;flex:1">
+          <strong style="display:block;font-size:14px;color:#fff;font-weight:800">Pesan Wali</strong>
+          <small style="font-size:12px;color:#fecaca">${appState.unreadMessages} pesan belum dibuka · ketuk untuk membaca</small>
+        </span>
+        <span style="color:#fecaca;font-size:20px;flex:0 0 auto">›</span>
+      </button>
+    </section>` : ''}
 
     <!-- Metric strip -->
     <section class="section section--tight">
@@ -1642,13 +1599,16 @@ function renderModulePlaceholder(moduleId) {
   if (!detail) return renderMenu();
   if (moduleId === 'kelola-halaqah') return window.renderKelolaHalaqahGuruModule(detail);
   if (moduleId === 'mutabaah-tahfidz') return window.renderMutabaahTahfidzGuruModule(detail);
+  if (moduleId === 'program-sekolah') return window.renderProgramSekolahGuruModule(detail);
+  if (moduleId === 'perangkat-pembelajaran') return window.renderPerangkatPembelajaranGuruModule(detail);
   if (moduleId === 'tabungan') return renderTabunganInputGuruModule(moduleId, detail);
   const dataKey = guruModuleDataKey(moduleId);
+  /* Modul nilai: selalu pakai UI baru NH-1..NH-6, bypass Supabase generic form */
+  if (moduleId === 'nilai') return renderScoreModule(detail);
   if (appState.syncMode === 'supabase-live' && moduleId === 'absensi-siswa') return renderStudentAttendanceModule(detail);
   if (appState.syncMode === 'supabase-live' && dataKey) return renderSupabaseGuruDataModule(detail, appState.supabaseModules && appState.supabaseModules[dataKey], moduleId);
   if (appState.syncMode === 'supabase-empty') return renderSupabaseEmptyGuruModule(detail, 'Data modul akan tampil setelah akun guru terhubung ke Supabase.');
   if (moduleId === 'absensi-siswa') return renderStudentAttendanceModule(detail);
-  if (moduleId === 'nilai') return renderScoreModule(detail);
   if (moduleId === 'jurnal-guru' || moduleId === 'jurnal-kelas') return renderJournalModule(moduleId, detail);
   if (moduleId === 'surat-izin') return renderLetterPermissionModule(detail);
   if (moduleId === 'ibadah') return renderIbadahModule(detail);
@@ -1827,6 +1787,33 @@ function updateAbsenStatusWithoutFullRender(nis) {
 }
 
 const MAPEL_LIST = ['Matematika','Bahasa Indonesia','IPA','IPS','PKn','PAI','PJOK','SBdP','Fiqih','Quran Hadits','Akidah Akhlak','SKI','Bahasa Arab'];
+// Daftar mapel sekolah dari tabel master_mapel (sumber sama dgn web admin). Fallback ke MAPEL_LIST bila belum termuat.
+function fullMapelList(){ try { return (appState && Array.isArray(appState.masterMapelList) && appState.masterMapelList.length) ? appState.masterMapelList : MAPEL_LIST; } catch(e){ return MAPEL_LIST; } }
+// Muat daftar mapel resmi sekolah dari Supabase (master_mapel) lalu render ulang agar dropdown ikut ter-update.
+async function loadMasterMapel(){
+  try {
+    var db = window.db || window.ZymataMobileSupabase;
+    if (!db || typeof db.select !== 'function') return;
+    var r = await db.select('master_mapel', { limit: 1000 });
+    if (r && !r.error && Array.isArray(r.data)) {
+      var set = {}, out = [];
+      r.data.forEach(function(m){ var v = String((m && (m.nama || m.mapel || m.kode)) || '').trim(); if (v && !set[v.toLowerCase()]) { set[v.toLowerCase()] = 1; out.push(v); } });
+      if (out.length) { appState.masterMapelList = out; try { saveState(); } catch(_){} try { render(); } catch(_){} }
+    }
+  } catch(e) { console.warn('[Mapel HP] gagal load master_mapel:', e); }
+}
+// Opsi mapel untuk dropdown.
+// - Guru mengajar mapel spesifik => tampilkan mapel itu saja.
+// - Guru berlabel generik 'Guru Kelas'/'Wali Kelas' atau data kosong => tampilkan seluruh mapel sekolah (master_mapel).
+function guruMapelOpts(){
+  try {
+    var base = fullMapelList();
+    var list = (appState && Array.isArray(appState.guruMapelList)) ? appState.guruMapelList.filter(Boolean) : [];
+    var onlyGeneric = list.length > 0 && list.every(function(m){ return /guru\s*kelas|wali\s*kelas|^kelas$|semua|umum/i.test(String(m || '').trim()); });
+    if (!list.length || onlyGeneric) return base;
+    return list;
+  } catch(e) { return MAPEL_LIST; }
+}
 const NILAI_JENIS = ['Ulangan Harian','PTS','PAS','Tugas','Praktik'];
 const NILAI_SEMESTER = ['Ganjil','Genap'];
 
@@ -1911,7 +1898,79 @@ function premiumAttendanceRow(student, activeStatus) {
 }
 
 function getNilaiState() {
-  return appState.nilaiFilter || (appState.nilaiFilter = { mapel: 'Fiqih', jenis: 'Ulangan Harian', semester: 'Ganjil', kkm: 70 });
+  if (!appState.nilaiFilter) {
+    var defKelas = (appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList[0] :
+                   (typeof KELAS_LIST!=='undefined' && KELAS_LIST.length ? KELAS_LIST[0] : '');
+    appState.nilaiFilter = { kelas: defKelas||'', mapel: '', jenis: 'Ulangan Harian', semester: 'Ganjil', kkm: 70 };
+  }
+  return appState.nilaiFilter;
+}
+/* Store NH per siswa: key = nis+'||'+mapel+'||'+sem+'||'+jenis */
+function nhKey(nis,f){ return nis+'||'+f.mapel+'||'+f.semester+'||'+f.jenis; }
+function nhStore(){ if(!appState.nilaiNhStore) appState.nilaiNhStore={}; return appState.nilaiNhStore; }
+function nhGet(nis,f){ var k=nhKey(nis,f); if(!nhStore()[k]) nhStore()[k]={nh:[0,0,0,0,0,0],catatan:'',kkm:0}; var r=nhStore()[k]; if(!Array.isArray(r.nh)){r.nh=[r.nilai||0,0,0,0,0,0];} while(r.nh.length<6)r.nh.push(0); return r; }
+function nhAvgVal(nhArr){ var fil=nhArr.filter(function(v){return v>0;}); if(!fil.length)return 0; return Math.round(fil.reduce(function(a,b){return a+b;},0)/fil.length); }
+function nhFilled(nis,f){ var r=nhStore()[nhKey(nis,f)]; if(!r)return false; return (Array.isArray(r.nh)&&r.nh.some(function(v){return v>0;}))||!!(r.catatan); }
+// Simpan nilai ke Supabase tabel nilai_siswa agar web admin bisa membaca.
+// Schema nilai_siswa: siswa_id=text, kelas=text, mapel=text, semester=text,
+//   nilai_tugas=smallint, nilai_ujian=smallint, nilai_akhir=numeric, catatan=text, jenis=text
+async function saveNilaiSiswa(nf, nhStoreData, siswaList) {
+  var bridge = window.ZymataMobileSupabase || window.db;
+  if (!bridge) throw new Error('Bridge tidak tersedia');
+  var client = typeof bridge.getClient === 'function' ? bridge.getClient() : null;
+  if (!client || !client.from) throw new Error('Supabase client tidak siap');
+  var rows = [];
+  (siswaList || []).forEach(function(s) {
+    // siswa_id di DB adalah TEXT — kirim sebagai string
+    var siswa_id = String(s._id || s.id || s.siswa_id || s.nis || '').trim();
+    if (!siswa_id) return;
+    var key = s.nis + '||' + (nf.mapel||'') + '||' + (nf.semester||'') + '||' + (nf.jenis||'');
+    var nd = nhStoreData[key];
+    if (!nd) return;
+    var nh = Array.isArray(nd.nh) ? nd.nh.map(Number) : [];
+    var filled = nh.filter(function(v){ return v > 0; });
+    if (!filled.length && !nd.catatan) return; // skip siswa yang belum diisi sama sekali
+    var avg = filled.length ? Math.round(filled.reduce(function(a,b){return a+b;},0)/filled.length) : 0;
+    rows.push({
+      siswa_id:    siswa_id,                        // text
+      kelas:       String(nf.kelas    || ''),        // text, NOT NULL
+      mapel:       String(nf.mapel    || ''),        // text, NOT NULL
+      semester:    String(nf.semester || 'Ganjil'),  // text, NOT NULL, default 'Ganjil'
+      jenis:       String(nf.jenis    || ''),        // text
+      nilai_tugas: Math.round(Number(nh[0]) || 0),  // smallint
+      nilai_ujian: Math.round(Number(nh[1]) || 0),  // smallint
+      nilai_akhir: avg,                              // numeric
+      catatan:     String(nd.catatan  || ''),        // text
+      nis:         String(s.nis       || ''),        // text (opsional tapi berguna)
+      nama_siswa:  String(s.name || s.nama || ''),  // text (opsional)
+      client_key:  'default'                         // WAJIB: web admin filter WHERE client_key='default'
+    });
+  });
+  if (!rows.length) return { saved: 0, total: 0, errors: ['0 baris diproses — ' + (siswaList||[]).length + ' siswa, mapel=' + (nf.mapel||'-') + ' sem=' + (nf.semester||'-')] };
+  var saved = 0, errors = [];
+  for (var i = 0; i < rows.length; i++) {
+    try {
+      // Cek apakah baris sudah ada (SELECT dulu, hindari masalah onConflict unique constraint)
+      var existing = await client.from('nilai_siswa')
+        .select('id')
+        .eq('siswa_id', rows[i].siswa_id)
+        .eq('mapel',    rows[i].mapel)
+        .eq('semester', rows[i].semester)
+        .limit(1);
+      var existId = existing && !existing.error && existing.data && existing.data[0] ? existing.data[0].id : null;
+      var res;
+      if (existId) {
+        // UPDATE baris yang sudah ada
+        res = await client.from('nilai_siswa').update(rows[i]).eq('id', existId).select();
+      } else {
+        // INSERT baris baru
+        res = await client.from('nilai_siswa').insert(rows[i]).select();
+      }
+      if (res && !res.error) saved++;
+      else errors.push((res && res.error && (res.error.message || res.error.details || JSON.stringify(res.error))) || 'db error');
+    } catch(e) { errors.push(e && e.message ? e.message : String(e)); }
+  }
+  return { saved: saved, total: rows.length, errors: errors };
 }
 
 function moduleScanBlock(moduleId){
@@ -1935,74 +1994,171 @@ function moduleScanBlock(moduleId){
 
 function renderScoreModule(detail) {
   const f = getNilaiState();
-  const nilaiRows = [];
-  const filled   = nilaiRows.filter(r => r.nilai !== null).length;
-  const empty    = nilaiRows.length - filled;
-  const remedial = nilaiRows.filter(r => r.nilai !== null && r.nilai < f.kkm).length;
-  const avg      = filled ? Math.round(nilaiRows.filter(r=>r.nilai!==null).reduce((s,r)=>s+r.nilai,0)/filled) : 0;
+  const kelasList = (appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList
+                  : (typeof KELAS_LIST!=='undefined' ? KELAS_LIST : []);
+  const siswaList = f.kelas ? (SISWA_PER_KELAS[f.kelas] || []).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'id')) : [];
+  const isUH = /ulangan\s*harian/i.test(f.jenis);
+  const kkm = Number(f.kkm) || 70;
+
+  // Stat hitung dari nilaiNhStore
+  let total=siswaList.length, filled=0, tuntas=0, remedial=0, sumAvg=0;
+  siswaList.forEach(function(s){
+    if(nhFilled(s.nis,f)){
+      filled++;
+      var avg=nhAvgVal(nhGet(s.nis,f).nh);
+      sumAvg+=avg;
+      if(avg>=kkm) tuntas++; else remedial++;
+    }
+  });
+  var avgKelas = filled ? Math.round(sumAvg/filled) : 0;
+
+  // Baris per siswa
+  function studentCard(s, idx) {
+    var r = nhGet(s.nis, f);
+    var avg = nhAvgVal(r.nh);
+    var isFilled = nhFilled(s.nis, f);
+    var isTuntas = isFilled && avg >= kkm;
+    var badgeHtml = !isFilled
+      ? '<span class="ns-badge" style="background:#2a2a3a;color:#9a9a92">Belum</span>'
+      : (isTuntas ? '<span class="ns-badge" style="background:#0f3d2a;color:#34d399">Tuntas</span>'
+                  : '<span class="ns-badge" style="background:#3d1a1a;color:#f87171">Remedial</span>');
+    var inits = String(s.name||'?').split(' ').map(function(p){return p[0]||'';}).slice(0,2).join('').toUpperCase();
+    var nhInputs = '';
+    if (isUH) {
+      nhInputs = '<div class="ns-nh-grid">';
+      for (var j=0;j<6;j++) {
+        nhInputs += '<div class="ns-nh-cell">'
+          + '<label class="ns-nh-label">NH-'+(j+1)+'</label>'
+          + '<input class="ns-nh-inp" type="number" inputmode="numeric" min="0" max="100" '
+          + 'data-nh-nis="'+s.nis+'" data-nh-idx="'+j+'" value="'+(r.nh[j]||0)+'" placeholder="0">'
+          + '</div>';
+      }
+      nhInputs += '</div>';
+      nhInputs += '<div class="ns-avg-row">Rata-rata: <strong class="ns-avg-val" data-nh-avg="'+s.nis+'" style="color:'+(isFilled?(isTuntas?'#34d399':'#f87171'):'#9a9a92')+'">'+(avg||'—')+'</strong></div>';
+    } else {
+      nhInputs = '<div class="ns-single-row">'
+        + '<label class="ns-nh-label">Nilai</label>'
+        + '<input class="ns-nh-inp" type="number" inputmode="numeric" min="0" max="100" '
+        + 'data-nh-nis="'+s.nis+'" data-nh-idx="0" value="'+(r.nh[0]||0)+'" placeholder="0">'
+        + '<label class="ns-nh-label" style="margin-left:12px">KKM</label>'
+        + '<input class="ns-nh-inp" type="number" inputmode="numeric" min="0" max="100" '
+        + 'data-nh-kkm="'+s.nis+'" value="'+(r.kkm||kkm)+'" placeholder="'+kkm+'">'
+        + '</div>';
+    }
+    return '<article class="ns-card" data-nis="'+s.nis+'">' +
+      '<div class="ns-card-head">' +
+        '<span class="ns-avatar" style="background:'+(isFilled?(isTuntas?'#0f3d2a':'#3d1a1a'):'#1a1f2e')+'">' + inits + '</span>' +
+        '<div class="ns-info">' +
+          '<strong class="ns-name">' + (s.name||'—') + '</strong>' +
+          '<small class="ns-meta">NIS ' + (s.nis||'—') + '</small>' +
+        '</div>' +
+        badgeHtml +
+      '</div>' +
+      '<div class="ns-card-body">' + nhInputs + '</div>' +
+    '</article>';
+  }
+
+  var studentCards = siswaList.length
+    ? siswaList.map(studentCard).join('')
+    : '<div class="ns-empty">' + (f.kelas && f.mapel ? 'Belum ada data siswa untuk kelas ini.' : 'Pilih kelas dan mata pelajaran terlebih dahulu.') + '</div>';
 
   return `
     ${moduleIntro(detail)}
     ${moduleScanBlock('nilai')}
 
-    <!-- Filter konteks -->
-    <section class="section">
-      <article class="mf-card">
-        <span class="card-label">Filter nilai</span>
-        <div class="mf-grid">
-          <!-- MAPEL_LIST -->
-          ${selectField('Mata Pelajaran', f.mapel, MAPEL_LIST, 'nf-mapel')}
-          ${selectField('Jenis Penilaian', f.jenis, NILAI_JENIS, 'nf-jenis')}
+    <style>
+      .ns-primary{display:flex;gap:10px;flex-wrap:wrap;padding:0 16px 8px;}
+      .ns-pfield{flex:1;min-width:140px;}
+      .ns-pfield label{display:block;font-size:11px;font-weight:700;color:#9a9a92;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;}
+      .ns-pfield select{width:100%;padding:10px 12px;background:#131a2b;border:1.5px solid #2a3352;border-radius:10px;color:#fcfcfc;font-size:14px;font-weight:600;-webkit-appearance:none;}
+      .ns-adv{margin:0 16px 8px;}
+      .ns-adv summary{font-size:12px;color:#9a9a92;cursor:pointer;padding:6px 0;list-style:none;}
+      .ns-adv summary::-webkit-details-marker{display:none;}
+      .ns-adv-body{display:flex;gap:10px;flex-wrap:wrap;padding:8px 0 4px;}
+      .ns-adv-body .ns-pfield select,.ns-adv-body .ns-pfield input{background:#0e1320;border-color:#1e2845;font-size:13px;}
+      .ns-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 16px 12px;}
+      .ns-stat{background:#0e1320;border-radius:10px;padding:10px 8px;text-align:center;}
+      .ns-stat-val{font-size:20px;font-weight:800;color:#fcfcfc;line-height:1.1;}
+      .ns-stat-lbl{font-size:10px;color:#9a9a92;margin-top:2px;}
+      .ns-card{background:#0e1320;border:1px solid #1e2845;border-radius:14px;margin:0 16px 10px;overflow:hidden;}
+      .ns-card-head{display:flex;align-items:center;gap:10px;padding:12px 14px;}
+      .ns-avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fcfcfc;flex:0 0 auto;}
+      .ns-info{flex:1;min-width:0;}
+      .ns-name{display:block;font-size:14px;font-weight:700;color:#fcfcfc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .ns-meta{font-size:11px;color:#9a9a92;}
+      .ns-badge{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;flex:0 0 auto;}
+      .ns-card-body{padding:0 14px 12px;}
+      .ns-nh-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;}
+      .ns-nh-cell{display:flex;flex-direction:column;gap:3px;}
+      .ns-nh-label{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px;}
+      .ns-nh-inp{width:100%;padding:8px 6px;background:#131a2b;border:1.5px solid #2a3352;border-radius:8px;color:#fcfcfc;font-size:15px;font-weight:700;text-align:center;box-sizing:border-box;}
+      .ns-nh-inp:focus{border-color:#00ffdb;outline:none;}
+      .ns-avg-row{font-size:12px;color:#9a9a92;text-align:right;margin-top:4px;}
+      .ns-avg-val{font-size:15px;font-weight:800;margin-left:6px;}
+      .ns-single-row{display:flex;align-items:center;gap:8px;}
+      .ns-single-row .ns-nh-inp{width:70px;flex:0 0 auto;}
+      .ns-empty{text-align:center;color:#9a9a92;padding:32px 16px;font-size:14px;}
+      .ns-save-btn{width:calc(100% - 32px);margin:4px 16px 16px;padding:14px;background:linear-gradient(135deg,#00ffdb,#34e8cf);border:none;border-radius:12px;color:#06231f;font-size:15px;font-weight:800;cursor:pointer;}
+      .ns-section-title{font-size:12px;font-weight:700;color:#9a9a92;text-transform:uppercase;letter-spacing:.5px;padding:12px 16px 6px;}
+    </style>
+
+    <!-- Selector Utama: Kelas & Mapel -->
+    <div class="ns-primary">
+      <div class="ns-pfield">
+        <label>Kelas</label>
+        <select data-select="nf-kelas">
+          <option value="">${kelasList.length?'Pilih kelas':'Belum ada kelas'}</option>
+          ${kelasList.map(k=>`<option value="${k}"${k===f.kelas?' selected':''}>${k}</option>`).join('')}
+        </select>
+      </div>
+      <div class="ns-pfield">
+        <label>Mata Pelajaran</label>
+        <select data-select="nf-mapel">
+          <option value="">${guruMapelOpts().length?'Pilih mapel':'—'}</option>
+          ${guruMapelOpts().map(m=>`<option value="${m}"${m===f.mapel?' selected':''}>${m}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <!-- Pengaturan Lanjutan: Semester, Jenis, KKM -->
+    <details class="ns-adv">
+      <summary>&#9881; Pengaturan &mdash; ${f.semester} &middot; ${f.jenis} &middot; KKM ${kkm}</summary>
+      <div class="ns-adv-body">
+        <div class="ns-pfield">
+          <label>Semester</label>
+          <select data-select="nf-semester">
+            ${NILAI_SEMESTER.map(s=>`<option value="${s}"${s===f.semester?' selected':''}>${s}</option>`).join('')}
+          </select>
         </div>
-        <div class="mf-row-inline">
-          <span class="mf-label">Semester</span>
-          ${chipGroup(NILAI_SEMESTER, f.semester, 'nf-semester')}
+        <div class="ns-pfield">
+          <label>Jenis Penilaian</label>
+          <select data-select="nf-jenis">
+            ${NILAI_JENIS.map(j=>`<option value="${j}"${j===f.jenis?' selected':''}>${j}</option>`).join('')}
+          </select>
         </div>
-        ${contextPill([['Kelas','5A'],['KKM',f.kkm],['Mapel',f.mapel],['Jenis',f.jenis]])}
-      </article>
-    </section>
+        <div class="ns-pfield">
+          <label>KKM Default</label>
+          <input type="number" inputmode="numeric" min="0" max="100" data-select="nf-kkm" value="${kkm}" placeholder="70">
+        </div>
+      </div>
+    </details>
 
     <!-- Stat ringkasan -->
-    <section class="section">
-      <div class="stat-grid">
-        ${statCard('Terisi', filled, 'dari '+nilaiRows.length+' siswa', 'indigo')}
-        ${statCard('Kosong', empty, 'belum diisi', 'gold')}
-        ${statCard('Rata-rata', avg||'--', 'nilai kelas', 'green')}
-        ${statCard('Di bawah KKM', remedial, 'perlu remedial', 'red')}
-      </div>
-    </section>
+    <div class="ns-stats">
+      <div class="ns-stat"><div class="ns-stat-val">${total}</div><div class="ns-stat-lbl">Total</div></div>
+      <div class="ns-stat"><div class="ns-stat-val" style="color:#34d399">${tuntas}</div><div class="ns-stat-lbl">Tuntas</div></div>
+      <div class="ns-stat"><div class="ns-stat-val" style="color:#f87171">${remedial}</div><div class="ns-stat-lbl">Remedial</div></div>
+      <div class="ns-stat"><div class="ns-stat-val" style="color:#60a5fa">${avgKelas||'—'}</div><div class="ns-stat-lbl">Rata-rata</div></div>
+    </div>
 
-    <!-- Daftar input nilai per siswa -->
-    <section class="section">
-      ${sectionHead('Input nilai siswa', 'Simpan Draft')}
-      <div class="nilai-list">
-        ${nilaiRows.map(row => `
-          <article class="nilai-row-card">
-            <div class="nilai-student-info">
-              <span class="student-avatar">${row.name.split(' ').map(p=>p[0]).slice(0,2).join('')}</span>
-              <div>
-                <strong class="student-name">${row.name}</strong>
-                <small class="student-meta">NIS ${row.nis}</small>
-              </div>
-            </div>
-            <div class="nilai-input-side">
-              <div class="nilai-box ${row.nilai===null?'empty':row.nilai<f.kkm?'remedial':'ok'}">
-                ${row.nilai !== null ? row.nilai : '--'}
-              </div>
-              <span class="nilai-status-badge ${row.status==='Aman'?'green':row.status==='Remedial'?'red':'gold'}">
-                ${row.status}
-              </span>
-            </div>
-          </article>`).join('')}
-      </div>
-    </section>
+    <!-- List siswa -->
+    <div class="ns-section-title">${isUH?'Input NH-1 s/d NH-6':'Input Nilai'} &mdash; ${f.kelas||'pilih kelas'}</div>
+    <div id="ns-student-list">
+      ${studentCards}
+    </div>
 
-    <!-- Tombol simpan -->
-    <section class="section">
-      <button type="button" class="save-draft-btn" data-draft-save>Simpan Draft Nilai</button>
-    </section>
-
-    ${databaseDraftPanel('nilai_siswa', ['siswa_id','kelas_id','mapel_id','jenis_penilaian','semester','nilai_akhir','kkm'])}
+    <!-- Tombol Simpan -->
+    ${siswaList.length ? `<button type="button" class="ns-save-btn" data-save-nilai>&#128190; Simpan Nilai</button>` : ''}
   `;
 }
 
@@ -2037,7 +2193,7 @@ function renderJournalModule(moduleId, detail) {
           <span class="card-label">Form Jurnal Kelas</span>
           <div class="jf-date-strip">${today}</div>
 
-          ${selectField('Mata Pelajaran', f.mapel, MAPEL_LIST, 'jk-mapel')}
+          ${selectField('Mata Pelajaran', f.mapel, guruMapelOpts(), 'jk-mapel')}
 
           <div class="mf-row-inline">
             <span class="mf-label">Jam Ke</span>
@@ -2082,7 +2238,7 @@ function renderJournalModule(moduleId, detail) {
         <span class="card-label">Form Jurnal Guru</span>
         <div class="jf-date-strip">${today}</div>
 
-        ${selectField('Mata Pelajaran', f.mapel, MAPEL_LIST, 'jg-mapel')}
+        ${selectField('Mata Pelajaran', f.mapel, guruMapelOpts(), 'jg-mapel')}
 
         <div class="mf-row-inline">
           <span class="mf-label">Jam Ke</span>
@@ -2344,9 +2500,10 @@ function rebuildSiswaFromRows(rows) {
   rows.forEach(function(row){
     var kelas = String(row.kelas || row.kelas_id || row.rombel || row.kelas_nama || 'Tanpa Kelas').trim() || 'Tanpa Kelas';
     var nama = String(row.nama || row.nama_siswa || row.name || 'Siswa').trim();
-    var nis = String(row.nis || row.nisn || row.id || '').trim();
+    var nis = String(row.nis || row.nisn || '').trim() || String(row.id || '').trim();
+    var sid = String(row.id || row.siswa_id || '').trim();
     if (!SISWA_PER_KELAS[kelas]) SISWA_PER_KELAS[kelas] = [];
-    SISWA_PER_KELAS[kelas].push({ nis: nis, name: nama });
+    SISWA_PER_KELAS[kelas].push({ nis: nis, name: nama, id: sid });
   });
   if (typeof KELAS_LIST !== 'undefined' && Array.isArray(KELAS_LIST)) {
     KELAS_LIST.length = 0;
@@ -2649,7 +2806,7 @@ function renderPesanLama() {
           <span class="card-label">${jenis}</span>
           <h3 class="module-detail-title">${m.sender}</h3>
           <p class="module-detail-copy">Siswa: <b>${siswa}</b> &middot; Kelas: <b>${kelas}</b><br/>Tanggal: ${tanggal} &middot; Nomor: ${nomor}</p>
-          <p class="module-detail-copy"><span class="status-pill ${m.unread ? 'orange' : 'green'}">${status}</span></p>
+          <p class="module-detail-copy"><span class="status-pill ${/tolak|reject/i.test(status) ? 'red' : (/setuj|disetuj|approv|terima/i.test(status) ? 'green' : (m.unread ? 'orange' : 'green'))}">${status}</span></p>
         </article>
       </section>
       <section class="section">
@@ -2659,22 +2816,13 @@ function renderPesanLama() {
           <p class="module-detail-copy" style="white-space:pre-wrap;margin-top:8px">${isi}</p>
         </article>
       </section>
-      ${m.balasan ? `
       <section class="section">
-        <article class="reply-bubble">
-          <span class="card-label">✓ Balasan Anda</span>
-          <p class="module-detail-copy" style="white-space:pre-wrap;margin-top:6px">${m.balasan}</p>
-        </article>
-      </section>` : ''}
-      <section class="section">
-        <article class="input-panel">
-          <span class="card-label">${m.balasan ? 'Perbarui balasan' : 'Tulis balasan'}</span>
-          <textarea id="reply-input" class="reply-textarea" rows="3" placeholder="Tulis balasan untuk ${m.sender}...">${m.balasan || ''}</textarea>
-          <button type="button" class="primary-btn reply-send-btn" data-message-send="${appState.activeMessageIdx}">Kirim Balasan</button>
-        </article>
-      </section>
-      <section class="section">
-        <div class="field-chip-row">
+        <span class="card-label">Keputusan wali kelas</span>
+        <div class="field-chip-row" style="margin-top:6px">
+          <button type="button" class="field-chip" style="background:#DCFCE7;color:#166534;font-weight:700;border-color:#86EFAC" data-message-approve="${appState.activeMessageIdx}">✓ Setujui</button>
+          <button type="button" class="field-chip" style="background:#FEE2E2;color:#991B1B;font-weight:700;border-color:#FCA5A5" data-message-reject="${appState.activeMessageIdx}">✕ Tolak</button>
+        </div>
+        <div class="field-chip-row" style="margin-top:8px">
           <button type="button" class="field-chip" data-message-mark-read="${appState.activeMessageIdx}">✓ Tandai dibaca</button>
           <button type="button" class="field-chip" data-message-back>Tutup</button>
         </div>
@@ -2687,6 +2835,7 @@ function renderPesanLama() {
         ${statCard('Belum dibaca', appState.unreadMessages, 'butuh balasan', 'gold')}
         ${statCard('Total pesan', messages.length, 'percakapan tersimpan', 'indigo')}
       </div>
+      <p style="font-size:11px;color:#64748B;margin-top:6px">[srt v4] ${appState._suratDbg || 'belum sinkron'}</p>
     </section>
 
     <section class="section">
@@ -3362,8 +3511,8 @@ function messageCard(item, idx) {
         <h3 class="message-title">${item.sender}</h3>
         <p class="message-preview">${item.preview}</p>
         <div class="message-actions">
-          ${item.replied ? '<span class="status-pill green">✓ Dibalas</span>' : (item.unread ? '<span class="status-pill orange">● Belum dibaca</span>' : '<span class="status-pill blue">✓ Dibaca</span>')}
-          <button type="button" class="message-reply-btn" data-message-open="${idx}">Buka &amp; Balas</button>
+          ${(function(){ var s = String(item.status || ''); if (/setuj|disetuj|approv|terima/i.test(s)) return '<span class="status-pill green">✓ Disetujui</span>'; if (/tolak|reject/i.test(s)) return '<span class="status-pill red">✕ Ditolak</span>'; return item.unread ? '<span class="status-pill orange">● Belum dibaca</span>' : '<span class="status-pill blue">✓ Dibaca</span>'; })()}
+          <button type="button" class="message-reply-btn" data-message-open="${idx}">Buka</button>
         </div>
       </div>
       <span class="message-time">${item.time}${item.jam ? '<span class="message-jam">' + item.jam + '</span>' : ''}</span>
@@ -3475,7 +3624,17 @@ function renderFloating() {
 
   floatingEl.hidden = false;
   ensureAnnStyles();
-  const _pengRows = (appState.supabaseModules && appState.supabaseModules.pengumuman) || [];
+  const _annTargetType = function(r){
+    if(!r) return 'semua';
+    var pl = {};
+    try { if(r.payload) pl = (typeof r.payload==='string') ? JSON.parse(r.payload) : r.payload; } catch(_){}
+    var type = String(r.target_type || pl.target_type || '').toLowerCase();
+    var label = String(r.target || r.target_label || pl.target || pl.target_label || '').toLowerCase();
+    if(!type) type = /wali|murid|orang tua|orangtua|ortu/.test(label) ? 'wali' : (/guru/.test(label) ? 'guru' : 'semua');
+    return type;
+  };
+  // Aplikasi ini untuk GURU: sembunyikan pengumuman ber-target Wali Murid.
+  const _pengRows = ((appState.supabaseModules && appState.supabaseModules.pengumuman) || []).filter(function(r){ return _annTargetType(r) !== 'wali'; });
   const _annHelper = window.ZymataMobileSupabase;
   let _annList;
   if (appState.syncMode === 'supabase-live') {
@@ -3929,6 +4088,51 @@ function bindActions() {
         saveState();
         render();
         showToast('Balasan terkirim', 'success', '✓');
+      }
+      return;
+    }
+    // Setujui / Tolak surat -> tutup detail langsung + simpan status ke Supabase (UPDATE eksplisit + fallback upsert)
+    const msgDecision = event.target.closest('[data-message-approve],[data-message-reject]');
+    if (msgDecision) {
+      const isApprove = msgDecision.hasAttribute('data-message-approve');
+      const idx = parseInt(isApprove ? msgDecision.dataset.messageApprove : msgDecision.dataset.messageReject, 10);
+      if (!isNaN(idx) && messages[idx]) {
+        const newStatus = isApprove ? 'Disetujui' : 'Ditolak';
+        const r = messages[idx].raw || {};
+        const db = window.db || window.ZymataMobileSupabase;
+        messages[idx].unread = false;
+        messages[idx].status = newStatus;
+        appState.unreadMessages = messages.filter(function(m){ return m.unread; }).length;
+        appState.activeMessageIdx = null; // langsung tutup detail & kembali ke daftar (UX profesional)
+        render();
+        showToast(isApprove ? 'Surat disetujui' : 'Surat ditolak', isApprove ? 'success' : 'warning', isApprove ? '✓' : '✕');
+        (async function(){
+          try {
+            if (r.id === undefined || r.id === null || r.id === '') { showToast('Surat tanpa ID, status hanya tersimpan lokal', 'warning', '!'); return; }
+            var pl = {};
+            try { pl = r.payload ? ((typeof r.payload === 'string') ? JSON.parse(r.payload) : r.payload) : {}; } catch(_) {}
+            pl.keputusan_guru = newStatus;
+            pl.keputusan_oleh = appState.teacherName || '';
+            pl.keputusan_at = new Date().toISOString();
+            var okSaved = false, errMsg = '';
+            try {
+              var client = (db && typeof db.getClient === 'function') ? db.getClient() : null;
+              if (client && client.from) {
+                var up = await client.from('surat').update({ status: newStatus, payload: pl }).eq('id', r.id);
+                if (up && !up.error) okSaved = true; else errMsg = (up && up.error && (up.error.message || up.error.details)) || '';
+              }
+            } catch(e1) { errMsg = (e1 && e1.message) ? e1.message : String(e1); }
+            if (!okSaved && db && typeof db.upsert === 'function') {
+              try {
+                var us = await db.upsert('surat', { id: r.id, status: newStatus, payload: JSON.stringify(pl) });
+                if (us && !us.error) okSaved = true; else errMsg = (us && us.error && (us.error.message || us.error)) || errMsg;
+              } catch(e2) { errMsg = (e2 && e2.message) ? e2.message : String(e2); }
+            }
+            r.status = newStatus; r.payload = pl;
+            saveDataCache(); saveState();
+            if (!okSaved) showToast('Gagal sinkron ke server: ' + (errMsg || 'tidak diketahui'), 'warning', '!');
+          } catch(eAll) { showToast('Error simpan: ' + ((eAll && eAll.message) ? eAll.message : eAll), 'warning', '!'); }
+        })();
       }
       return;
     }
@@ -4393,6 +4597,28 @@ function bindActions() {
       return;
     }
 
+    const saveNilaiBtn = event.target.closest('[data-save-nilai]');
+    if (saveNilaiBtn) {
+      var nf = getNilaiState();
+      var siswaKelas = nf.kelas ? (SISWA_PER_KELAS[nf.kelas]||[]) : [];
+      var count = siswaKelas.filter(function(s){ return nhFilled(s.nis,nf); }).length;
+      saveOnlyNoRender();
+      /* Coba simpan ke Supabase jika tersedia */
+      (async function(){
+        var ok = false; var _errMsg = '';
+        try{
+          var _svRes = await saveNilaiSiswa(nf, nhStore(), siswaKelas);
+          ok = _svRes && _svRes.saved > 0;
+          if (_svRes && _svRes.errors && _svRes.errors.length) console.warn('[Nilai] simpan errors:', _svRes.errors);
+        }catch(e){ console.warn('[Nilai] Supabase error:',e); _errMsg = e && e.message ? e.message : String(e); }
+        if (!_errMsg && _svRes && _svRes.errors && _svRes.errors.length) _errMsg = _svRes.errors[0];
+        showToast((ok?'✓ Tersimpan: '+count+' siswa.':'⚠ '+(_errMsg||'tidak ada siswa terisi')), ok?'success':'warning', ok?'&#10003;':'&#9888;');
+        appState.offlineDrafts = ok ? appState.offlineDrafts : (appState.offlineDrafts||0)+1;
+        appState.lastSyncLabel = ok ? 'Nilai tersimpan' : `Draft lokal bertambah (${appState.offlineDrafts})`;
+        render();
+      })();
+      return;
+    }
     const draftButton = event.target.closest('[data-draft-save]');
     if (draftButton) {
       appState.showAnnouncements = false;
@@ -4559,8 +4785,11 @@ function bindActions() {
     if (selectEl && selectEl.tagName === 'SELECT') {
       const key = selectEl.dataset.select;
       const val = selectEl.value;
-      if (key === 'nf-mapel') { getNilaiState().mapel = val; saveOnlyNoRender(); return; }
-      if (key === 'nf-jenis') { getNilaiState().jenis = val; saveOnlyNoRender(); return; }
+      if (key === 'nf-kelas') { getNilaiState().kelas = val; render(); return; }
+      if (key === 'nf-mapel') { getNilaiState().mapel = val; render(); return; }
+      if (key === 'nf-jenis') { getNilaiState().jenis = val; render(); return; }
+      if (key === 'nf-semester') { getNilaiState().semester = val; render(); return; }
+      if (key === 'nf-kkm') { getNilaiState().kkm = Number(val)||70; render(); return; }
       if (key === 'jg-mapel') { getJurnalGuruState().mapel = val; saveOnlyNoRender(); return; }
       if (key === 'jg-metode') { getJurnalGuruState().metode = val; saveOnlyNoRender(); return; }
       if (key === 'jk-mapel') { getJurnalKelasState().mapel = val; saveOnlyNoRender(); return; }
@@ -4592,6 +4821,41 @@ function bindActions() {
     const ketEl = event.target.closest('[data-ag-keterangan]');
     if (ketEl) {
       appState.teacherAttendance.keterangan = ketEl.value;
+    }
+    /* NH input handler */
+    const nhInp = event.target.closest('[data-nh-nis]');
+    if (nhInp) {
+      const nis = nhInp.getAttribute('data-nh-nis');
+      const f = getNilaiState();
+      const r = nhGet(nis, f);
+      const idxAttr = nhInp.getAttribute('data-nh-idx');
+      const kkmAttr = nhInp.getAttribute('data-nh-kkm');
+      const v = Math.min(100, Math.max(0, parseInt(nhInp.value||'0',10)||0));
+      if (idxAttr !== null) {
+        r.nh[parseInt(idxAttr,10)] = v;
+        r.nilai = nhAvgVal(r.nh); /* kompatibilitas */
+      } else if (kkmAttr !== null) {
+        r.kkm = v;
+      }
+      /* Update badge & avg inline tanpa full render */
+      var card = nhInp.closest('[data-nis]');
+      if (card) {
+        var kkm = Number(f.kkm)||70;
+        var avg = nhAvgVal(r.nh);
+        var isFilled = r.nh.some(function(x){return x>0;});
+        var isTuntas = isFilled && avg >= kkm;
+        var badge = card.querySelector('.ns-badge');
+        if (badge) {
+          badge.textContent = !isFilled ? 'Belum' : (isTuntas ? 'Tuntas' : 'Remedial');
+          badge.style.background = !isFilled ? '#2a2a3a' : (isTuntas ? '#0f3d2a' : '#3d1a1a');
+          badge.style.color = !isFilled ? '#9a9a92' : (isTuntas ? '#34d399' : '#f87171');
+        }
+        var avgEl = card.querySelector('[data-nh-avg]');
+        if (avgEl) { avgEl.textContent = avg||'—'; avgEl.style.color = isFilled?(isTuntas?'#34d399':'#f87171'):'#9a9a92'; }
+        var av = card.querySelector('.ns-avatar');
+        if (av) av.style.background = isFilled?(isTuntas?'#0f3d2a':'#3d1a1a'):'#1a1f2e';
+      }
+      saveOnlyNoRender();
     }
   });
 }
@@ -4696,13 +4960,6 @@ async function updateTeacherAttendance(type) {
   }
   const hhmm = (__serverMs != null) ? agHHMMFromMs(__serverMs) : agNowHHMM();
   if (type === 'checkIn' && !appState.teacherAttendance.checkIn) {
-    // [ZYMATA] Device-binding: 1 HP = 1 NIP (anti titip absen).
-    var __bind = await agEnforceDeviceBinding(String(appState.teacherNip || '').trim());
-    if (__bind && __bind.blocked) {
-      appState.teacherAttendance.note = __bind.message;
-      showToast(__bind.message, 'error', '&#9888;');
-      return false;
-    }
     const prevStatus = appState.teacherAttendance.status;
     const nonHadir   = ['izin','sakit','dinas','alpa'].includes(prevStatus);
     let gps = null;
@@ -4948,20 +5205,36 @@ async function loadMessagesFromSupabase(kelasUtama) {
     // Ambil surat/pesan dari wali murid untuk kelas ini (max 50, terbaru dulu)
     const res = await db.select('surat', { order: 'tanggal', ascending: false, limit: 50 });
     const rows = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
-    // Filter: surat yang berasal dari wali murid, atau yang terkait kelas guru
+    // Normalisasi nama kelas agar cocok walau beda spasi/kapital/awalan "Kelas" atau pemisah (-, /, spasi)
+    var _normKelas = function(v){ return String(v == null ? '' : v).replace(/^kelas\s*/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase(); };
+    // Daftar kelas guru (wali kelas + kelas yang diajar) untuk pencocokan
+    var _kelasGuru = (Array.isArray(appState.guruKelasList) && appState.guruKelasList.length) ? appState.guruKelasList.slice() : (kelasUtama ? [kelasUtama] : []);
+    var _kelasGuruNorm = _kelasGuru.map(_normKelas).filter(Boolean);
+    // Filter: surat dari wali murid, diarahkan ke WALI KELAS dari kelas siswa tersebut
     const filtered = rows.filter(function(r) {
       if (!r) return false;
-      // Cek payload jika ada (format wali murid)
       var payload = {};
       try { if (r.payload) payload = (typeof r.payload === 'string') ? JSON.parse(r.payload) : r.payload; } catch(_) {}
-      var suratKelas = payload.kelas || r.kelas || r.pihak || '';
-      var isWaliMurid = (payload.sumber === 'WaliMurid') || /wali/i.test(r.sumber || '') || /izin|sakit|terlambat/i.test(r.jenis || '');
-      // Tampilkan semua jika tidak ada kelasUtama, atau filter berdasarkan kelas
-      if (kelasUtama) {
-        return isWaliMurid && (suratKelas === kelasUtama || !suratKelas);
-      }
-      return isWaliMurid;
+      var sis = payload.__siswa || payload.siswa || {};
+      var f = payload.fields || {};
+      // Sumber kelas surat (JANGAN pakai r.pihak yang berisi "Wali Murid")
+      var suratKelas = r.kelas || payload.kelas || sis.kelas || f.kelas || '';
+      // Deteksi surat yang berasal dari wali murid seluas mungkin
+      var isWaliMurid = (payload.sumber === 'WaliMurid')
+        || /wali/i.test(String(payload.role || ''))
+        || /wali/i.test(String(r.sumber || ''))
+        || /surat-?wali|wali/i.test(String(payload.module || ''))
+        || !!(r.nama_siswa || sis.nama || payload.nama_siswa || f.nama_siswa)
+        || !!(r.siswa_id || sis.id)
+        || !!(r.nama_wali || payload.nama_wali)
+        || /izin|sakit|terlambat|pulang|dispensasi|orang tua|wali/i.test(String(r.jenis || '') + ' ' + String(r.perihal || '') + ' ' + String(r.pihak || ''));
+      if (!isWaliMurid) return false;
+      // Arahkan ke wali kelas: tampil jika surat tak berkelas, guru tak punya daftar kelas,
+      // atau kelas surat cocok dengan salah satu kelas guru (ternormalisasi).
+      if (!suratKelas || !_kelasGuruNorm.length) return true;
+      return _kelasGuruNorm.indexOf(_normKelas(suratKelas)) !== -1;
     });
+    try { appState._suratDbg = 'db=' + rows.length + ' tampil=' + filtered.length + ' kelasGuru=' + (_kelasGuru.join(',') || '-'); } catch(_) {}
     messages.splice(0, messages.length, ...filtered.map(function(r) {
       var payload = {};
       try { if (r.payload) payload = (typeof r.payload === 'string') ? JSON.parse(r.payload) : r.payload; } catch(_) {}
@@ -4995,7 +5268,11 @@ async function loadMessagesFromSupabase(kelasUtama) {
       }
       var balasan = payload.balasan_guru || payload.balasan || r.balasan || '';
       var sudahDibalas = !!balasan || r.status === 'Dibalas';
-      var statusBelum = !sudahDibalas && (!r.status || r.status === 'Baru' || r.status === 'Belum');
+      // Belum dibaca = surat wali yang BELUM ditangani (belum dibaca/disetujui/ditolak/dibalas).
+      // Status seperti 'Menunggu', 'Baru', 'Belum', 'Terkirim', atau kosong => dianggap belum dibaca.
+      var _st = String(r.status || '').toLowerCase();
+      var sudahDitangani = sudahDibalas || /disetuj|setuj|tolak|ditolak|dibaca|selesai|approv|reject|batal/.test(_st);
+      var statusBelum = !sudahDitangani;
       return {
         sender: sender,
         preview: preview.slice(0, 80) + (preview.length > 80 ? '...' : ''),
@@ -5005,6 +5282,7 @@ async function loadMessagesFromSupabase(kelasUtama) {
         replied: sudahDibalas,
         balasan: balasan,
         tone: statusBelum ? 'orange' : 'green',
+        status: r.status || '',
         raw: r
       };
     }));
@@ -5122,6 +5400,7 @@ async function hydrateGuruFromSupabase() {
     const mapelFromMengajar = (ctx.mengajar || []).map(r => r.mapel || r.mata_pelajaran || r.nama_mapel).filter(Boolean);
     const mapelList = Array.from(new Set([].concat(mapelDiajarRaw, mapelFromMengajar).filter(Boolean)));
     appState.guruMapelList = mapelList.slice();
+    loadMasterMapel(); // muat daftar mapel resmi sekolah (master_mapel) di latar belakang
 
     appState.syncMode = 'supabase-live';
     appState.teacherName = guru.nama || session.nama || session.nama_guru || session.username || 'Guru';
@@ -5473,38 +5752,38 @@ animateContent();
       +'.ztf-name{font-weight:600;font-size:14px;color:#e8ebf2}'
       +'.ztf-meta{font-size:12px;color:#94a3b8;margin-top:2px}'
       +'.ztf-btn{border:none;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}'
-      +'.ztf-btn-add{background:rgba(15,131,148,.22);color:#5eead4}'
+      +'.ztf-btn-add{background:rgba(31,199,180,.22);color:var(--indigo)}'
       +'.ztf-btn-del{background:rgba(239,68,68,.16);color:#fca5a5}'
       +'.ztf-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}'
-      +'.ztf-scan-btn{flex:0 0 auto;width:42px;height:42px;border-radius:12px;border:none;cursor:pointer;background:linear-gradient(135deg,#2dd4bf,#14b8a6);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(45,212,191,.3)}'
+      +'.ztf-scan-btn{flex:0 0 auto;width:42px;height:42px;border-radius:12px;border:none;cursor:pointer;background:linear-gradient(135deg,var(--indigo) 0%,var(--indigo-dark) 100%);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(31,199,180,.3)}'
       +'.ztf-scan-btn:active{transform:scale(.94)}'
-      +'.ztf-check{color:#2dd4bf;font-weight:700;font-size:13px;white-space:nowrap}'
+      +'.ztf-check{color:var(--indigo);font-weight:700;font-size:13px;white-space:nowrap}'
       +'.ztf-row.on{opacity:.9}'
-      +'.ztf-btn-save{background:#0f8394;color:#fff;width:100%;padding:13px;font-size:15px;border-radius:12px;margin-top:4px}'
-      +'.ztf-chip{display:inline-block;background:rgba(15,131,148,.22);color:#7fe3ea;border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700}'
+      +'.ztf-btn-save{background:linear-gradient(135deg,var(--indigo) 0%,var(--indigo-dark) 100%);color:#fff;width:100%;padding:13px;font-size:15px;border-radius:12px;margin-top:4px}'
+      +'.ztf-chip{display:inline-block;background:rgba(31,199,180,.22);color:var(--indigo);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700}'
       +'.ztf-cat-card{border:1px solid rgba(148,163,184,.14);border-radius:14px;padding:12px;margin-bottom:10px;background:#131a2b}'
       +'.ztf-cat-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}'
       +'.ztf-cat-title{font-weight:700;font-size:14px;color:#e8ebf2}'
-      +'.ztf-prog{font-size:12px;font-weight:700;color:#2dd4bf}'
+      +'.ztf-prog{font-size:12px;font-weight:700;color:var(--indigo)}'
       +'.ztf-grid2{display:grid;grid-template-columns:1fr 90px;gap:8px}'
       +'.ztf-empty{color:#94a3b8;font-size:13px;line-height:1.5;padding:6px 2px}'
       +'.ztf-tabs{display:flex;gap:8px;margin-bottom:12px}'
       +'.ztf-tab{flex:1;text-align:center;border:1px solid rgba(148,163,184,.22);background:transparent;color:#cbd5e1;border-radius:12px;padding:10px;font-size:13px;font-weight:700;cursor:pointer}'
-      +'.ztf-tab.on{background:#0f8394;color:#fff;border-color:#0f8394}'
+      +'.ztf-tab.on{background:linear-gradient(135deg,var(--indigo) 0%,var(--indigo-dark) 100%);color:#fff;border-color:var(--indigo-dark)}'
       +'.ztf-static{background:#0f1629;border:1px solid rgba(148,163,184,.14);border-radius:10px;padding:10px 12px;font-size:14px;color:#e8ebf2;min-height:20px}'
       +'.ztf-note{background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.32);color:#fcd34d;border-radius:12px;padding:12px;font-size:13px;line-height:1.5;margin-top:4px}'
       +'.ztf-rw{border:1px solid rgba(148,163,184,.14);border-radius:12px;padding:10px 12px;margin-bottom:8px;background:#131a2b}'
       +'.ztf-rw-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}'
-      +'.ztf-rw-kat{font-weight:700;font-size:13px;color:#2dd4bf}'
+      +'.ztf-rw-kat{font-weight:700;font-size:13px;color:var(--indigo)}'
       +'.ztf-rw-date{font-size:12px;color:#94a3b8}'
       +'.ztf-rw-body{font-size:13px;color:#e8ebf2}'
-      +'.ztf-rw-prog{color:#2dd4bf;font-weight:700;font-size:12px}'
+      +'.ztf-rw-prog{color:var(--indigo);font-weight:700;font-size:12px}'
       +'.ztf-rw-note{font-size:12px;color:#94a3b8;margin-top:4px}'
       +'.ztf-sum-grid{display:flex;flex-direction:column;gap:8px;margin-top:4px}'
       +'.ztf-sum-item{background:#131a2b;border:1px solid rgba(148,163,184,.14);border-radius:12px;padding:10px 12px}'
       +'.ztf-sum-top{display:flex;justify-content:space-between;align-items:center}'
       +'.ztf-sum-kat{font-weight:700;font-size:13px;color:#e8ebf2}'
-      +'.ztf-sum-prog{font-size:12px;font-weight:700;color:#2dd4bf}'
+      +'.ztf-sum-prog{font-size:12px;font-weight:700;color:var(--indigo)}'
       +'.ztf-sum-surah{font-size:12px;color:#94a3b8;margin-top:3px}'
       +'</style>';
   }
@@ -5702,4 +5981,362 @@ animateContent();
   /* ---------- register modul ---------- */
   modulePlaceholders['kelola-halaqah'] = { eyebrow:'Tahfidz', title:'Kelola Halaqah', subtitle:'Kelompok tahfidz binaan Anda.', stats:[], focus:[] };
   modulePlaceholders['mutabaah-tahfidz'] = { eyebrow:'Tahfidz', title:"Mutaba'ah Tahfidz", subtitle:'Setoran hafalan siswa di sekolah.', stats:[], focus:[] };
+})();
+
+
+/* ================= MODUL: PROGRAM SEKOLAH (GURU MOBILE) v1 ================= */
+(function(){
+  'use strict';
+  if(window.__ZY_PROGRAM_SEKOLAH_GURU_V1__) return;
+  window.__ZY_PROGRAM_SEKOLAH_GURU_V1__ = true;
+
+  var TABLE = 'program_sekolah';
+  var PS = { rows:null, loading:false };
+
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function SB(){ return window.ZymataMobileSupabase; }
+  function activePS(){ try { return appState && appState.activeTab==='module:program-sekolah'; } catch(e){ return false; } }
+  function isDone(r){ return r.selesai===true || r.selesai==='true' || r.selesai===1; }
+  function findRow(id){ var a=PS.rows||[]; for(var i=0;i<a.length;i++){ if(String(a[i].id)===String(id)) return a[i]; } return null; }
+
+  function styleTag(){
+    return '<style id="psg-style">'
+      + '.psg-wrap{padding:0 2px}'
+      + '.psg-sum{display:flex;gap:10px;margin-bottom:12px}'
+      + '.psg-sum .psg-stat{flex:1;background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:14px;padding:12px 14px}'
+      + '.psg-stat b{display:block;font-size:22px;color:#e8ebf2;font-weight:800;line-height:1.1}'
+      + '.psg-stat small{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em}'
+      + '.psg-card{background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.2)}'
+      + '.psg-card.done{border-color:rgba(31,199,180,.45);background:rgba(31,199,180,.12)}'
+      + '.psg-top{display:flex;align-items:flex-start;gap:11px}'
+      + '.psg-no{flex:none;min-width:26px;height:26px;border-radius:8px;background:#0f1629;color:#94a3b8;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center}'
+      + '.psg-head{flex:1;min-width:0}'
+      + '.psg-title{font-weight:700;font-size:15px;color:#e8ebf2;line-height:1.3}'
+      + '.psg-card.done .psg-title{text-decoration:line-through;color:#8aa0b6}'
+      + '.psg-pel{font-size:12px;color:#94a3b8;margin-top:3px}'
+      + '.psg-pel b{color:#c7d2e5;font-weight:600}'
+      + '.psg-check{flex:none;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.03em}'
+      + '.psg-check input{width:24px;height:24px;accent-color:var(--indigo)}'
+      + '.psg-badge{font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px;background:#0f1629;color:#94a3b8;border:1px solid rgba(148,163,184,.22);white-space:nowrap}'
+      + '.psg-badge.done{background:rgba(31,199,180,.15);color:var(--indigo);border-color:rgba(31,199,180,.45)}'
+      + '.psg-field{margin-top:10px}'
+      + '.psg-lbl{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#94a3b8;margin-bottom:5px;display:block}'
+      + '.psg-inp{width:100%;box-sizing:border-box;border:1px solid rgba(148,163,184,.22);border-radius:10px;padding:9px 11px;font-size:14px;background:#0f1629;color:#e8ebf2}'
+      + '.psg-inp::placeholder{color:#7381a0}'
+      + '.psg-note{font-size:12px;color:#9fb0c6;line-height:1.5;margin-top:2px;padding:11px 13px;background:#0f1629;border:1px solid rgba(148,163,184,.14);border-radius:12px}'
+      + '.psg-note b{color:#e8ebf2}'
+      + '</style>';
+  }
+  function headerCard(detail, sub){
+    detail = detail || {};
+    return '<section class="section"><article class="module-detail-card">'
+      + '<button type="button" class="back-chip" data-action="menu">\u2039 Menu</button>'
+      + '<span class="card-label">'+esc(detail.eyebrow||'Sekolah')+'</span>'
+      + '<h3 class="module-detail-title">'+esc(detail.title||'Program Sekolah')+'</h3>'
+      + '<p class="module-detail-copy">'+(sub||'')+'</p></article></section>';
+  }
+
+  async function loadPS(){
+    if(PS.loading) return;
+    PS.loading=true;
+    try{
+      var api=SB();
+      if(!api){ PS.rows=[]; }
+      else { var res=await api.select(TABLE, { order:'no', ascending:true, limit:500 }); PS.rows=(res&&res.data)?res.data:[]; }
+    }catch(e){ PS.rows=[]; }
+    PS.loading=false;
+    if(activePS() && typeof render==='function') render();
+  }
+
+  function fullPayload(r){
+    return { id:r.id, no:r.no, program:r.program, selesai:isDone(r), pelaksana:r.pelaksana, penanggung_jawab:r.penanggung_jawab, keterangan:r.keterangan };
+  }
+  async function save(r){
+    var api=SB(); if(!api) return;
+    try{ await api.upsert(TABLE, fullPayload(r), 'id'); if(typeof showToast==='function') showToast('Tersimpan','success','&#10003;'); }
+    catch(e){ if(typeof showToast==='function') showToast('Gagal menyimpan','error','&#9888;'); }
+  }
+  async function psToggle(id, checked){ var r=findRow(id); if(!r) return; r.selesai=!!checked; save(r); if(typeof render==='function') render(); }
+  async function psEdit(id, field, value){ var r=findRow(id); if(!r) return; r[field]=value; save(r); }
+
+  /* Event delegation (dipasang sekali) supaya bertahan setiap kali app re-render */
+  document.addEventListener('change', function(e){
+    var el=e.target; if(!el || !el.getAttribute) return;
+    var id=el.getAttribute('data-ps-id'); if(!id) return;
+    if(el.type==='checkbox'){ /* dinonaktifkan utk guru: status Selesai hanya via admin web */ return; }
+    else { var f=el.getAttribute('data-ps-field'); if(f) psEdit(id, f, el.value); }
+  }, true);
+
+  window.renderProgramSekolahGuruModule = function(detail){
+    if(PS.rows===null){ if(!PS.loading) loadPS(); return styleTag()+headerCard(detail,'Memuat program sekolah...'); }
+    var rows=PS.rows||[];
+    var done=rows.filter(isDone).length;
+    var html=styleTag()+headerCard(detail, esc(String(rows.length))+' program &middot; '+done+' terlaksana');
+    html+='<section class="section"><div class="psg-wrap">';
+    html+='<div class="psg-sum"><div class="psg-stat"><b>'+rows.length+'</b><small>Total Program</small></div><div class="psg-stat"><b>'+done+'</b><small>Terlaksana</small></div></div>';
+    if(!rows.length){
+      html+='<div class="psg-card"><p class="psg-pel">Belum ada program. Daftar program ditambahkan oleh admin lewat aplikasi desktop.</p></div>';
+    } else {
+      html+=rows.map(function(r){
+        var checked=isDone(r);
+        var id=esc(r.id);
+        var pel=r.pelaksana?('<div class="psg-pel">Pelaksana: <b>'+esc(r.pelaksana)+'</b></div>'):'';
+        return '<div class="psg-card'+(checked?' done':'')+'">'
+          +'<div class="psg-top">'
+          +'<span class="psg-no">'+(r.no!=null?esc(String(r.no)):'-')+'</span>'
+          +'<div class="psg-head"><div class="psg-title">'+esc(r.program||'-')+'</div>'+pel+'</div>'
+          +'<span class="psg-check">'+(checked?'<span class="psg-badge done">&#10003; Selesai</span>':'<span class="psg-badge">Belum</span>')+'</span>'
+          +'</div>'
+          +'<div class="psg-field"><span class="psg-lbl">Penanggung Jawab</span><input class="psg-inp" data-ps-id="'+id+'" data-ps-field="penanggung_jawab" value="'+esc(r.penanggung_jawab||'')+'" placeholder="Isi nama penanggung jawab"></div>'
+          +'<div class="psg-field"><span class="psg-lbl">Keterangan</span><input class="psg-inp" data-ps-id="'+id+'" data-ps-field="keterangan" value="'+esc(r.keterangan||'')+'" placeholder="Isi keterangan"></div>'
+          +'</div>';
+      }).join('');
+      html+='<div class="psg-note">Anda dapat mengisi <b>Penanggung Jawab</b> dan <b>Keterangan</b>. Status <b>Selesai</b> hanya dapat dicentang oleh admin lewat web. Nama program &amp; pelaksana dikelola oleh admin.</div>';
+    }
+    html+='</div></section>';
+    return html;
+  };
+
+  modulePlaceholders['program-sekolah'] = { eyebrow:'Sekolah', title:'Program Sekolah', subtitle:'Daftar program & kegiatan sekolah.', stats:[], focus:[] };
+  console.log('[Zymata Guru] Modul Program Sekolah v1 aktif');
+})();
+
+/* ============ MODUL: PERANGKAT PEMBELAJARAN (GURU MOBILE) v1 ============
+ * Guru dapat upload & kelola Prota-Promes, Modul Ajar, Media Pembelajaran.
+ * Data & file konsisten dgn versi desktop (tabel perangkat_pembelajaran,
+ * bucket R2 'dokumen', jenis sama). Upload lewat edge function r2-upload-url,
+ * hapus file lewat r2-delete-url. Tema warna: emerald hijau (sesuai app).
+ * ===================================================================== */
+(function(){
+  'use strict';
+  if(window.__ZY_PERANGKAT_PEMBELAJARAN_GURU_V1__) return;
+  window.__ZY_PERANGKAT_PEMBELAJARAN_GURU_V1__ = true;
+
+  var TABLE='perangkat_pembelajaran';
+  var BUCKET='dokumen';
+  var R2_PUBLIC_BASE='https://cdn.zymata.my.id';
+  var CATS=[
+    { jenis:'prota-promes',      label:'Prota-Promes', icon:'\u229E' },
+    { jenis:'modul-ajar',        label:'Modul Ajar',   icon:'\u2630' },
+    { jenis:'media-pembelajaran',label:'Media',        icon:'\u25BA' }
+  ];
+  var PP={ jenis:'prota-promes', rows:null, loading:false, uploading:false, pendingFile:null };
+
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function SB(){ return window.ZymataMobileSupabase; }
+  function client(){ try{ var api=SB(); return (api&&typeof api.getClient==='function')?api.getClient():null; }catch(e){ return null; } }
+  function activePP(){ try{ return appState && appState.activeTab==='module:perangkat-pembelajaran'; }catch(e){ return false; } }
+  function guruId(){ try{ return String(appState.teacherNip||appState.teacherName||'guru'); }catch(e){ return 'guru'; } }
+  function guruName(){ try{ return String(appState.teacherName||'Guru'); }catch(e){ return 'Guru'; } }
+  function catLabel(j){ for(var i=0;i<CATS.length;i++){ if(CATS[i].jenis===j) return CATS[i].label; } return j; }
+  function todayISO(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function fmtSize(n){ n=Number(n||0); if(!n) return ''; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(0)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
+  function publicUrl(key){ return R2_PUBLIC_BASE+'/'+String(key).split('/').map(encodeURIComponent).join('/'); }
+  function ppFixUrl(u){ u=String(u||''); return u.replace(/^https?:\/\/pub-49fe6ea9488240aeb39b45dd5c83d344\.r2\.dev/i, R2_PUBLIC_BASE); }
+  function ppViewUrl(u,r){ u=String(u||''); var n=String((r&&r.file_name)||u).toLowerCase(); var ext=((n.split('?')[0].match(/\.([a-z0-9]+)$/)||[])[1])||''; if(['xls','xlsx','doc','docx','ppt','pptx'].indexOf(ext)>=0) return 'https://view.officeapps.live.com/op/view.aspx?src='+encodeURIComponent(u); return u; }
+  function toast(msg,tone,icon){ if(typeof showToast==='function') showToast(msg, tone||'success', icon||'&#10003;'); }
+
+  function ppGetKelas(r){ if(r&&r.kelas!=null&&String(r.kelas).trim()!=='') return String(r.kelas).trim(); var m=String((r&&r.keterangan)||'').match(/\[kelas:([^\]]*)\]/i); return m?String(m[1]).trim():''; }
+  function ppCleanKet(r){ return String((r&&r.keterangan)||'').replace(/\s*\[kelas:[^\]]*\]/ig,'').trim(); }
+  function ppKelasOpts(){ var out=[],seen={}; function add(k){ k=String(k==null?'':k).trim(); if(k&&!seen[k.toLowerCase()]){ seen[k.toLowerCase()]=1; out.push(k); } } try{ if(appState&&Array.isArray(appState.guruKelasList)) appState.guruKelasList.forEach(add); }catch(e){} try{ if(typeof KELAS_LIST!=='undefined'&&Array.isArray(KELAS_LIST)) KELAS_LIST.forEach(add); }catch(e){} try{ (PP.rows||[]).forEach(function(r){ add(ppGetKelas(r)); }); }catch(e){} return out; }
+  function ppDefaultKelas(){ try{ if(appState&&appState.teacherClass&&appState.teacherClass!=='Kelas belum terhubung') return String(appState.teacherClass).trim(); if(appState&&Array.isArray(appState.guruKelasList)&&appState.guruKelasList.length) return String(appState.guruKelasList[0]).trim(); }catch(e){} return ''; }
+  function ppKelasSelectHtml(up){ var opts=ppKelasOpts(); var def=ppDefaultKelas(); var low=opts.map(function(x){ return String(x).toLowerCase(); }); if(def && low.indexOf(def.toLowerCase())<0){ opts.unshift(def); } var h='<select class="ppg-inp" id="ppg-kelas"'+(up?' disabled':'')+'>'; h+='<option value="">Pilih kelas</option>'; h+=opts.map(function(k){ var sel=(def && String(k).toLowerCase()===def.toLowerCase())?' selected':''; return '<option value="'+esc(k)+'"'+sel+'>'+esc(k)+'</option>'; }).join(''); h+='</select>'; return h; }
+  function ppMapelOpts(){ var out=[],seen={}; function add(m){ m=String(m==null?'':m).trim(); if(m&&!seen[m.toLowerCase()]){ seen[m.toLowerCase()]=1; out.push(m); } } try{ if(appState&&Array.isArray(appState.guruMapelList)) appState.guruMapelList.forEach(add); }catch(e){} return out; }
+  function ppMapelSelectHtml(up){ var opts=ppMapelOpts(); var h='<select class="ppg-inp" id="ppg-mapel"'+(up?' disabled':'')+'>'; h+='<option value="">Pilih mata pelajaran</option>'; h+=opts.map(function(m){ return '<option value="'+esc(m)+'">'+esc(m)+'</option>'; }).join(''); h+='</select>'; return h; }
+
+  function styleTag(){
+    return '<style id="ppg-style">'
+      + '.ppg-wrap{padding:0 2px}'
+      + '.ppg-tabs{display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px}'
+      + '.ppg-tab{flex:1;min-width:96px;text-align:center;background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:12px;padding:10px 8px;color:#94a3b8;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:.15s}'
+      + '.ppg-tab .i{display:block;font-size:18px;margin-bottom:3px}'
+      + '.ppg-tab.active{background:linear-gradient(135deg,var(--indigo) 0%,var(--indigo-dark) 100%);color:#fff;border-color:transparent;box-shadow:0 6px 16px rgba(31,199,180,.28)}'
+      + '.ppg-form{background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:14px;margin-bottom:14px}'
+      + '.ppg-lbl{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#94a3b8;margin-bottom:5px;display:block}'
+      + '.ppg-inp{width:100%;box-sizing:border-box;border:1px solid rgba(148,163,184,.22);border-radius:10px;padding:9px 11px;font-size:14px;background:#0f1629;color:#e8ebf2;margin-bottom:10px}'
+      + '.ppg-inp:focus{outline:none;border-color:var(--indigo);box-shadow:0 0 0 3px rgba(31,199,180,.15)}'
+      + '.ppg-inp::placeholder{color:#7381a0}'
+      + '.ppg-file{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}'
+      + '.ppg-pick{display:flex;align-items:center;gap:11px;background:#0f1629;border:1.5px dashed rgba(31,199,180,.42);border-radius:12px;padding:12px 13px;margin-bottom:10px;cursor:pointer;transition:.15s}'
+      + '.ppg-pick:active{background:#0c1220}'
+      + '.ppg-pick.dis{opacity:.55;pointer-events:none}'
+      + '.ppg-pick-ic{flex:none;width:36px;height:36px;border-radius:10px;background:rgba(31,199,180,.15);color:var(--indigo);display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:800}'
+      + '.ppg-pick-main{display:flex;flex-direction:column;min-width:0;flex:1}'
+      + '.ppg-pick-main b{font-size:13.5px;color:#e8ebf2}'
+      + '.ppg-fname{font-size:11.5px;color:#94a3b8;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+      + '.ppg-fname.has{color:var(--indigo);font-weight:600}'
+      + '.ppg-btn{width:100%;border:none;border-radius:11px;padding:12px;font-size:14px;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--indigo) 0%,var(--indigo-dark) 100%);cursor:pointer;box-shadow:0 8px 18px rgba(31,199,180,.28)}'
+      + '.ppg-btn[disabled]{opacity:.6;cursor:default;box-shadow:none}'
+      + '.ppg-card{background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:14px;padding:12px 13px;margin-bottom:10px}'
+      + '.ppg-top{display:flex;align-items:flex-start;gap:10px}'
+      + '.ppg-ic{flex:none;width:34px;height:34px;border-radius:9px;background:rgba(31,199,180,.12);color:var(--indigo);display:flex;align-items:center;justify-content:center;font-size:16px}'
+      + '.ppg-info{flex:1;min-width:0}'
+      + '.ppg-name{font-weight:700;font-size:14px;color:#e8ebf2;word-break:break-word;line-height:1.3}'
+      + '.ppg-meta{font-size:11.5px;color:#94a3b8;margin-top:2px}'
+      + '.ppg-ket{font-size:12.5px;color:#c7d2e5;margin-top:6px;line-height:1.45}'
+      + '.ppg-actions{display:flex;gap:8px;margin-top:10px}'
+      + '.ppg-open{flex:1;text-align:center;text-decoration:none;background:rgba(31,199,180,.12);border:1px solid rgba(31,199,180,.35);color:var(--indigo);border-radius:9px;padding:8px;font-size:12.5px;font-weight:700}'
+      + '.ppg-del{flex:none;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fca5a5;border-radius:9px;padding:8px 12px;font-size:12.5px;font-weight:700;cursor:pointer}'
+      + '.ppg-empty{background:#161d2e;border:1px dashed rgba(148,163,184,.3);border-radius:14px;padding:22px 14px;text-align:center;color:#94a3b8;font-size:13px}'
+      + '.ppg-note{font-size:11.5px;color:#8aa0b6;margin:2px 2px 10px;line-height:1.5}'
+      + '</style>';
+  }
+  function headerCard(detail){
+    detail=detail||{};
+    return '<section class="section"><article class="module-detail-card">'
+      + '<button type="button" class="back-chip" data-action="menu">\u2039 Menu</button>'
+      + '<span class="card-label">'+esc(detail.eyebrow||'Akademik')+'</span>'
+      + '<h3 class="module-detail-title">'+esc(detail.title||'Perangkat Pembelajaran')+'</h3>'
+      + '<p class="module-detail-copy">Upload & kelola perangkat pembelajaran Anda.</p></article></section>';
+  }
+  function tabsHtml(){
+    var t=CATS.map(function(c){
+      return '<div class="ppg-tab'+(c.jenis===PP.jenis?' active':'')+'" data-pp-jenis="'+c.jenis+'"><span class="i">'+c.icon+'</span>'+esc(c.label)+'</div>';
+    }).join('');
+    return '<div class="ppg-tabs">'+t+'</div>';
+  }
+  function formHtml(){
+    var up=PP.uploading;
+    return '<div class="ppg-form">'
+      + '<span class="ppg-lbl">Keterangan</span>'
+      + '<input class="ppg-inp" id="ppg-ket" placeholder="mis. Prota Kelas V Semester 1"'+(up?' disabled':'')+'>'
+      + (PP.jenis==='media-pembelajaran' ? ('<span class="ppg-lbl">Kelas yang Diajarkan</span>'
+        + ppKelasSelectHtml(up)
+        + '<span class="ppg-lbl">Mata Pelajaran</span>'
+        + ppMapelSelectHtml(up)) : '')
+      + '<span class="ppg-lbl">Berkas (PDF / gambar / dokumen)</span>'
+      + '<label class="ppg-pick'+(up?' dis':'')+'" for="ppg-file">'
+      +   '<span class="ppg-pick-ic">\u2191</span>'
+      +   '<span class="ppg-pick-main"><b>Pilih berkas</b><span class="ppg-fname'+(PP.pendingFile?' has':'')+'" id="ppg-fname">'+(PP.pendingFile?esc(PP.pendingFile.name):'Ketuk untuk memilih dari perangkat')+'</span></span>'
+      + '</label>'
+      + '<input id="ppg-file" class="ppg-file" type="file"'+(up?' disabled':'')+'>'
+      + '<button type="button" class="ppg-btn" data-pp-action="upload"'+(up?' disabled':'')+'>'+(up?'Mengupload\u2026':'Upload Berkas')+'</button>'
+      + '</div>';
+  }
+
+  async function loadPP(){
+    if(PP.loading) return; PP.loading=true;
+    try{
+      var c=client(); var res=null;
+      if(c){ res=await c.from(TABLE).select('*').eq('jenis',PP.jenis).order('created_at',{ascending:false}).limit(300); }
+      else if(SB()&&typeof SB().select==='function'){ res=await SB().select(TABLE,{ eq:{jenis:PP.jenis}, order:'created_at', ascending:false, limit:300 }); }
+      PP.rows=(res&&res.data)?res.data:[];
+    }catch(e){ PP.rows=[]; }
+    PP.loading=false;
+    if(activePP() && typeof render==='function') render();
+  }
+
+  async function doUpload(){
+    if(PP.uploading) return;
+    var fileEl=document.getElementById('ppg-file');
+    var ketEl=document.getElementById('ppg-ket');
+    var file=(fileEl&&fileEl.files&&fileEl.files[0])||PP.pendingFile||null;
+    var ket=(ketEl&&ketEl.value||'').trim();
+    var kelasEl=document.getElementById('ppg-kelas');
+    var kelasVal=(PP.jenis==='media-pembelajaran' && kelasEl)?(kelasEl.value||'').trim():'';
+    var mapelEl=document.getElementById('ppg-mapel');
+    var mapelVal=(PP.jenis==='media-pembelajaran' && mapelEl)?(mapelEl.value||'').trim():'';
+    var ketFinal=mapelVal?(mapelVal+(ket?' - '+ket:'')):ket;
+    if(!file){ toast('Pilih berkas dulu','error','&#9888;'); return; }
+    var c=client();
+    if(!c||!c.functions){ toast('Koneksi belum siap, coba lagi','error','&#9888;'); return; }
+    PP.uploading=true; if(typeof render==='function') render();
+    try{
+      var safe=(file.name||'file').replace(/[^a-z0-9_.-]+/gi,'_');
+      var id='g'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+      var path=PP.jenis+'/default/'+id+'-'+safe;
+      var key=BUCKET+'/'+path;
+      var fd=new FormData();
+      fd.append('file',file); fd.append('key',key); fd.append('bucket',BUCKET); fd.append('path',path);
+      var up=await c.functions.invoke('r2-upload-url',{ body:fd });
+      if(up.error){
+        var detail=''; try{ if(up.error.context&&up.error.context.json){ var j=await up.error.context.json(); detail=j&&j.error?(': '+j.error):''; } }catch(e){}
+        PP.uploading=false; if(typeof render==='function') render();
+        toast('Upload gagal'+detail,'error','&#9888;'); return;
+      }
+      var url=ppFixUrl((up.data&&up.data.url)||publicUrl(key));
+      var row={ id:id, jenis:PP.jenis, keterangan:ketFinal, tanggal:todayISO(), file_url:url, file_key:key,
+                file_name:file.name||safe, file_type:file.type||'', file_size:file.size||0,
+                guru_id:guruId(), guru_nama:guruName(), client_key:'default' };
+      if(kelasVal) row.kelas=kelasVal;
+      var ins=await c.from(TABLE).insert(row).select();
+      if(ins&&ins.error&&row.kelas&&/kelas|column|schema|not exist|does not|unknown|schema cache/i.test(String((ins.error&&ins.error.message)||''))){
+        var _kv=row.kelas; delete row.kelas; row.keterangan=((row.keterangan||'')+' [kelas:'+_kv+']').trim(); ins=await c.from(TABLE).insert(row).select();
+      }
+      if(ins&&ins.error){ PP.uploading=false; if(typeof render==='function') render(); toast('Tersimpan ke R2, gagal simpan data: '+(ins.error.message||''),'error','&#9888;'); return; }
+      PP.uploading=false;
+      if(fileEl) fileEl.value=''; PP.pendingFile=null; if(ketEl) ketEl.value='';
+      var kelClr=document.getElementById('ppg-kelas'); if(kelClr) kelClr.value='';
+      var mpClr=document.getElementById('ppg-mapel'); if(mpClr) mpClr.value='';
+      toast('Berkas terupload','success','&#10003;');
+      PP.rows=null; loadPP();
+    }catch(e){
+      PP.uploading=false; if(typeof render==='function') render();
+      toast('Upload gagal: '+(e&&e.message||e),'error','&#9888;');
+    }
+  }
+
+  async function doDelete(id,key){
+    var c=client(); if(!c){ toast('Koneksi belum siap','error','&#9888;'); return; }
+    try{
+      var del=await c.from(TABLE).delete().eq('id',id);
+      if(del&&del.error){ toast('Gagal hapus: '+(del.error.message||''),'error','&#9888;'); return; }
+      if(key){ try{ await c.functions.invoke('r2-delete-url',{ body:{ key:key } }); }catch(e){} }
+      toast('Berkas dihapus','success','&#10003;');
+      PP.rows=null; loadPP();
+    }catch(e){ toast('Gagal hapus','error','&#9888;'); }
+  }
+
+  /* Klik: tab kategori / upload / hapus (delegation dipasang sekali) */
+  document.addEventListener('click', function(e){
+    var el=e.target; if(!el||!el.closest) return;
+    var tab=el.closest('[data-pp-jenis]');
+    if(tab){ var j=tab.getAttribute('data-pp-jenis'); if(j&&j!==PP.jenis){ PP.jenis=j; PP.rows=null; loadPP(); if(typeof render==='function') render(); } return; }
+    var upBtn=el.closest('[data-pp-action="upload"]'); if(upBtn){ e.preventDefault(); doUpload(); return; }
+    var delBtn=el.closest('[data-pp-del]');
+    if(delBtn){ e.preventDefault(); var id=delBtn.getAttribute('data-pp-del'); var key=delBtn.getAttribute('data-pp-key')||''; if(window.confirm('Hapus berkas ini? File juga akan dihapus dari penyimpanan.')) doDelete(id,key); return; }
+  }, false);
+
+  /* Change: tampilkan nama berkas terpilih tanpa re-render */
+  document.addEventListener('change', function(e){
+    var el=e.target; if(!el||el.id!=='ppg-file') return;
+    var f=el.files&&el.files[0];
+    var lbl=document.getElementById('ppg-fname');
+    if(!lbl) return;
+    PP.pendingFile=f||null;
+    if(f){ lbl.textContent=f.name; lbl.classList.add('has'); }
+    else { lbl.textContent='Ketuk untuk memilih dari perangkat'; lbl.classList.remove('has'); }
+  }, false);
+
+  window.renderPerangkatPembelajaranGuruModule = function(detail){
+    var head=styleTag()+headerCard(detail);
+    var wrapOpen='<section class="section"><div class="ppg-wrap">'+tabsHtml()+formHtml();
+    var wrapClose='</div></section>';
+    if(PP.rows===null){ if(!PP.loading) loadPP(); return head+wrapOpen+'<div class="ppg-empty">Memuat berkas\u2026</div>'+wrapClose; }
+    var rows=PP.rows||[];
+    var body;
+    if(!rows.length){
+      body='<div class="ppg-note">Kategori: <b>'+esc(catLabel(PP.jenis))+'</b></div><div class="ppg-empty">Belum ada berkas di kategori ini. Upload berkas pertama Anda di atas.</div>';
+    } else {
+      body='<div class="ppg-note">'+rows.length+' berkas &middot; kategori <b>'+esc(catLabel(PP.jenis))+'</b></div>';
+      body+=rows.map(function(r){
+        var own=String(r.guru_id||'')===guruId();
+        var meta=[]; var _kel=ppGetKelas(r); if(PP.jenis==='media-pembelajaran'&&_kel) meta.push('Kelas '+esc(_kel)); if(r.tanggal) meta.push(esc(String(r.tanggal))); if(r.guru_nama) meta.push(esc(r.guru_nama)); var sz=fmtSize(r.file_size); if(sz) meta.push(sz);
+        var del=own?('<button type="button" class="ppg-del" data-pp-del="'+esc(r.id)+'" data-pp-key="'+esc(r.file_key||'')+'">Hapus</button>'):'';
+        var open=r.file_url?('<a class="ppg-open" href="'+esc(ppViewUrl(ppFixUrl(r.file_url),r))+'" target="_blank" rel="noopener">Buka berkas</a>'):'<span class="ppg-open">Tanpa berkas</span>';
+        return '<div class="ppg-card"><div class="ppg-top"><span class="ppg-ic">\u25AB</span><div class="ppg-info">'
+          +'<div class="ppg-name">'+esc(r.file_name||ppCleanKet(r)||'Berkas')+'</div>'
+          +'<div class="ppg-meta">'+meta.join(' &middot; ')+'</div>'
+          +(ppCleanKet(r)?('<div class="ppg-ket">'+esc(ppCleanKet(r))+'</div>'):'')
+          +'</div></div>'
+          +'<div class="ppg-actions">'+open+del+'</div></div>';
+      }).join('');
+    }
+    return head+wrapOpen+body+wrapClose;
+  };
+
+  if(typeof modulePlaceholders!=='undefined'){
+    modulePlaceholders['perangkat-pembelajaran']={ eyebrow:'Akademik', title:'Perangkat Pembelajaran', subtitle:'Prota, modul ajar & media pembelajaran.', stats:[], focus:[] };
+  }
+  console.log('[Zymata Guru] Modul Perangkat Pembelajaran v1 aktif');
 })();
