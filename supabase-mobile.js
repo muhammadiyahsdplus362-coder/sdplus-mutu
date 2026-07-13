@@ -593,7 +593,7 @@
   };
   // Daftar kolom yang BENAR-BENAR ada di tabel web. Kolom lain dibuang agar insert tidak gagal.
   const WEB_ALLOWED_COLS = {
-    absensi_siswa: ['siswa_id','kelas','tanggal','status','keterangan'],
+    absensi_siswa: ['siswa_id','kelas','tanggal','status','keterangan','petugas'],
     nilai_siswa: ['siswa_id','kelas','mapel','semester','nilai_tugas','nilai_ujian','nilai_akhir','catatan','jenis'],
     jurnal_guru: ['tanggal','guru','guru_nama','kelas','mapel','jam_ke','materi','kegiatan','catatan','metode','tindak_lanjut','status'],
     jurnal_kelas: ['tanggal','kelas','guru_nama','mapel','jam_ke','status','materi'],
@@ -602,7 +602,7 @@
     ibadah: ['siswa_id','nama_siswa','kelas','bulan','tahun','shalat','sunnah','puasa','sedekah','catatan'],
     karakter: ['siswa_id','nama_siswa','kelas','semester','disiplin','sopan','jujur','kerja_keras','tanggung_jawab','catatan'],
     prestasi: ['siswa_id','nama_siswa','kelas','lomba','jenis','tingkat','peringkat','tahun','tanggal'],
-    surat: ['nomor','perihal','jenis','pihak','tanggal','status','isi','siswa_id','kelas','nisn','nama_wali','hp_wali','tgl_mulai','tgl_selesai'],
+    surat: ['nomor','perihal','jenis','pihak','tanggal','status','isi','siswa_id','nama_siswa','siswa_nis','kelas','nisn','nama_wali','hp_wali','tgl_mulai','tgl_selesai'],
     ekskul: ['nama','pembina','jadwal','tempat','peserta','status','tanggal'],
     pengumuman: ['judul','isi','kategori','tanggal','target','penulis','prioritas','tanggal_selesai'],
     membaca_quran: ['siswa_id','nis','nama','nama_siswa','kelas','tanzil','halaman','surat','juz','nilai','tgl','tanggal'],
@@ -771,6 +771,14 @@
         if(!mapped.tanggal) mapped.tanggal = now.slice(0,10);
         if(!mapped.status) mapped.status = 'Tercatat';
       }
+      // 3i) Absensi siswa: catat nama guru/petugas yang input (kolom petugas di tabel web).
+      if(table === 'absensi_siswa'){
+        const g = payload.__guru || {};
+        const sess = readSession() || {};
+        const petugasNama = clean(g.nama || sess.nama_guru || sess.nama || sess.username || '');
+        if(petugasNama && !mapped.petugas) mapped.petugas = petugasNama;
+        if(!mapped.tanggal) mapped.tanggal = now.slice(0,10);
+      }
             // 4) Hanya kirim kolom yang memang ada di tabel web (jika daftarnya diketahui)
       const allowed = WEB_ALLOWED_COLS[table];
       const out = { updated_at: now, client_key: 'default' };
@@ -793,7 +801,7 @@
     if(table === 'membaca_quran') return Object.assign(base, { tanggal: now.slice(0,10), at_tanzil: '', halaman: 0, surat: '', juz: 1, nilai: payload.nilai || 'B', status: payload.status || 'Aktif' });
     if(table === 'ibadah') return Object.assign(base, { tanggal: now.slice(0,10), catatan: text, keterangan: text, status: payload.status || 'Aktif' });
     if(table === 'nilai_siswa') return Object.assign(base, { tanggal: now.slice(0,10), keterangan: text, catatan: text });
-    if(table === 'absensi_siswa') return Object.assign(base, { tanggal: now.slice(0,10), status: payload.status || 'Hadir', keterangan: text });
+    if(table === 'absensi_siswa'){ const _s = readSession() || {}; const _p = clean((payload.__guru && payload.__guru.nama) || _s.nama_guru || _s.nama || _s.username || ''); return Object.assign(base, { tanggal: now.slice(0,10), status: payload.status || 'Hadir', keterangan: text, petugas: _p }); }
     if(table === 'keuangan') return Object.assign(base, { tanggal: now.slice(0,10), keterangan: text, status: payload.status || 'Aktif' });
     if(table === 'tabungan_siswa') return Object.assign(base, { tanggal: now.slice(0,10), keterangan: text, catatan: text });
     return base;
