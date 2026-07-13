@@ -375,7 +375,7 @@ function loadWaliDataCache() {
     // anak lain muncul di perangkat berbagi).
     const owner = waliCacheOwner();
     if (owner && c.owner && owner !== c.owner) return false;
-    if (c.supabaseModules && typeof c.supabaseModules === 'object') appState.supabaseModules = c.supabaseModules;
+    if (c.supabaseModules && typeof c.supabaseModules === 'object') appState.supabaseModules = filterWaliPengumuman(c.supabaseModules);
     if (c.syncMode) appState.syncMode = c.syncMode;
     if (c.childName) appState.childName = c.childName;
     if (c.childClass) appState.childClass = c.childClass;
@@ -399,6 +399,23 @@ function waliItemKey(r) {
     ((r.tanggal || r.created_at || r.waktu || r.updated_at || '') + '|' +
      (r.judul || r.title || r.perihal || r.catatan || r.isi || r.pesan || r.deskripsi || ''))
   );
+}
+
+// Deteksi target sebuah pengumuman (semua / guru / wali) dari kolom target_type,
+// label target, atau payload JSON. Dipakai untuk menyaring notif per role.
+function _waliAnnTargetType(r){
+  if(!r) return 'semua';
+  var pl = {};
+  try { if(r.payload) pl = (typeof r.payload==='string') ? JSON.parse(r.payload) : r.payload; } catch(_){}
+  var type = String(r.target_type || pl.target_type || '').toLowerCase();
+  var label = String(r.target || r.target_label || pl.target || pl.target_label || '').toLowerCase();
+  if(!type) type = /wali|murid|orang tua|orangtua|ortu/.test(label) ? 'wali' : (/guru/.test(label) ? 'guru' : 'semua');
+  return type;
+}
+// Aplikasi ini untuk WALI MURID: buang pengumuman ber-target Guru.
+function filterWaliPengumuman(sm){
+  try { if (sm && Array.isArray(sm.pengumuman)) sm.pengumuman = sm.pengumuman.filter(function(r){ return _waliAnnTargetType(r) !== 'guru'; }); } catch(_){}
+  return sm;
 }
 
 // Tandai semua item kategori tertentu sebagai sudah dibaca, lalu simpan.
@@ -2394,7 +2411,9 @@ function bindActions() {
       try {
         const payload = { text, status: 'Aktif', role: 'Wali', module: appState.activeTab };
         if (fields.length) payload.fields = fieldPayload;
-        // Inject context wali (siswa anak + session) supaya kolom siswa_id/kelas/nis/nama_wali ikut tersimpan
+        // Inject context wali (siswa anak + session) supaya kolom siswa_id/nis/nama_siswa/kelas/nama_wali ikut tersimpan
+        var _suratSis = null, _suratSes = null;
+        var _isSuratKey = (key === 'wali:surat-wali' || key === 'surat-wali' || String(appState.activeTab||'') === 'surat-wali');
         try {
           const ctx = window.__zymataWaliCtx || {};
           if (ctx.siswa) {
@@ -2412,6 +2431,20 @@ function bindActions() {
               no_hp: ctx.session.no_hp || ctx.session.hp || '', username: ctx.session.username || ''
             };
           }
+          _suratSis = payload.__siswa || null;
+          _suratSes = payload.__session || null;
+          // JALUR A: titip sebagai kolom bernama (bridge memetakan fields -> kolom sesuai nama, terbukti dari jenis/perihal).
+          if (_isSuratKey && _suratSis) {
+            payload.fields = payload.fields || {};
+            var _setF = function(k, v){ if (v && !payload.fields[k]) payload.fields[k] = v; };
+            _setF('nama_siswa', _suratSis.nama);
+            _setF('kelas', _suratSis.kelas);
+            _setF('nisn', _suratSis.nis);
+            _setF('siswa_nis', _suratSis.nis);
+            _setF('siswa_id', _suratSis.id);
+            _setF('nama_wali', (_suratSes && _suratSes.nama) || childProfile.wali || '');
+            _setF('hp_wali', (_suratSes && _suratSes.no_hp) || childProfile.phone || '');
+          }
         } catch(_) {}
         const saved = await window.ZymataMobileSupabase.createSpecificOrFallback(key, payload);
         if (!saved || !saved.row) {
@@ -2421,6 +2454,9 @@ function bindActions() {
           waliShowSaveError('Gagal simpan: ' + _emsg);
           return;
         }
+        // Kolom siswa (siswa_id, nama_siswa, siswa_nis, kelas, nisn, nama_wali, hp_wali) kini diisi
+        // langsung oleh bridge saat insert (WEB_ALLOWED_COLS.surat sudah memuat nama_siswa & siswa_nis).
+        // Tidak perlu penulisan ulang dari sini -> tidak ada risiko baris dobel.
         if (input) input.value = '';
         fields.forEach(function(field) { field.value = ''; });
         notifyFeedback('success');
@@ -2746,7 +2782,7 @@ async function hydrateWaliFromSupabase() {
 
     appState.unreadAnnouncements = 0;
     appState.unreadNotes = 0;
-    appState.supabaseModules = await window.ZymataMobileSupabase.loadWaliModuleData(ctx);
+    appState.supabaseModules = filterWaliPengumuman(await window.ZymataMobileSupabase.loadWaliModuleData(ctx));
     try { computeWaliRecap(); } catch(_e) {}
     // Hitung notifikasi real dari Supabase
     try {
