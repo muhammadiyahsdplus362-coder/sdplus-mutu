@@ -934,7 +934,8 @@ function hasTeacherCheckInToday() {
 
 function resetTeacherAttendanceIfNewDay() {
   var att = appState.teacherAttendance || (appState.teacherAttendance = {});
-  if (att.lockedDate && att.lockedDate !== agTodayISO()) {
+  var stamp = att.lockedDate || att.activeDate || '';
+  if (stamp && stamp !== agTodayISO()) {
     appState.teacherAttendance = {
       status: 'hadir',
       checkIn: '',
@@ -945,7 +946,8 @@ function resetTeacherAttendanceIfNewDay() {
       lateMinutes: 0,
       note: 'Silakan lakukan presensi hari ini.',
       lockedToday: false,
-      lockedDate: ''
+      lockedDate: '',
+      activeDate: ''
     };
   }
 }
@@ -954,6 +956,10 @@ function renderTeacherAttendance() {
   resetTeacherAttendanceIfNewDay();
   const todayRow = getTodayTeacherAttendanceRow();
   if (todayRow) syncTeacherAttendanceFromTodayRow(todayRow);
+  // Skeleton saat status presensi masih dimuat pertama kali — hindari flash "Belum presensi" palsu
+  if (appState._agAttnLoading && !appState._agAttnLoaded && !hasTeacherCheckInToday() && !isTeacherAttendanceLockedToday()) {
+    return renderTeacherAttendanceSkeleton();
+  }
   const att = appState.teacherAttendance;
   const lockedToday = isTeacherAttendanceLockedToday();
   const isCheckedIn  = Boolean(att.checkIn) || lockedToday;
@@ -3757,6 +3763,7 @@ function navigateTo(nextTab, opts = {}) {
   appState.showAnnouncements = false;
   appState.activeTab = nextTab;
   render();
+  if (nextTab === 'teacherAttendance' && !appState._agAttnLoaded) { try { hydrateTeacherAttendanceFast(); } catch(_){} }
   if (changed) animateContent();
   if (!opts.skipHistory && window.history && window.history.pushState) {
     window.history.pushState({ tab: nextTab }, '', '#'+nextTab.replace(':','-'));
@@ -4980,6 +4987,7 @@ async function updateTeacherAttendance(type) {
     appState.teacherAttendance.checkIn     = hhmm;
     appState.teacherAttendance.isLate      = isLate;
     appState.teacherAttendance.lateMinutes = lateMin;
+    appState.teacherAttendance.activeDate  = agTodayISO();
     if (!nonHadir) {
       appState.teacherAttendance.status = isLate ? 'terlambat' : 'hadir';
     }
@@ -5380,11 +5388,98 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
   }
 }
 
+// ===== [FIX PRESENSI] Gaya untuk indikator sync + skeleton =====
+function ensureAgFixStyles() {
+  try {
+    if (document.getElementById('ag-fix-style')) return;
+    var st = document.createElement('style');
+    st.id = 'ag-fix-style';
+    st.textContent = '#ag-sync-chip{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%) translateY(-16px);z-index:99999;display:flex;align-items:center;gap:7px;background:rgba(17,24,39,.93);color:#fff;font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.28);opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease}#ag-sync-chip.show{opacity:1;transform:translateX(-50%) translateY(0)}#ag-sync-chip .ag-sync-dot{width:11px;height:11px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:agSyncSpin .7s linear infinite}@keyframes agSyncSpin{to{transform:rotate(360deg)}}.ag-skel{background:linear-gradient(90deg,rgba(148,163,184,.16) 25%,rgba(148,163,184,.34) 37%,rgba(148,163,184,.16) 63%);background-size:400% 100%;animation:agSkel 1.3s ease infinite;border-radius:10px;display:block}.ag-skel-wrap{display:flex;flex-direction:column;gap:12px;margin:16px 0 8px}.ag-skel-line{height:16px;width:65%}.ag-skel-time{height:58px;width:100%}.ag-skel-btn{height:46px;width:100%}@keyframes agSkel{0%{background-position:100% 50%}100%{background-position:0 50%}}';
+    document.head.appendChild(st);
+  } catch (_) {}
+}
+function showSyncIndicator() {
+  try {
+    ensureAgFixStyles();
+    var el = document.getElementById('ag-sync-chip');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ag-sync-chip';
+      el.innerHTML = '<span class="ag-sync-dot"></span> Menyegarkan data\u2026';
+      document.body.appendChild(el);
+    }
+    requestAnimationFrame(function(){ el.classList.add('show'); });
+  } catch (_) {}
+}
+function hideSyncIndicator() {
+  try { var el = document.getElementById('ag-sync-chip'); if (el) el.classList.remove('show'); } catch (_) {}
+}
+// Gabungkan baris presensi guru tanpa duplikat (kunci: tanggal|sesi|nip)
+function mergePresensiGuruRows(existing, incoming) {
+  var out = Array.isArray(existing) ? existing.slice() : [];
+  if (!Array.isArray(incoming)) return out;
+  function keyOf(r){ return [String((r&&r.tanggal)||''), String((r&&r.sesi)||''), String((r&&(r.nip||r.nip_guru||r.NIP))||'')].join('|'); }
+  incoming.forEach(function(row){
+    if (!row) return;
+    var k = keyOf(row);
+    var idx = out.findIndex(function(r){ return keyOf(r) === k; });
+    if (idx >= 0) out[idx] = row; else out.push(row);
+  });
+  return out;
+}
+// Skeleton kartu presensi saat status masih dimuat pertama kali
+function renderTeacherAttendanceSkeleton() {
+  ensureAgFixStyles();
+  return `
+    <section class="section">
+      <article class="teacher-attendance-card ag-main-card">
+        <div class="ag-card-top">
+          <span class="attendance-status gray">Memuat\u2026</span>
+          <span class="ag-date-chip">${agTodayLabel()}</span>
+        </div>
+        <h3 class="attendance-title">Memuat status presensi\u2026</h3>
+        <div class="ag-skel-wrap">
+          <span class="ag-skel ag-skel-line"></span>
+          <span class="ag-skel ag-skel-time"></span>
+          <span class="ag-skel ag-skel-btn"></span>
+        </div>
+        <p class="ag-cutoff-note">Mengambil data presensi hari ini dari server\u2026</p>
+      </article>
+    </section>`;
+}
+// ===== FAST: tarik HANYA status presensi guru (query kecil) agar layar Absen tampil <1 detik =====
+// Tidak menunggu hydrate berat (siswa, jadwal, chat, modul). Dipanggil saat boot, buka tab Absen, & resume.
+async function hydrateTeacherAttendanceFast() {
+  var _S = window.ZymataMobileSupabase;
+  if (!_S) return;
+  var session = _S.readSession();
+  if (!session) return;
+  var nip = String(appState.teacherNip || session.guru_nip || session.nip || session.nip_guru || '').trim();
+  if (!nip) return; // tanpa NIP tidak bisa ambil baris presensi
+  appState._agAttnLoading = true;
+  if (appState.activeTab === 'teacherAttendance' && !window.__qrScannerOpen) { try { render(); } catch (_) {} }
+  try {
+    var res = await _S.select('absensi_guru', { eq: { nip: nip }, order: 'tanggal', ascending: false, limit: 8 });
+    if (res && !res.error && Array.isArray(res.data)) {
+      var mod = appState.supabaseModules || (appState.supabaseModules = {});
+      mod.presensiGuru = mergePresensiGuruRows(mod.presensiGuru, res.data);
+      syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
+      appState._agAttnLoaded = true;
+      try { saveState(); } catch (_) {}
+    }
+  } catch (_) {
+  } finally {
+    appState._agAttnLoading = false;
+    if (!window.__qrScannerOpen) { try { render(); } catch (_) {} }
+  }
+}
+
 async function hydrateGuruFromSupabase() {
   if (!window.ZymataMobileSupabase) return;
   const session = window.ZymataMobileSupabase.readSession();
   if (!session) return;
   try {
+    showSyncIndicator();
     const ctx = await window.ZymataMobileSupabase.loadGuruContext(session);
     if (!ctx) return;
     const guru = ctx.guru || {};
@@ -5457,6 +5552,7 @@ async function hydrateGuruFromSupabase() {
       } catch (_eAll) {}
     }
     if (modulesData) appState.supabaseModules = dedupeModules(modulesData);
+    appState._agAttnLoaded = true;
     syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
     if (kelasUtama && appState.supabaseModules && appState.supabaseModules.absensi) {
       appState.attendanceDone = Object.keys(getTodayAbsensiMap(kelasUtama)).length;
@@ -5466,6 +5562,8 @@ async function hydrateGuruFromSupabase() {
     if (!window.__qrScannerOpen) render(); // skip render saat kamera terbuka
   } catch (error) {
     console.warn('[MobileGuru] gagal load Supabase:', error && error.message ? error.message : error);
+  } finally {
+    hideSyncIndicator();
   }
 }
 
@@ -5477,7 +5575,9 @@ appState.activeTab = 'home';
 appState.showAnnouncements = false;
 bindNativeBack();
 saveState();
+ensureAgFixStyles();
 render();
+hydrateTeacherAttendanceFast();
 hydrateGuruFromSupabase();
 animateContent();
 
@@ -5492,6 +5592,7 @@ animateContent();
     if(_busy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
     _busy = true; _last = Date.now();
+    try { hydrateTeacherAttendanceFast(); } catch(_){}
     Promise.resolve(hydrateGuruFromSupabase())
       .catch(function(){})
       .then(function(){ _busy = false; });
