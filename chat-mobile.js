@@ -119,7 +119,47 @@
       '.zchat-attach-menu button{border:none;background:transparent;text-align:left;padding:9px 14px;border-radius:9px;font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;cursor:pointer;}',
       '.zchat-attach-menu button:active{background:#f1f5f9;}',
       '.zchat-preview{position:absolute;bottom:60px;left:6px;right:6px;background:#eef2ff;color:#4f46e5;border-radius:12px;padding:8px 12px;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;z-index:41;}',
-      '.zchat-preview button{border:none;background:transparent;color:#4f46e5;font-size:15px;font-weight:800;cursor:pointer;}'
+      '.zchat-preview button{border:none;background:transparent;color:#4f46e5;font-size:15px;font-weight:800;cursor:pointer;}',
+      /* ====== Tema WhatsApp-grup profesional (override) ====== */
+      '.app-content.zchat-active{background:#0b141a !important;}',
+      '.zchat-wrap{gap:6px;}',
+      '.zchat-list{background:#0b141a;background-image:radial-gradient(circle at 18% 12%,rgba(0,168,132,.07),transparent 42%),radial-gradient(circle at 82% 88%,rgba(83,189,235,.06),transparent 42%);border-radius:14px;padding:10px 8px;gap:1px;}',
+      '.zchat-room{background:rgba(255,255,255,.06);color:#c9d3d9;border:1px solid rgba(255,255,255,.10);}',
+      '.zchat-room.is-active{background:linear-gradient(135deg,#00a884,#009e77);color:#fff;border-color:transparent;}',
+      '.zchat-loading,.zchat-empty{color:#8aa0ab;}',
+      '.zchat-daysep{margin:12px 0 8px;}',
+      '.zchat-daysep span{background:rgba(30,42,49,.92);color:#cdd6db;font-weight:600;box-shadow:0 1px 1px rgba(0,0,0,.2);}',
+      '.zchat-row{align-items:flex-end;margin:0;}',
+      '.zchat-row.head{margin-top:8px;}',
+      '.zchat-ava{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;margin-right:6px;align-self:flex-end;margin-bottom:2px;box-shadow:0 1px 2px rgba(0,0,0,.25);}',
+      '.zchat-ava-blank{background:transparent !important;box-shadow:none !important;}',
+      '.zchat-bubble{position:relative;max-width:82%;padding:6px 9px 5px;border-radius:9px;box-shadow:0 1px 1px rgba(0,0,0,.22);}',
+      '.zchat-row.them .zchat-bubble{background:#202c33;border:none;color:#e9edef;border-bottom-left-radius:9px;}',
+      '.zchat-row.me .zchat-bubble{background:#005c4b;color:#e9edef;border-bottom-right-radius:9px;}',
+      '.zchat-row.them.head .zchat-bubble{border-top-left-radius:0;}',
+      '.zchat-row.me.head .zchat-bubble{border-top-right-radius:0;}',
+      '.zchat-row.them.head .zchat-bubble::before{content:"";position:absolute;top:0;left:-7px;width:0;height:0;border-top:8px solid #202c33;border-left:7px solid transparent;}',
+      '.zchat-row.me.head .zchat-bubble::before{content:"";position:absolute;top:0;right:-7px;width:0;height:0;border-top:8px solid #005c4b;border-right:7px solid transparent;}',
+      '.zchat-name{font-size:12.5px;font-weight:700;margin-bottom:2px;}',
+      '.zchat-txt{color:#e9edef;}',
+      '.zchat-time{font-size:10.5px;color:rgba(233,237,239,.5);margin-top:2px;display:flex;gap:3px;justify-content:flex-end;align-items:center;}',
+      '.zchat-tick{color:#53bdeb;font-size:11px;letter-spacing:-2px;font-weight:900;}',
+      '.zchat-img{max-width:220px;max-height:260px;border-radius:8px;}',
+      '.zchat-vid{max-width:240px;border-radius:8px;}',
+      '.zchat-file{background:rgba(255,255,255,.14);color:#e9edef;}',
+      '.zchat-row.them .zchat-file{background:rgba(255,255,255,.08);color:#8fd0ff;}',
+      '.zchat-bar{background:#1e2a30;border:1px solid rgba(255,255,255,.07);box-shadow:0 4px 16px rgba(0,0,0,.28);}',
+      '.zchat-input{color:#e9edef;}',
+      '.zchat-input::placeholder{color:#8aa0ab;}',
+      '.zchat-attach{background:transparent;color:#8aa0ab;}',
+      '.zchat-send{background:#00a884;color:#fff;}',
+      '.zchat-ic{display:inline-flex;align-items:center;margin-right:9px;}',
+      '.zchat-ic svg{width:19px;height:19px;}',
+      '.zchat-attach-menu{background:#233138;border:1px solid rgba(255,255,255,.08);box-shadow:0 12px 32px rgba(0,0,0,.4);}',
+      '.zchat-attach-menu button{color:#e9edef;display:flex;align-items:center;}',
+      '.zchat-attach-menu button:active{background:rgba(255,255,255,.06);}',
+      '.zchat-preview{background:#233138;color:#e9edef;}',
+      '.zchat-preview button{color:#e9edef;}'
     ].join('\n');
     document.head.appendChild(st);
   }
@@ -296,7 +336,20 @@
            (!m.pengirim_id && m.pengirim_nama && m.pengirim_nama === u.nama);
   }
 
-  function bubble(m, mine) {
+  function initials(name) {
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    var a = parts[0].charAt(0);
+    var b = parts.length > 1 ? parts[parts.length - 1].charAt(0) : '';
+    return (a + b).toUpperCase();
+  }
+  var NAME_COLORS = ['#53bdeb', '#e542a3', '#ffab00', '#06cf9c', '#ff8a65', '#a78bfa', '#4ec9b0', '#f97316', '#38bdf8', '#f472b6', '#84cc16', '#facc15'];
+  function nameColor(name) {
+    var str = String(name || ''), hsh = 0;
+    for (var i = 0; i < str.length; i++) { hsh = (hsh * 31 + str.charCodeAt(i)) & 0x7fffffff; }
+    return NAME_COLORS[hsh % NAME_COLORS.length];
+  }
+  function bubble(m, mine, head) {
     var att = '';
     if (m.lampiran_url) {
       if (m.lampiran_tipe === 'image' || (m.lampiran_tipe && m.lampiran_tipe.indexOf('image/') === 0)) att = '<a href="' + esc(m.lampiran_url) + '" target="_blank" rel="noopener"><img class="zchat-img" src="' + esc(m.lampiran_url) + '" alt="foto"/></a>';
@@ -304,8 +357,19 @@
       else att = '<a class="zchat-file" href="' + esc(m.lampiran_url) + '" target="_blank" rel="noopener">\uD83D\uDCCE Lihat lampiran</a>';
     }
     var txt = m.pesan ? '<div class="zchat-txt">' + esc(m.pesan) + '</div>' : '';
-    var name = mine ? '' : '<div class="zchat-name">' + esc(m.pengirim_nama || 'Tanpa nama') + roleBadge(m.pengirim_peran) + '</div>';
-    return '<div class="zchat-row ' + (mine ? 'me' : 'them') + '"><div class="zchat-bubble">' + name + att + txt + '<div class="zchat-time">' + fmtTime(m.created_at) + '</div></div></div>';
+    var name = '', avatar = '';
+    if (!mine) {
+      if (head) {
+        var col = nameColor(m.pengirim_nama);
+        avatar = '<div class="zchat-ava" style="background:' + col + '">' + esc(initials(m.pengirim_nama)) + '</div>';
+        name = '<div class="zchat-name" style="color:' + col + '">' + esc(m.pengirim_nama || 'Tanpa nama') + roleBadge(m.pengirim_peran) + '</div>';
+      } else {
+        avatar = '<div class="zchat-ava zchat-ava-blank"></div>';
+      }
+    }
+    var ticks = mine ? '<span class="zchat-tick">\u2713\u2713</span>' : '';
+    var bub = '<div class="zchat-bubble">' + name + att + txt + '<div class="zchat-time">' + fmtTime(m.created_at) + ticks + '</div></div>';
+    return '<div class="zchat-row ' + (mine ? 'me' : 'them') + (head ? ' head' : ' cont') + '">' + avatar + bub + '</div>';
   }
 
   function paint() {
@@ -315,10 +379,17 @@
     if (!s.rows.length) { list.innerHTML = '<div class="zchat-empty">Belum ada pesan. Mulai percakapan \uD83D\uDC4B</div>'; return; }
     var html = '';
     var lastDay = '';
+    var prevSender = null;
+    var prevTime = 0;
     s.rows.forEach(function (m) {
       var day = fmtDay(m.created_at);
-      if (day && day !== lastDay) { html += '<div class="zchat-daysep"><span>' + esc(day) + '</span></div>'; lastDay = day; }
-      html += bubble(m, isMine(m));
+      if (day && day !== lastDay) { html += '<div class="zchat-daysep"><span>' + esc(day) + '</span></div>'; lastDay = day; prevSender = null; }
+      var mine = isMine(m);
+      var sender = mine ? '__me__' : (m.pengirim_id ? ('id:' + m.pengirim_id) : ('nm:' + (m.pengirim_nama || '')));
+      var t = 0; try { t = new Date(m.created_at).getTime(); } catch (e) {}
+      var head = (sender !== prevSender) || (t - prevTime > 300000);
+      html += bubble(m, mine, head);
+      prevSender = sender; prevTime = t;
     });
     list.innerHTML = html;
     list.scrollTop = list.scrollHeight;
