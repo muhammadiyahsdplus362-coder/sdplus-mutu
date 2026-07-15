@@ -1314,6 +1314,18 @@ function renderTabunganGuruModule(moduleId, detail){
     var raw = localStorage.getItem('sdplus_tabungan_v1');
     if(raw){ var arr = JSON.parse(raw); if(Array.isArray(arr)) tabData = arr; }
   } catch(e){}
+  // Jaring pengaman: buang baris kembar dari cache lokal HP (sisa bug dobel) lalu simpan balik cache bersihnya.
+  try {
+    var _seenTab={}, _cleanTab=[], _rmTab=0;
+    tabData.forEach(function(t){
+      var _sid=String(t.siswa_id||t.nis||t.namaSiswa||t.nama||'').toLowerCase().trim();
+      var _tgl=String(t.tanggal||t.tgl||'').slice(0,10);
+      var _sg=[_sid,_tgl,String(t.jenis||'').toLowerCase().trim(),Number(t.nominal)||0,Number(t.debit)||0,Number(t.kredit)||0,String(t.keterangan||'').toLowerCase().trim(),String(t.metode||'').toLowerCase().trim()].join('|');
+      if(_seenTab[_sg]){ _rmTab++; return; }
+      _seenTab[_sg]=true; _cleanTab.push(t);
+    });
+    if(_rmTab>0){ tabData=_cleanTab; try{ localStorage.setItem('sdplus_tabungan_v1', JSON.stringify(_cleanTab)); }catch(_e){} }
+  } catch(e){}
   var setor=0, tarik=0, siswaUnik={};
   tabData.forEach(function(t){
     var n = Number(t.nominal||0);
