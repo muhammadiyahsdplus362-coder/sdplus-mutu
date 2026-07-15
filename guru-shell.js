@@ -956,10 +956,6 @@ function renderTeacherAttendance() {
   resetTeacherAttendanceIfNewDay();
   const todayRow = getTodayTeacherAttendanceRow();
   if (todayRow) syncTeacherAttendanceFromTodayRow(todayRow);
-  // Skeleton saat status presensi masih dimuat pertama kali — hindari flash "Belum presensi" palsu
-  if (appState._agAttnLoading && !appState._agAttnLoaded && !hasTeacherCheckInToday() && !isTeacherAttendanceLockedToday()) {
-    return renderTeacherAttendanceSkeleton();
-  }
   const att = appState.teacherAttendance;
   const lockedToday = isTeacherAttendanceLockedToday();
   const isCheckedIn  = Boolean(att.checkIn) || lockedToday;
@@ -1475,6 +1471,7 @@ window.zTab = {
   },
   saveAll: async function(){
     var S=tabState();
+    if(S._saving){ showToast('Sedang menyimpan\u2026 tunggu sebentar.','info','&#8987;'); return; }
     var api=window.ZymataMobileSupabase;
     if(!api || !api.select || !api.upsert){ showError('Koneksi Supabase belum siap.'); return; }
     if(!S.kelas){ showToast('Pilih kelas dulu.','error','&#9888;'); return; }
@@ -1488,18 +1485,26 @@ window.zTab = {
     var entries=[];
     noms.forEach(function(el){ var nis=el.getAttribute('data-tab-nis'); var nama=el.getAttribute('data-tab-nama')||''; var nominal=Number(String(el.value||'').replace(/\D/g,''))||0; if(nominal>0){ var ketEl=document.querySelector('.tabin-ket[data-tab-ket="'+nis+'"]'); var ket=ketEl?String(ketEl.value||'').trim():''; entries.push({ nis:nis, nama:nama, nominal:nominal, ket:ket }); } });
     if(!entries.length){ showToast('Isi nominal minimal 1 siswa.','error','&#9888;'); return; }
+    S._saving=true;
+    try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=true; b.setAttribute('aria-disabled','true'); }); }catch(_e){}
     showToast('Menyimpan '+entries.length+' data\u2026','info','&#128190;');
+    try{
     var sisMap={};
     try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, limit:5000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||row.siswa_id||''), nama:row.nama||row.nama_siswa||'' }; }); } }catch(e){}
-    var saldoByNis={}, saldoBySid={};
-    try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, limit:5000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; }); } }catch(e){}
+    var saldoByNis={}, saldoBySid={}, sigCount={};
+    var _tabSig=function(sid,nis,nama,tgl,jn,nom,db,kr,ket,mtd){ return ['default',String(sid||nis||nama||'').toLowerCase().trim(),String(tgl||'').slice(0,10),String(jn||'').toLowerCase().trim(),Number(nom)||0,Number(db)||0,Number(kr)||0,String(ket||'').toLowerCase().trim(),String(mtd||'').toLowerCase().trim()].join('|'); };
+    try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, limit:5000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; var _sg=_tabSig(r.siswa_id,r.nis,r.nama_siswa,r.tanggal,r.jenis,r.nominal,r.debit,r.kredit,r.keterangan,r.metode); sigCount[_sg]=(sigCount[_sg]||0)+1; }); } }catch(e){}
     var saved=0, failed=0, skipped=[];
     for(var i=0;i<entries.length;i++){
       var e=entries[i]; var info=sisMap[e.nis]||{}; var siswaId=info.id||''; var namaSiswa=e.nama||info.nama||'';
       var saldoBerjalan=(siswaId && typeof saldoBySid[siswaId]==='number')?saldoBySid[siswaId]:(saldoByNis[e.nis]||0);
       if(!isSetor && e.nominal>saldoBerjalan){ skipped.push(namaSiswa||e.nis); continue; }
       var debit=isSetor?e.nominal:0, kredit=isSetor?0:e.nominal; var saldoBaru=saldoBerjalan+debit-kredit;
-      var rowUid='tab-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7)+'-'+i;
+      var _sigStr=_tabSig(siswaId,e.nis,namaSiswa,tanggal,(isSetor?'Setoran':'Penarikan'),e.nominal,debit,kredit,e.ket,metode);
+      var _occ=sigCount[_sigStr]||0; sigCount[_sigStr]=_occ+1;
+      var _uidKey=_sigStr+'#'+_occ;
+      var _h=0; for(var _ci=0;_ci<_uidKey.length;_ci++){ _h=((_h<<5)-_h+_uidKey.charCodeAt(_ci))|0; }
+      var rowUid='tab-'+(_h>>>0).toString(36);
       var payload={ client_key:'default', row_uid:rowUid, siswa_id:siswaId||null, nis:e.nis||null, nama_siswa:namaSiswa||null, kelas:S.kelas||null, jenis:isSetor?'Setoran':'Penarikan', nominal:e.nominal, debit:debit, kredit:kredit, saldo:saldoBaru, keterangan:e.ket||null, tanggal:tanggal, petugas:appState.teacherName||'Guru', metode:metode||'Tunai' };
       try{ var res=await api.upsert('tabungan_siswa', payload, 'row_uid'); if(res&&res.error){ failed++; } else { saved++; if(siswaId) saldoBySid[siswaId]=saldoBaru; if(e.nis) saldoByNis[e.nis]=saldoBaru; } }catch(err){ failed++; }
     }
@@ -1508,6 +1513,7 @@ window.zTab = {
     showToast(msg,(failed||skipped.length)?'error':'success',(failed||skipped.length)?'&#9888;':'&#10003;');
     S.saldoMap=null; S.rows=null; S.loadedKelas=''; render();
     try{ await hydrateGuruFromSupabase(); }catch(e){}
+    }finally{ S._saving=false; try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=false; b.removeAttribute('aria-disabled'); }); }catch(_e){} }
   }
 };
 
@@ -3763,7 +3769,6 @@ function navigateTo(nextTab, opts = {}) {
   appState.showAnnouncements = false;
   appState.activeTab = nextTab;
   render();
-  if (nextTab === 'teacherAttendance' && !appState._agAttnLoaded) { try { hydrateTeacherAttendanceFast(); } catch(_){} }
   if (changed) animateContent();
   if (!opts.skipHistory && window.history && window.history.pushState) {
     window.history.pushState({ tab: nextTab }, '', '#'+nextTab.replace(':','-'));
@@ -5388,98 +5393,11 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
   }
 }
 
-// ===== [FIX PRESENSI] Gaya untuk indikator sync + skeleton =====
-function ensureAgFixStyles() {
-  try {
-    if (document.getElementById('ag-fix-style')) return;
-    var st = document.createElement('style');
-    st.id = 'ag-fix-style';
-    st.textContent = '#ag-sync-chip{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%) translateY(-16px);z-index:99999;display:flex;align-items:center;gap:7px;background:rgba(17,24,39,.93);color:#fff;font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.28);opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease}#ag-sync-chip.show{opacity:1;transform:translateX(-50%) translateY(0)}#ag-sync-chip .ag-sync-dot{width:11px;height:11px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:agSyncSpin .7s linear infinite}@keyframes agSyncSpin{to{transform:rotate(360deg)}}.ag-skel{background:linear-gradient(90deg,rgba(148,163,184,.16) 25%,rgba(148,163,184,.34) 37%,rgba(148,163,184,.16) 63%);background-size:400% 100%;animation:agSkel 1.3s ease infinite;border-radius:10px;display:block}.ag-skel-wrap{display:flex;flex-direction:column;gap:12px;margin:16px 0 8px}.ag-skel-line{height:16px;width:65%}.ag-skel-time{height:58px;width:100%}.ag-skel-btn{height:46px;width:100%}@keyframes agSkel{0%{background-position:100% 50%}100%{background-position:0 50%}}';
-    document.head.appendChild(st);
-  } catch (_) {}
-}
-function showSyncIndicator() {
-  try {
-    ensureAgFixStyles();
-    var el = document.getElementById('ag-sync-chip');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'ag-sync-chip';
-      el.innerHTML = '<span class="ag-sync-dot"></span> Menyegarkan data\u2026';
-      document.body.appendChild(el);
-    }
-    requestAnimationFrame(function(){ el.classList.add('show'); });
-  } catch (_) {}
-}
-function hideSyncIndicator() {
-  try { var el = document.getElementById('ag-sync-chip'); if (el) el.classList.remove('show'); } catch (_) {}
-}
-// Gabungkan baris presensi guru tanpa duplikat (kunci: tanggal|sesi|nip)
-function mergePresensiGuruRows(existing, incoming) {
-  var out = Array.isArray(existing) ? existing.slice() : [];
-  if (!Array.isArray(incoming)) return out;
-  function keyOf(r){ return [String((r&&r.tanggal)||''), String((r&&r.sesi)||''), String((r&&(r.nip||r.nip_guru||r.NIP))||'')].join('|'); }
-  incoming.forEach(function(row){
-    if (!row) return;
-    var k = keyOf(row);
-    var idx = out.findIndex(function(r){ return keyOf(r) === k; });
-    if (idx >= 0) out[idx] = row; else out.push(row);
-  });
-  return out;
-}
-// Skeleton kartu presensi saat status masih dimuat pertama kali
-function renderTeacherAttendanceSkeleton() {
-  ensureAgFixStyles();
-  return `
-    <section class="section">
-      <article class="teacher-attendance-card ag-main-card">
-        <div class="ag-card-top">
-          <span class="attendance-status gray">Memuat\u2026</span>
-          <span class="ag-date-chip">${agTodayLabel()}</span>
-        </div>
-        <h3 class="attendance-title">Memuat status presensi\u2026</h3>
-        <div class="ag-skel-wrap">
-          <span class="ag-skel ag-skel-line"></span>
-          <span class="ag-skel ag-skel-time"></span>
-          <span class="ag-skel ag-skel-btn"></span>
-        </div>
-        <p class="ag-cutoff-note">Mengambil data presensi hari ini dari server\u2026</p>
-      </article>
-    </section>`;
-}
-// ===== FAST: tarik HANYA status presensi guru (query kecil) agar layar Absen tampil <1 detik =====
-// Tidak menunggu hydrate berat (siswa, jadwal, chat, modul). Dipanggil saat boot, buka tab Absen, & resume.
-async function hydrateTeacherAttendanceFast() {
-  var _S = window.ZymataMobileSupabase;
-  if (!_S) return;
-  var session = _S.readSession();
-  if (!session) return;
-  var nip = String(appState.teacherNip || session.guru_nip || session.nip || session.nip_guru || '').trim();
-  if (!nip) return; // tanpa NIP tidak bisa ambil baris presensi
-  appState._agAttnLoading = true;
-  if (appState.activeTab === 'teacherAttendance' && !window.__qrScannerOpen) { try { render(); } catch (_) {} }
-  try {
-    var res = await _S.select('absensi_guru', { eq: { nip: nip }, order: 'tanggal', ascending: false, limit: 8 });
-    if (res && !res.error && Array.isArray(res.data)) {
-      var mod = appState.supabaseModules || (appState.supabaseModules = {});
-      mod.presensiGuru = mergePresensiGuruRows(mod.presensiGuru, res.data);
-      syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
-      appState._agAttnLoaded = true;
-      try { saveState(); } catch (_) {}
-    }
-  } catch (_) {
-  } finally {
-    appState._agAttnLoading = false;
-    if (!window.__qrScannerOpen) { try { render(); } catch (_) {} }
-  }
-}
-
 async function hydrateGuruFromSupabase() {
   if (!window.ZymataMobileSupabase) return;
   const session = window.ZymataMobileSupabase.readSession();
   if (!session) return;
   try {
-    showSyncIndicator();
     const ctx = await window.ZymataMobileSupabase.loadGuruContext(session);
     if (!ctx) return;
     const guru = ctx.guru || {};
@@ -5552,7 +5470,6 @@ async function hydrateGuruFromSupabase() {
       } catch (_eAll) {}
     }
     if (modulesData) appState.supabaseModules = dedupeModules(modulesData);
-    appState._agAttnLoaded = true;
     syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
     if (kelasUtama && appState.supabaseModules && appState.supabaseModules.absensi) {
       appState.attendanceDone = Object.keys(getTodayAbsensiMap(kelasUtama)).length;
@@ -5562,8 +5479,6 @@ async function hydrateGuruFromSupabase() {
     if (!window.__qrScannerOpen) render(); // skip render saat kamera terbuka
   } catch (error) {
     console.warn('[MobileGuru] gagal load Supabase:', error && error.message ? error.message : error);
-  } finally {
-    hideSyncIndicator();
   }
 }
 
@@ -5575,9 +5490,7 @@ appState.activeTab = 'home';
 appState.showAnnouncements = false;
 bindNativeBack();
 saveState();
-ensureAgFixStyles();
 render();
-hydrateTeacherAttendanceFast();
 hydrateGuruFromSupabase();
 animateContent();
 
@@ -5592,7 +5505,6 @@ animateContent();
     if(_busy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
     _busy = true; _last = Date.now();
-    try { hydrateTeacherAttendanceFast(); } catch(_){}
     Promise.resolve(hydrateGuruFromSupabase())
       .catch(function(){})
       .then(function(){ _busy = false; });
