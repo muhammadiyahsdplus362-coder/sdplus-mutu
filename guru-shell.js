@@ -2516,7 +2516,11 @@ const CATATAN_KATEGORI = ['Akademik','Sikap','Kedisiplinan','Hafalan','Ibadah','
 const KELAS_LIST = ['1A','1B','2A','2B','3A','3B','4A','4B','5A','5B','6A','6B'];
 const SISWA_PER_KELAS = {};
 function getSiswaByKelas(kelas) {
-  return SISWA_PER_KELAS[kelas] || [];
+  var _list = SISWA_PER_KELAS[kelas] || [];
+  // [ZYMATA] Urutkan nama siswa A-Z (locale ID). Pakai salinan agar data asli tidak berubah.
+  return _list.slice().sort(function(a, b){
+    return String((a && a.name) || '').localeCompare(String((b && b.name) || ''), 'id', { sensitivity: 'base', numeric: true });
+  });
 }
 function rebuildSiswaFromRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return;
@@ -5614,36 +5618,7 @@ animateContent();
   }
   function findSiswa(nis){ nis=String(nis); var a=allSiswa(); for(var i=0;i<a.length;i++){ if(a[i].nis===nis) return a[i]; } return null; }
 
-  var ST = { halaqah:null, halaqahLoading:false, allKelas:null, allKelasLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
-
-  // Kelola Halaqah: daftar siswa SE-SEKOLAH (store terpisah; TIDAK mengubah SISWA_PER_KELAS yang dipakai modul lain)
-  async function loadAllKelasHalaqah(){
-    if(ST.allKelasLoading) return;
-    ST.allKelasLoading=true;
-    try{
-      var api=SB(); var map={};
-      if(api){
-        var res=await api.select('siswa',{ limit:5000 });
-        var rows=(res&&res.data)?res.data:[];
-        rows.forEach(function(row){
-          var kelas=String(row.kelas||row.kelas_id||row.rombel||row.kelas_nama||'Tanpa Kelas').trim()||'Tanpa Kelas';
-          var nama=String(row.nama||row.nama_siswa||row.name||'Siswa').trim();
-          var nis=String(row.nis||row.nisn||'').trim()||String(row.id||'').trim();
-          var sid=String(row.id||row.siswa_id||'').trim();
-          if(!map[kelas]) map[kelas]=[];
-          map[kelas].push({ nis:nis, name:nama, id:sid, kelas:kelas });
-        });
-      }
-      ST.allKelas=map;
-    }catch(e){ ST.allKelas={}; }
-    ST.allKelasLoading=false;
-    if(appState.activeTab==='module:kelola-halaqah') render();
-  }
-  function findSiswaAll(nis){
-    nis=String(nis); var mp=ST.allKelas||{}; var ks=Object.keys(mp);
-    for(var i=0;i<ks.length;i++){ var arr=mp[ks[i]]||[]; for(var j=0;j<arr.length;j++){ if(String(arr[j].nis)===nis) return arr[j]; } }
-    return findSiswa(nis);
-  }
+  var ST = { halaqah:null, halaqahLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
 
   function halMembers(){ return Array.isArray(ST.halaqah)?ST.halaqah:[]; }
   function inHalaqah(nis){ nis=String(nis); return halMembers().some(function(r){ return String(r.siswa_id||r.nis||'')===nis; }); }
@@ -5713,7 +5688,7 @@ animateContent();
     },
     add: async function(nis){
       var api=SB(); if(!api){ showToast('Supabase belum siap','error','&#9888;'); return; }
-      var s=findSiswaAll(nis); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
+      var s=findSiswa(nis); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
       if(inHalaqah(s.nis)){ showToast('Sudah ada di halaqah','error','&#9888;'); return; }
       if(!guruNip()){ showToast('Identitas guru belum termuat','error','&#9888;'); return; }
       var body={ client_key:'default', siswa_id:s.nis, nis:s.nis, nama_siswa:s.name, kelas:s.kelas, golongan:(ST.addGolongan||''), guru_nip:guruNip(), guru_nama:guruNama(), updated_at:nowISO() };
@@ -5903,14 +5878,11 @@ animateContent();
   /* ---------- Kelola Halaqah ---------- */
   window.renderKelolaHalaqahGuruModule = function(detail){
     if(ST.halaqah===null){ if(!ST.halaqahLoading) loadHalaqah(); return loadingShell(detail,'Memuat data halaqah...'); }
-    if(ST.allKelas===null){ if(!ST.allKelasLoading) loadAllKelasHalaqah(); return loadingShell(detail,'Memuat data siswa sekolah...'); }
     var nip=guruNip();
     var members=halMembers();
-    // Buka SEMUA kelas se-sekolah dari store terpisah (fallback ke SISWA_PER_KELAS bila kosong)
-    var _allMap=(ST.allKelas&&Object.keys(ST.allKelas).length)?ST.allKelas:SISWA_PER_KELAS;
-    var kelasList=Object.keys(_allMap||{}).sort();
+    var kelasList=Object.keys(SISWA_PER_KELAS||{}).sort();
     if(!ST.addKelas && kelasList.length) ST.addKelas=kelasList[0];
-    var cand=((_allMap&&_allMap[ST.addKelas])||[]);
+    var cand=(getSiswaByKelas(ST.addKelas)||[]);
 
     var html = styleTag() + headerCard(detail, members.length ? ('<span class="ztf-chip">'+members.length+' siswa</span> di halaqah '+esc(guruNama())) : 'Belum ada siswa di halaqah Anda.');
     html += '<section class="section"><div class="ztf-wrap">';
