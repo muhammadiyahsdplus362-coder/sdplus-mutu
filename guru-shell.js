@@ -2938,10 +2938,22 @@ function renderTeacherAttendanceRiwayat(){
   function rowToItem(r){
     var masuk = r.jam_masuk || r.checkIn || '--:--';
     var pulang = r.jam_pulang || r.checkOut || '--:--';
-    var ket = r.keterangan ? (' · ' + r.keterangan) : '';
+    var rawKet = String(r.keterangan || '');
+    var isIzin = String(r.status || '').toLowerCase().indexOf('izin') >= 0;
+    var izinTag = (rawKet.match(/\[izin:(diterima|ditolak)\]/i) || [])[1];
+    if (izinTag) izinTag = izinTag.toLowerCase();
+    var ketBersih = rawKet.replace(/\[izin:(diterima|ditolak)\]/ig, '').trim();
+    var ket = ketBersih ? (' · ' + ketBersih) : '';
     var label = (typeof agStatusLabel === 'function') ? (agStatusLabel(r.status) || r.status || 'Hadir') : (r.status || 'Hadir');
     var sesi = r.sesi ? (r.sesi + ' · ') : '';
-    return { time: formatTanggalID(guruRowDate(r)), title: label, meta: sesi + 'Masuk ' + (masuk || '--:--') + ' · Pulang ' + (pulang || '--:--') + ket, status: 'Tercatat', tone: toneOf(r.status) };
+    var pillStatus = 'Tercatat';
+    var pillTone = toneOf(r.status);
+    if (isIzin) {
+      if (izinTag === 'diterima') { pillStatus = 'Izin Diterima'; pillTone = 'green'; }
+      else if (izinTag === 'ditolak') { pillStatus = 'Izin Ditolak'; pillTone = 'red'; }
+      else { pillStatus = 'Menunggu konfirmasi'; pillTone = 'orange'; }
+    }
+    return { time: formatTanggalID(guruRowDate(r)), title: label, meta: sesi + 'Masuk ' + (masuk || '--:--') + ' · Pulang ' + (pulang || '--:--') + ket, status: pillStatus, tone: pillTone };
   }
   var bodyHtml;
   if (!rows.length) {
