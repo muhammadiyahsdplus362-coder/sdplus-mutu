@@ -6247,8 +6247,9 @@ animateContent();
     if(PP.loading) return; PP.loading=true;
     try{
       var c=client(); var res=null;
-      if(c){ res=await c.from(TABLE).select('*').eq('jenis',PP.jenis).order('created_at',{ascending:false}).limit(300); }
-      else if(SB()&&typeof SB().select==='function'){ res=await SB().select(TABLE,{ eq:{jenis:PP.jenis}, order:'created_at', ascending:false, limit:300 }); }
+      var _gid=guruId();
+      if(c){ res=await c.from(TABLE).select('*').eq('jenis',PP.jenis).eq('guru_id',_gid).order('created_at',{ascending:false}).limit(300); }
+      else if(SB()&&typeof SB().select==='function'){ res=await SB().select(TABLE,{ eq:{jenis:PP.jenis, guru_id:_gid}, order:'created_at', ascending:false, limit:300 }); }
       PP.rows=(res&&res.data)?res.data:[];
     }catch(e){ PP.rows=[]; }
     PP.loading=false;
