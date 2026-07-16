@@ -6149,7 +6149,7 @@ animateContent();
     { jenis:'modul-ajar',        label:'Modul Ajar',   icon:'\u2630' },
     { jenis:'media-pembelajaran',label:'Media',        icon:'\u25BA' }
   ];
-  var PP={ jenis:'prota-promes', rows:null, loading:false, uploading:false, pendingFile:null };
+  var PP={ jenis:'prota-promes', rows:null, loading:false, uploading:false, pendingFile:null, draftKet:'', draftKelas:'', draftMapel:'' };
 
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function SB(){ return window.ZymataMobileSupabase; }
@@ -6169,9 +6169,9 @@ animateContent();
   function ppCleanKet(r){ return String((r&&r.keterangan)||'').replace(/\s*\[kelas:[^\]]*\]/ig,'').trim(); }
   function ppKelasOpts(){ var out=[],seen={}; function add(k){ k=String(k==null?'':k).trim(); if(k&&!seen[k.toLowerCase()]){ seen[k.toLowerCase()]=1; out.push(k); } } try{ if(appState&&Array.isArray(appState.guruKelasList)) appState.guruKelasList.forEach(add); }catch(e){} try{ if(typeof KELAS_LIST!=='undefined'&&Array.isArray(KELAS_LIST)) KELAS_LIST.forEach(add); }catch(e){} try{ (PP.rows||[]).forEach(function(r){ add(ppGetKelas(r)); }); }catch(e){} return out; }
   function ppDefaultKelas(){ try{ if(appState&&appState.teacherClass&&appState.teacherClass!=='Kelas belum terhubung') return String(appState.teacherClass).trim(); if(appState&&Array.isArray(appState.guruKelasList)&&appState.guruKelasList.length) return String(appState.guruKelasList[0]).trim(); }catch(e){} return ''; }
-  function ppKelasSelectHtml(up){ var opts=ppKelasOpts(); var def=ppDefaultKelas(); var low=opts.map(function(x){ return String(x).toLowerCase(); }); if(def && low.indexOf(def.toLowerCase())<0){ opts.unshift(def); } var h='<select class="ppg-inp" id="ppg-kelas"'+(up?' disabled':'')+'>'; h+='<option value="">Pilih kelas</option>'; h+=opts.map(function(k){ var sel=(def && String(k).toLowerCase()===def.toLowerCase())?' selected':''; return '<option value="'+esc(k)+'"'+sel+'>'+esc(k)+'</option>'; }).join(''); h+='</select>'; return h; }
+  function ppKelasSelectHtml(up){ var opts=ppKelasOpts(); var def=PP.draftKelas||ppDefaultKelas(); var low=opts.map(function(x){ return String(x).toLowerCase(); }); if(def && low.indexOf(def.toLowerCase())<0){ opts.unshift(def); } var h='<select class="ppg-inp" id="ppg-kelas"'+(up?' disabled':'')+'>'; h+='<option value="">Pilih kelas</option>'; h+=opts.map(function(k){ var sel=(def && String(k).toLowerCase()===def.toLowerCase())?' selected':''; return '<option value="'+esc(k)+'"'+sel+'>'+esc(k)+'</option>'; }).join(''); h+='</select>'; return h; }
   function ppMapelOpts(){ var out=[],seen={}; function add(m){ m=String(m==null?'':m).trim(); if(m&&!seen[m.toLowerCase()]){ seen[m.toLowerCase()]=1; out.push(m); } } try{ if(appState&&Array.isArray(appState.guruMapelList)) appState.guruMapelList.forEach(add); }catch(e){} return out; }
-  function ppMapelSelectHtml(up){ var opts=ppMapelOpts(); var h='<select class="ppg-inp" id="ppg-mapel"'+(up?' disabled':'')+'>'; h+='<option value="">Pilih mata pelajaran</option>'; h+=opts.map(function(m){ return '<option value="'+esc(m)+'">'+esc(m)+'</option>'; }).join(''); h+='</select>'; return h; }
+  function ppMapelSelectHtml(up){ var opts=ppMapelOpts(); var h='<select class="ppg-inp" id="ppg-mapel"'+(up?' disabled':'')+'>'; h+='<option value="">Pilih mata pelajaran</option>'; h+=opts.map(function(m){ var sel=(PP.draftMapel && String(m).toLowerCase()===String(PP.draftMapel).toLowerCase())?' selected':''; return '<option value="'+esc(m)+'"'+sel+'>'+esc(m)+'</option>'; }).join(''); h+='</select>'; return h; }
 
   function styleTag(){
     return '<style id="ppg-style">'
@@ -6228,8 +6228,8 @@ animateContent();
     var up=PP.uploading;
     return '<div class="ppg-form">'
       + '<span class="ppg-lbl">Keterangan</span>'
-      + '<input class="ppg-inp" id="ppg-ket" placeholder="mis. Prota Kelas V Semester 1"'+(up?' disabled':'')+'>'
-      + (PP.jenis==='media-pembelajaran' ? ('<span class="ppg-lbl">Kelas yang Diajarkan</span>'
+      + '<input class="ppg-inp" id="ppg-ket" placeholder="mis. Prota Kelas V Semester 1"'+(up?' disabled':'')+' value="'+esc(PP.draftKet||'')+'">'
+      + ((PP.jenis==='media-pembelajaran'||PP.jenis==='modul-ajar'||PP.jenis==='prota-promes') ? ('<span class="ppg-lbl">Kelas yang Diajarkan</span>'
         + ppKelasSelectHtml(up)
         + '<span class="ppg-lbl">Mata Pelajaran</span>'
         + ppMapelSelectHtml(up)) : '')
@@ -6262,18 +6262,21 @@ animateContent();
     var file=(fileEl&&fileEl.files&&fileEl.files[0])||PP.pendingFile||null;
     var ket=(ketEl&&ketEl.value||'').trim();
     var kelasEl=document.getElementById('ppg-kelas');
-    var kelasVal=(PP.jenis==='media-pembelajaran' && kelasEl)?(kelasEl.value||'').trim():'';
+    var kelasVal=((PP.jenis==='media-pembelajaran'||PP.jenis==='modul-ajar'||PP.jenis==='prota-promes') && kelasEl)?(kelasEl.value||'').trim():'';
     var mapelEl=document.getElementById('ppg-mapel');
-    var mapelVal=(PP.jenis==='media-pembelajaran' && mapelEl)?(mapelEl.value||'').trim():'';
-    var ketFinal=mapelVal?(mapelVal+(ket?' - '+ket:'')):ket;
+    var mapelVal=((PP.jenis==='media-pembelajaran'||PP.jenis==='modul-ajar'||PP.jenis==='prota-promes') && mapelEl)?(mapelEl.value||'').trim():'';
+    var ketFinal=(PP.jenis==='prota-promes')?(function(){ var _b=ket||''; if(mapelVal) _b=(_b?_b+' ':'')+'[mapel:'+mapelVal+']'; return _b; })():(mapelVal?(mapelVal+(ket?' - '+ket:'')):ket);
     if(!file){ toast('Pilih berkas dulu','error','&#9888;'); return; }
+    if(PP.jenis==='prota-promes' && (!kelasVal||!mapelVal)){ toast('Pilih kelas dan mata pelajaran dulu','error','&#9888;'); return; }
     var c=client();
     if(!c||!c.functions){ toast('Koneksi belum siap, coba lagi','error','&#9888;'); return; }
     PP.uploading=true; if(typeof render==='function') render();
     try{
       var safe=(file.name||'file').replace(/[^a-z0-9_.-]+/gi,'_');
       var id='g'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-      var path=PP.jenis+'/default/'+id+'-'+safe;
+      var _seg=function(s){ return String(s||'').trim().replace(/[^a-z0-9_.-]+/gi,'_').replace(/^_+|_+$/g,'')||'lain'; };
+      var _folder=(PP.jenis==='prota-promes') ? (PP.jenis+'/'+_seg(kelasVal)+'/'+_seg(mapelVal)+'/') : (PP.jenis+'/default/');
+      var path=_folder+id+'-'+(PP.jenis==='prota-promes'?(_seg(guruName())+'-'):'')+safe;
       var key=BUCKET+'/'+path;
       var fd=new FormData();
       fd.append('file',file); fd.append('key',key); fd.append('bucket',BUCKET); fd.append('path',path);
@@ -6285,7 +6288,7 @@ animateContent();
       }
       var url=ppFixUrl((up.data&&up.data.url)||publicUrl(key));
       var row={ id:id, jenis:PP.jenis, keterangan:ketFinal, tanggal:todayISO(), file_url:url, file_key:key,
-                file_name:file.name||safe, file_type:file.type||'', file_size:file.size||0,
+                file_name:(PP.jenis==='prota-promes'?(guruName()+' - '+(file.name||safe)):(file.name||safe)), file_type:file.type||'', file_size:file.size||0,
                 guru_id:guruId(), guru_nama:guruName(), client_key:'default' };
       if(kelasVal) row.kelas=kelasVal;
       var ins=await c.from(TABLE).insert(row).select();
@@ -6294,7 +6297,7 @@ animateContent();
       }
       if(ins&&ins.error){ PP.uploading=false; if(typeof render==='function') render(); toast('Tersimpan ke R2, gagal simpan data: '+(ins.error.message||''),'error','&#9888;'); return; }
       PP.uploading=false;
-      if(fileEl) fileEl.value=''; PP.pendingFile=null; if(ketEl) ketEl.value='';
+      if(fileEl) fileEl.value=''; PP.pendingFile=null; if(ketEl) ketEl.value=''; PP.draftKet=''; PP.draftKelas=''; PP.draftMapel='';
       var kelClr=document.getElementById('ppg-kelas'); if(kelClr) kelClr.value='';
       var mpClr=document.getElementById('ppg-mapel'); if(mpClr) mpClr.value='';
       toast('Berkas terupload','success','&#10003;');
@@ -6326,6 +6329,19 @@ animateContent();
     if(delBtn){ e.preventDefault(); var id=delBtn.getAttribute('data-pp-del'); var key=delBtn.getAttribute('data-pp-key')||''; if(window.confirm('Hapus berkas ini? File juga akan dihapus dari penyimpanan.')) doDelete(id,key); return; }
   }, false);
 
+  /* Simpan isian form (keterangan/kelas/mapel) ke state agar tidak hilang saat re-render */
+  document.addEventListener('input', function(e){
+    var el=e.target; if(!el||!el.id) return;
+    if(el.id==='ppg-ket') PP.draftKet=el.value||'';
+    else if(el.id==='ppg-kelas') PP.draftKelas=el.value||'';
+    else if(el.id==='ppg-mapel') PP.draftMapel=el.value||'';
+  }, false);
+  document.addEventListener('change', function(e){
+    var el=e.target; if(!el||!el.id) return;
+    if(el.id==='ppg-ket') PP.draftKet=el.value||'';
+    else if(el.id==='ppg-kelas') PP.draftKelas=el.value||'';
+    else if(el.id==='ppg-mapel') PP.draftMapel=el.value||'';
+  }, false);
   /* Change: tampilkan nama berkas terpilih tanpa re-render */
   document.addEventListener('change', function(e){
     var el=e.target; if(!el||el.id!=='ppg-file') return;
@@ -6350,7 +6366,7 @@ animateContent();
       body='<div class="ppg-note">'+rows.length+' berkas &middot; kategori <b>'+esc(catLabel(PP.jenis))+'</b></div>';
       body+=rows.map(function(r){
         var own=String(r.guru_id||'')===guruId();
-        var meta=[]; var _kel=ppGetKelas(r); if(PP.jenis==='media-pembelajaran'&&_kel) meta.push('Kelas '+esc(_kel)); if(r.tanggal) meta.push(esc(String(r.tanggal))); if(r.guru_nama) meta.push(esc(r.guru_nama)); var sz=fmtSize(r.file_size); if(sz) meta.push(sz);
+        var meta=[]; var _kel=ppGetKelas(r); if((PP.jenis==='media-pembelajaran'||PP.jenis==='modul-ajar'||PP.jenis==='prota-promes')&&_kel) meta.push('Kelas '+esc(_kel)); if(r.tanggal) meta.push(esc(String(r.tanggal))); if(r.guru_nama) meta.push(esc(r.guru_nama)); var sz=fmtSize(r.file_size); if(sz) meta.push(sz);
         var del=own?('<button type="button" class="ppg-del" data-pp-del="'+esc(r.id)+'" data-pp-key="'+esc(r.file_key||'')+'">Hapus</button>'):'';
         var open=r.file_url?('<a class="ppg-open" href="'+esc(ppViewUrl(ppFixUrl(r.file_url),r))+'" target="_blank" rel="noopener">Buka berkas</a>'):'<span class="ppg-open">Tanpa berkas</span>';
         return '<div class="ppg-card"><div class="ppg-top"><span class="ppg-ic">\u25AB</span><div class="ppg-info">'
