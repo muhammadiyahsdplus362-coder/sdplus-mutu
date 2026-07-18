@@ -2948,11 +2948,6 @@ function renderTeacherAttendanceRiwayat(){
     var sesi = r.sesi ? (r.sesi + ' · ') : '';
     var pillStatus = 'Tercatat';
     var pillTone = toneOf(r.status);
-    if (isIzin) {
-      if (izinTag === 'diterima') { pillStatus = 'Izin Diterima'; pillTone = 'green'; }
-      else if (izinTag === 'ditolak') { pillStatus = 'Izin Ditolak'; pillTone = 'red'; }
-      else { pillStatus = 'Menunggu konfirmasi'; pillTone = 'orange'; }
-    }
     return { time: formatTanggalID(guruRowDate(r)), title: label, meta: sesi + 'Masuk ' + (masuk || '--:--') + ' · Pulang ' + (pulang || '--:--') + ket, status: pillStatus, tone: pillTone };
   }
   var bodyHtml;
@@ -5160,7 +5155,7 @@ function notifyFeedback(tone = 'success') {
   });
 })();
 
-// ��── Android/iOS back handling ──────���────────��───────────���────────────����──
+// ��── Android/iOS back handling ──────���────────��───────────���──────────���─����──
 function bindNativeBack() {
   if (window.__ZYMATA_GURU_BACK_BOUND__) return;
   window.__ZYMATA_GURU_BACK_BOUND__ = true;
