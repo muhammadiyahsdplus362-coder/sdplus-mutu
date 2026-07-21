@@ -1844,22 +1844,64 @@ const NILAI_SEMESTER = ['Ganjil','Genap'];
 // ─���─ UI helpers ──────────────��───────────────────────���────────────────���─────
 // Dropdown native bergaya mobile - untuk list panjang (mapel, kategori, dll)
 function metodeMengajarField(value, lainnyaMode) {
-  var isCustom = !!(value && METODE_LIST.indexOf(value) === -1);
-  var showInput = !!(lainnyaMode || isCustom);
-  var selVal = showInput ? 'Lainnya' : value;
+  var sel = String(value == null ? '' : value).split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  var custom = '';
+  sel.forEach(function(v){ if (METODE_LIST.indexOf(v) === -1) custom = v; });
+  var hasLainnya = !!custom || !!lainnyaMode;
   var opts = METODE_LIST.concat(['Lainnya']);
-  var safeVal = isCustom ? String(value).replace(/"/g, '&quot;') : '';
   return `
     <div class="mf-field">
-      <label class="mf-label">Metode Mengajar</label>
-      <div class="mf-select-wrap">
-        <select class="mf-select" data-select="jg-metode">
-          ${opts.map(o => `<option value="${o}" ${o === selVal ? 'selected' : ''}>${o}</option>`).join('')}
-        </select>
-        <span class="mf-chevron">&#8250;</span>
+      <label class="mf-label">Metode Mengajar <span class="mf-hint">(bisa pilih lebih dari satu)</span></label>
+      <div class="mf-check-group" style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${opts.map(function(o){
+          var checked = (o === 'Lainnya') ? hasLainnya : (sel.indexOf(o) !== -1);
+          return `<label class="mf-check" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #2a3550;border-radius:8px;cursor:pointer;"><input type="checkbox" data-jg-metode-check="1" value="${o}"${checked ? ' checked' : ''}${o === 'Lainnya' ? ' data-jg-metode-lainnya-check="1"' : ''}><span>${o}</span></label>`;
+        }).join('')}
       </div>
-      ${showInput ? `<input type="text" class="mf-select" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Ketik metode mengajar sendiri..." value="${safeVal}" data-jg-metode-lainnya autocomplete="off" />` : ''}
+      ${hasLainnya ? `<input type="text" class="mf-select" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Ketik metode mengajar sendiri..." value="${custom.replace(/"/g, '&quot;')}" data-jg-metode-lainnya autocomplete="off" />` : ''}
     </div>`;
+}
+
+/* Kumpulkan metode Jurnal Guru (form bespoke) dari checkbox tercentang + input manual "Lainnya" menjadi string dipisah koma. */
+function recomputeJgMetode() {
+  var checks = Array.prototype.slice.call(document.querySelectorAll('[data-jg-metode-check]'));
+  var vals = [];
+  var lainnyaChecked = false;
+  checks.forEach(function(cb){
+    if (!cb.checked) return;
+    if (cb.getAttribute('data-jg-metode-lainnya-check')) {
+      lainnyaChecked = true;
+      var man = document.querySelector('[data-jg-metode-lainnya]');
+      var mv = man ? String(man.value || '').trim() : '';
+      if (mv) vals.push(mv);
+    } else {
+      vals.push(cb.value);
+    }
+  });
+  var st = getJurnalGuruState();
+  st.metodeLainnya = lainnyaChecked;
+  st.metode = vals.join(', ');
+}
+
+/* Render metode sebagai grup checkbox (multi-pilih) + opsi "Lainnya" dgn input manual, untuk form modul generik (Jurnal Kelas & Jurnal Guru Supabase). */
+function metodeCheckboxHtml(crudKey, options, selectedCsv) {
+  var sel = String(selectedCsv == null ? '' : selectedCsv).split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  var known = (options || []).filter(function(o){ return o !== 'Lainnya'; });
+  var opts = known.concat(['Lainnya']);
+  var custom = '';
+  sel.forEach(function(v){ if (v && known.indexOf(v) === -1 && v !== 'Lainnya') custom = v; });
+  var hasLainnya = !!custom;
+  var html = '<label class="field-label">Metode <span style="font-weight:400;opacity:.7;">(bisa pilih lebih dari satu)</span></label>';
+  html += '<div class="metode-check-group" data-metode-group="' + crudKey + '" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">';
+  opts.forEach(function(o){
+    var checked = (o === 'Lainnya') ? hasLainnya : (sel.indexOf(o) !== -1);
+    html += '<label class="metode-check" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #2a3550;border-radius:8px;cursor:pointer;">'
+      + '<input type="checkbox" data-metode-check="1" data-form-key="' + crudKey + '" value="' + o + '"' + (checked ? ' checked' : '') + (o === 'Lainnya' ? ' data-metode-lainnya-check="1"' : '') + '>'
+      + '<span>' + o + '</span></label>';
+  });
+  html += '</div>';
+  html += '<input type="text" class="field-input" data-metode-manual="1" data-form-key="' + crudKey + '" placeholder="Ketik metode sendiri..." value="' + custom.replace(/"/g, '&quot;') + '" style="display:' + (hasLainnya ? '' : 'none') + ';margin-top:8px;">';
+  return html;
 }
 
 function selectField(label, value, options, dataAttr, hint) {
@@ -3472,12 +3514,12 @@ function renderModuleForm(moduleId, crudKey) {
       }
     } else if (field.options && field.options.length) {
       var __isMetodeF = (field.key === 'metode' || /metode/i.test(field.label||''));
-      var __optsF = __isMetodeF ? field.options.concat(['Lainnya']) : field.options;
-      html += `<label class="field-label">${field.label}</label><select class="field-select" data-module-field="${field.key}" data-form-key="${crudKey}"${__isMetodeF ? ' data-metode-select="1"' : ''}><option value="">Pilih ${field.label}</option>`;
-      __optsF.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
-      html += '</select>';
       if (__isMetodeF) {
-        html += `<input type="text" class="field-input" data-metode-manual="1" data-form-key="${crudKey}" placeholder="Ketik metode sendiri..." style="display:none;margin-top:8px;">`;
+        html += metodeCheckboxHtml(crudKey, field.options, '');
+      } else {
+        html += `<label class="field-label">${field.label}</label><select class="field-select" data-module-field="${field.key}" data-form-key="${crudKey}"><option value="">Pilih ${field.label}</option>`;
+        field.options.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
+        html += '</select>';
       }
     } else {
       var codeAttr = /nis|nisn|nomor|kode|barcode|id/i.test(field.key) ? ' data-qr-target="1"' : '';
@@ -3493,9 +3535,7 @@ function renderModuleForm(moduleId, crudKey) {
         if (__jgMet && Array.isArray(__jgMet.options) && __jgMet.options.length) { __mkOpts = __jgMet.options.slice(); }
       }
     } catch(e) {}
-    html += `<label class="field-label">Metode</label><select class="field-select" data-module-field="metode" data-form-key="${crudKey}" data-metode-select="1"><option value="">Pilih Metode</option>`;
-    __mkOpts.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
-    html += `</select><input type="text" class="field-input" data-metode-manual="1" data-form-key="${crudKey}" placeholder="Ketik metode sendiri..." style="display:none;margin-top:8px;">`;
+    html += metodeCheckboxHtml(crudKey, __mkOpts, '');
   }
   html += `<button type="button" class="save-draft-btn" data-mobile-crud-create="${crudKey}" style="margin-top:12px">Simpan</button>`;
   // Jurnal Guru: tambahkan input PDF di form Supabase
@@ -4579,9 +4619,24 @@ function bindActions() {
       fields.forEach(function(field) {
         fieldPayload[field.dataset.moduleField] = String(field.value || '').trim();
       });
-      if (fieldPayload['metode'] === 'Lainnya') {
-        var __manMet = document.querySelector('[data-metode-manual][data-form-key="'+key+'"]');
-        fieldPayload['metode'] = __manMet ? String(__manMet.value||'').trim() : '';
+      // Metode multi-pilih: kumpulkan semua checkbox tercentang + input manual utk "Lainnya".
+      var __metChecks = Array.prototype.slice.call(document.querySelectorAll('[data-metode-check][data-form-key="'+key+'"]'));
+      if (__metChecks.length) {
+        var __metVals = [];
+        __metChecks.forEach(function(cb){
+          if (!cb.checked) return;
+          if (cb.getAttribute('data-metode-lainnya-check')) {
+            var __manMet = document.querySelector('[data-metode-manual][data-form-key="'+key+'"]');
+            var __mv = __manMet ? String(__manMet.value||'').trim() : '';
+            if (__mv) __metVals.push(__mv);
+          } else {
+            __metVals.push(cb.value);
+          }
+        });
+        fieldPayload['metode'] = __metVals.join(', ');
+      } else if (fieldPayload['metode'] === 'Lainnya') {
+        var __manMet2 = document.querySelector('[data-metode-manual][data-form-key="'+key+'"]');
+        fieldPayload['metode'] = __manMet2 ? String(__manMet2.value||'').trim() : '';
       }
       const schemaDef = (window.ZymataMobileSupabase && window.ZymataMobileSupabase.MODULE_FORM_SCHEMA && window.ZymataMobileSupabase.MODULE_FORM_SCHEMA[key]) || null;
       if (schemaDef && Array.isArray(schemaDef.fields)) {
@@ -4791,6 +4846,22 @@ function bindActions() {
   });
 
   document.addEventListener('change', (event) => {
+    // Metode (multi-pilih, form modul generik): toggle input manual saat checkbox "Lainnya" dicentang.
+    const metCheckEl = event.target.closest('[data-metode-check]');
+    if (metCheckEl) {
+      if (metCheckEl.getAttribute('data-metode-lainnya-check')) {
+        var __fkc = metCheckEl.getAttribute('data-form-key');
+        var __manElc = document.querySelector('[data-metode-manual][data-form-key="'+__fkc+'"]');
+        if (__manElc) {
+          if (metCheckEl.checked) { __manElc.style.display = ''; try { __manElc.focus(); } catch(e){} }
+          else { __manElc.style.display = 'none'; __manElc.value = ''; }
+        }
+      }
+      return;
+    }
+    // Jurnal Guru (bespoke): checkbox metode mengajar (multi-pilih).
+    const jgMetCheckEl = event.target.closest('[data-jg-metode-check]');
+    if (jgMetCheckEl) { recomputeJgMetode(); saveOnlyNoRender(); render(); return; }
     // Metode: tampilkan input manual saat opsi "Lainnya" dipilih
     const metSelEl = event.target.closest('select[data-metode-select]');
     if (metSelEl) {
@@ -4906,7 +4977,7 @@ function bindActions() {
 
   document.addEventListener('input', (event) => {
     const metLainnyaEl = event.target.closest('[data-jg-metode-lainnya]');
-    if (metLainnyaEl) { getJurnalGuruState().metode = metLainnyaEl.value; saveOnlyNoRender(); return; }
+    if (metLainnyaEl) { recomputeJgMetode(); saveOnlyNoRender(); return; }
     const ketEl = event.target.closest('[data-ag-keterangan]');
     if (ketEl) {
       appState.teacherAttendance.keterangan = ketEl.value;
@@ -5681,13 +5752,28 @@ animateContent();
   // agar siswa ber-NIS kosong tidak saling "nyangkut" (bug: input 1 siswa, yang lain ikut).
   function _idsOf(o){ if(o==null) return []; if(typeof o==='object'){ return [String(o.id||o.siswa_id||''), String(o.nis||'')].filter(function(x){ return x!==''; }); } var v=String(o); return v===''?[]:[v]; }
   function _sameStudent(a,b){ var A=_idsOf(a), B=_idsOf(b); for(var i=0;i<A.length;i++){ for(var j=0;j<B.length;j++){ if(A[i]===B[j]) return true; } } return false; }
-  function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } return null; }
+  function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } var r=rosterAll(); for(var j=0;j<r.length;j++){ if(_sameStudent(r[j], key)) return r[j]; } return null; }
 
-  var ST = { halaqah:null, halaqahLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
+  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
 
   function halMembers(){ return Array.isArray(ST.halaqah)?ST.halaqah:[]; }
   function inHalaqah(x){ return halMembers().some(function(r){ return _sameStudent(r, x); }); }
   function memberById(x){ var m=halMembers(); for(var i=0;i<m.length;i++){ if(_sameStudent(m[i], x)) return m[i]; } return null; }
+
+  /* Roster SELURUH sekolah (semua kelas) khusus Kelola Halaqah, terpisah dari SISWA_PER_KELAS (yang hanya berisi kelas yang diajar guru). */
+  function rosterAll(){ return Array.isArray(ST.roster)?ST.roster:[]; }
+  function rosterKelasList(){ var set={}; rosterAll().forEach(function(s){ var k=String(s.kelas||'').trim(); if(k) set[k]=1; }); allSiswa().forEach(function(s){ var k=String(s.kelas||'').trim(); if(k) set[k]=1; }); return Object.keys(set).sort(function(a,b){ return a.localeCompare(b,'id',{numeric:true}); }); }
+  function rosterByKelas(kelas){ kelas=String(kelas||''); var out=rosterAll().filter(function(s){ return String(s.kelas||'')===kelas; }); if(!out.length) out=allSiswa().filter(function(s){ return String(s.kelas||'')===kelas; }); return out.slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||''),'id',{sensitivity:'base',numeric:true}); }); }
+  async function loadRoster(){
+    if(ST.rosterLoading) return; ST.rosterLoading=true;
+    try{
+      var api=SB();
+      if(api){ var res=await api.select('siswa',{ limit:5000 }); if(res&&!res.error&&Array.isArray(res.data)){ ST.roster=res.data.map(function(row){ return { id:String(row.id||row.siswa_id||''), nis:String(row.nis||row.nisn||''), name:String(row.nama||row.nama_siswa||row.name||'Siswa'), kelas:String(row.kelas||row.kelas_id||row.rombel||row.kelas_nama||'').trim() }; }); } else if(ST.roster===null){ ST.roster=[]; } }
+      else if(ST.roster===null){ ST.roster=[]; }
+    }catch(e){ if(ST.roster===null) ST.roster=[]; }
+    ST.rosterLoading=false;
+    if(appState.activeTab==='module:kelola-halaqah') render();
+  }
 
   async function loadHalaqah(){
     if(ST.halaqahLoading) return;
@@ -5813,6 +5899,18 @@ animateContent();
       var s=memberById(ST.mtfSiswaId); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
       var tglEl=document.getElementById('ztf-mtf-tgl'); var tgl=(tglEl&&tglEl.value)?tglEl.value:todayStr();
       var ta=curTA(), sem=curSemester(), saved=0, failed=0, filled=0, logs=[];
+      // Wajibkan kolom Ayat: kalau surah dipilih tapi ayat kosong/0, jangan simpan.
+      for(var vi=0;vi<CATS_SEKOLAH.length;vi++){
+        var vsEl=document.getElementById('ztf-mtf-surah-'+vi);
+        var vaEl=document.getElementById('ztf-mtf-ayat-'+vi);
+        var vSurah=parseInt(vsEl&&vsEl.value,10)||0;
+        var vAyat=parseInt(vaEl&&vaEl.value,10)||0;
+        if(vSurah && (!vAyat||vAyat<1)){
+          showToast('Isi jumlah ayat untuk '+CATS_SEKOLAH[vi]+' dulu.','error','&#9888;');
+          if(vaEl){ try{ vaEl.focus(); }catch(e){} }
+          return;
+        }
+      }
       for(var i=0;i<CATS_SEKOLAH.length;i++){
         var kat=CATS_SEKOLAH[i];
         var sEl=document.getElementById('ztf-mtf-surah-'+i), aEl=document.getElementById('ztf-mtf-ayat-'+i), cEl=document.getElementById('ztf-mtf-cat-'+i);
@@ -5946,9 +6044,10 @@ animateContent();
     if(ST.halaqah===null){ if(!ST.halaqahLoading) loadHalaqah(); return loadingShell(detail,'Memuat data halaqah...'); }
     var nip=guruNip();
     var members=halMembers();
-    var kelasList=Object.keys(SISWA_PER_KELAS||{}).sort();
+    if(ST.roster===null && !ST.rosterLoading) loadRoster();
+    var kelasList=rosterKelasList();
     if(!ST.addKelas && kelasList.length) ST.addKelas=kelasList[0];
-    var cand=(getSiswaByKelas(ST.addKelas)||[]);
+    var cand=(rosterByKelas(ST.addKelas)||[]);
 
     var html = styleTag() + headerCard(detail, members.length ? ('<span class="ztf-chip">'+members.length+' siswa</span> di halaqah '+esc(guruNama())) : 'Belum ada siswa di halaqah Anda.');
     html += '<section class="section"><div class="ztf-wrap">';
@@ -6061,7 +6160,7 @@ animateContent();
           +'<div class="ztf-cat-head"><span class="ztf-cat-title">'+esc(kat)+'</span><span class="ztf-prog" id="ztf-mtf-prog-'+idx+'">'+progTxt+'</span></div>'
           +'<div class="ztf-grid2">'
           +'<select class="ztf-sel" id="ztf-mtf-surah-'+idx+'" onchange="window.zMtf.recalc('+idx+')">'+surahOptions(d.surah||'')+'</select>'
-          +'<input class="ztf-inp" id="ztf-mtf-ayat-'+idx+'" type="number" min="0" placeholder="Ayat" value="'+(d.ayat?esc(d.ayat):'')+'" oninput="window.zMtf.recalc('+idx+')">'
+          +'<input class="ztf-inp" id="ztf-mtf-ayat-'+idx+'" type="number" min="1" placeholder="Ayat (wajib)" value="'+(d.ayat?esc(d.ayat):'')+'" oninput="window.zMtf.recalc('+idx+')">'
           +'</div>'
           +'<input class="ztf-inp" id="ztf-mtf-cat-'+idx+'" style="margin-top:8px" placeholder="Catatan (opsional)" value="'+esc(d.catatan||'')+'">'
           +'</div>';
