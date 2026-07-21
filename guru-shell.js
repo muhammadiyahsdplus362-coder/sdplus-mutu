@@ -3486,6 +3486,13 @@ function renderModuleForm(moduleId, crudKey) {
   });
   if (moduleId === 'jurnal-kelas' && !__orderedFields.some(function(f){ return f.key === 'metode' || /metode/i.test(f.label||''); })) {
     var __mkOpts = ['Diskusi','Ceramah','Praktik','Proyek','Demonstrasi','Tanya Jawab','Penugasan'];
+    try {
+      var __jgSchema = window.ZymataMobileSupabase && window.ZymataMobileSupabase.MODULE_FORM_SCHEMA && window.ZymataMobileSupabase.MODULE_FORM_SCHEMA['guru:jurnal-guru'];
+      if (__jgSchema && Array.isArray(__jgSchema.fields)) {
+        var __jgMet = __jgSchema.fields.find(function(f){ return f.key === 'metode' || /metode/i.test(f.label||''); });
+        if (__jgMet && Array.isArray(__jgMet.options) && __jgMet.options.length) { __mkOpts = __jgMet.options.slice(); }
+      }
+    } catch(e) {}
     html += `<label class="field-label">Metode</label><select class="field-select" data-module-field="metode" data-form-key="${crudKey}" data-metode-select="1"><option value="">Pilih Metode</option>`;
     __mkOpts.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
     html += `</select><input type="text" class="field-input" data-metode-manual="1" data-form-key="${crudKey}" placeholder="Ketik metode sendiri..." style="display:none;margin-top:8px;">`;
