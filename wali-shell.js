@@ -157,7 +157,8 @@ const academicModules = [
   { id: 'nilai-anak',       icon: ICONS.nilai,      title: 'Nilai',         meta: 'Ringkasan tugas, ujian, dan capaian',      route: 'module:nilai-anak',       group: 'Akademik' },
   { id: 'perkembangan-anak',icon: ICONS.tumbuh,     title: 'Perkembangan',  meta: 'Ibadah, karakter, prestasi',      route: 'module:perkembangan-anak',group: 'Akademik' },
   { id: 'catatan-anak',     icon: ICONS.catatan,    title: 'Catatan Anak',  meta: 'Pesan dan tindak lanjut dari sekolah',     route: 'module:catatan-anak',     group: 'Akademik' },
-  { id: 'jadwal-anak',      icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/></svg>`, title: 'Jadwal Pelajaran', meta: 'Jadwal mata pelajaran mingguan', route: 'module:jadwal-anak', group: 'Akademik' }
+  { id: 'jadwal-anak',      icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/></svg>`, title: 'Jadwal Pelajaran', meta: 'Jadwal mata pelajaran mingguan', route: 'module:jadwal-anak', group: 'Akademik' },
+  { id: 'program-kegiatan', icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/><path d="M10 10.3l.62 1.28 1.4.2-1.02 1 .24 1.4-1.24-.66-1.24.66.24-1.4-1.02-1 1.4-.2z"/></svg>`, title: 'Program Kegiatan', meta: 'Agenda & kegiatan sekolah', route: 'module:program-kegiatan', group: 'Informasi' }
 ];
 
 const mutabaahModules = [
@@ -168,6 +169,7 @@ const mutabaahModules = [
 const moreModules = [
   { id: 'keuangan',       icon: ICONS.keuangan,   title: 'Keuangan',    meta: 'SPP, tabungan, dan tagihan lain',    route: 'module:keuangan',      group: 'Administrasi' },
   { id: 'pengumuman-wali',icon: ICONS.pengumuman, title: 'Pengumuman',  meta: 'Info sekolah dan agenda penting',    route: 'module:pengumuman-wali',group: 'Informasi'   },
+  { id: 'program-kegiatan',icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/></svg>`, title: 'Program Kegiatan', meta: 'Agenda & kegiatan sekolah', route: 'module:program-kegiatan', group: 'Informasi' },
   { id: 'surat-wali',     icon: ICONS.surat,      title: 'Surat/Izin',  meta: 'Ajukan izin dan cek status surat',   route: 'module:surat-wali',    group: 'Administrasi' },
   { id: 'akun-wali',      icon: ICONS.akun,       title: 'Akun',        meta: 'Profil wali, notifikasi, dan preferensi', route: 'profile',           group: 'Akun'         }
 ];
@@ -265,6 +267,13 @@ const moduleDetails = {
     subtitle: 'Info sekolah tetap viewer-only dan mudah dibaca, tanpa campur dengan pesan pribadi.',
     stats: [["Belum", "0"]],
     focus: announcements
+  },
+  'program-kegiatan': {
+    eyebrow: 'Informasi',
+    title: 'Program Kegiatan Sekolah',
+    subtitle: 'Daftar program & kegiatan sekolah beserta jadwal, tempat, dan status pelaksanaannya. Hanya untuk dilihat.',
+    stats: [["Program", "Sekolah"]],
+    focus: []
   },
   'surat-wali': {
     eyebrow: 'Administrasi',
@@ -1414,11 +1423,79 @@ function renderJadwalAnak(detail) {
   `;
 }
 
+async function loadWaliProgramKegiatan() {
+  appState.waliProgramKegiatanLoaded = false;
+  var helper = window.ZymataMobileSupabase;
+  if (!helper || typeof helper.select !== 'function') {
+    appState.waliProgramKegiatan = [];
+    appState.waliProgramKegiatanLoaded = true;
+    return;
+  }
+  var rows = [];
+  try {
+    var res = await helper.select('program_kegiatan', { order: 'no', ascending: true, limit: 300 });
+    rows = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
+  } catch (e) { console.warn('[Program Kegiatan Wali] gagal load:', e); }
+  rows.sort(function(a, b){ return (parseInt(a.no) || 0) - (parseInt(b.no) || 0); });
+  appState.waliProgramKegiatan = rows;
+  appState.waliProgramKegiatanLoaded = true;
+}
+
+function renderProgramKegiatanWali(detail) {
+  function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function fmtTgl(d){ d=String(d||'').slice(0,10); if(!d) return ''; var p=d.split('-'); if(p.length!==3) return d; return p[2]+'/'+p[1]+'/'+p[0]; }
+  function isDone(r){ return r.selesai===true || r.selesai==='true' || r.selesai===1 || r.selesai==='__YES__'; }
+  if (!appState.waliProgramKegiatanLoaded) {
+    loadWaliProgramKegiatan().then(function(){ if (appState.activeTab === 'module:program-kegiatan') render(); });
+    return `
+      ${moduleIntro(detail, moduleParentTab('program-kegiatan'))}
+      <section class="section">
+        <article class="db-ready-card">
+          <h3 class="card-title">Memuat program…</h3>
+          <p class="card-meta">Mengambil program kegiatan sekolah dari data sekolah.</p>
+        </article>
+      </section>
+    `;
+  }
+  var rows = Array.isArray(appState.waliProgramKegiatan) ? appState.waliProgramKegiatan.slice() : [];
+  var total = rows.length;
+  var done = rows.filter(isDone).length;
+  var cards = total ? rows.map(function(r){
+    var nm = esc(r.program || r.nama || '-');
+    var tgl = fmtTgl(r.tanggal || r.tanggal_mulai);
+    var tempat = esc(r.tempat || '');
+    var pj = esc(r.penanggung_jawab || '');
+    var ket = esc(r.keterangan || '');
+    var done1 = isDone(r);
+    var metaParts = [];
+    if (tempat) metaParts.push('📍 ' + tempat);
+    if (pj) metaParts.push('PJ: ' + pj);
+    if (ket) metaParts.push(ket);
+    return scheduleCard({ time: (tgl || '—'), title: nm, meta: metaParts.join(' · ') || '-', status: done1 ? 'Terlaksana' : 'Terjadwal', tone: done1 ? 'green' : 'blue' });
+  }).join('') : '<p class="card-meta" style="padding:6px 2px;">Belum ada program kegiatan dari sekolah.</p>';
+  return `
+    ${moduleIntro(detail, moduleParentTab('program-kegiatan'))}
+    <section class="section">
+      <article class="db-ready-card">
+        <span class="status-pill ${total ? 'green' : 'blue'}">${total ? 'Supabase' : 'Belum ada data'}</span>
+        <h3 class="card-title">${total ? (total + ' program kegiatan') : 'Program belum tersedia'}</h3>
+        <p class="card-meta">${total ? ('Terlaksana ' + done + ' dari ' + total + ' program. Data langsung dari sekolah.') : 'Program kegiatan sekolah belum diisi oleh sekolah.'}</p>
+      </article>
+    </section>
+    ${total ? `
+    <section class="section">
+      ${sectionHead('Daftar program', total + ' program')}
+      <div class="timeline">${cards}</div>
+    </section>` : ''}
+  `;
+}
+
 function renderModule(moduleId) {
   const detail = moduleDetails[moduleId];
   if (!detail) return renderAcademic();
   if (moduleId === 'jadwal-anak') return renderJadwalAnak(detail);
   if (moduleId === 'mutabaah-tahfidz') return renderMutabaahTahfidzWaliModule(detail);
+  if (moduleId === 'program-kegiatan') return renderProgramKegiatanWali(detail);
   const dataKey = waliModuleDataKey(moduleId);
   // Modul write wali (form input) tidak boleh ke-render read-only/empty generic; harus jatuh ke blok custom yang punya form.
   var __waliWriteModules = ['surat-wali','mutabaah-rumah'];
@@ -2724,11 +2801,39 @@ function computeWaliRecap(){
   appState.catatanBaru = catArr.length;
 }
 
+// ===== [FIX WALI] Indikator "Menyegarkan data" + hemat beban server =====
+function ensureWaliFixStyles() {
+  try {
+    if (document.getElementById('wali-fix-style')) return;
+    var st = document.createElement('style');
+    st.id = 'wali-fix-style';
+    st.textContent = '#wali-sync-chip{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%) translateY(-16px);z-index:99999;display:flex;align-items:center;gap:7px;background:rgba(17,24,39,.93);color:#fff;font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.28);opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease}#wali-sync-chip.show{opacity:1;transform:translateX(-50%) translateY(0)}#wali-sync-chip .wali-sync-dot{width:11px;height:11px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:waliSyncSpin .7s linear infinite}@keyframes waliSyncSpin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(st);
+  } catch (_) {}
+}
+function showSyncIndicator() {
+  try {
+    ensureWaliFixStyles();
+    var el = document.getElementById('wali-sync-chip');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'wali-sync-chip';
+      el.innerHTML = '<span class="wali-sync-dot"></span> Menyegarkan data\u2026';
+      document.body.appendChild(el);
+    }
+    requestAnimationFrame(function(){ el.classList.add('show'); });
+  } catch (_) {}
+}
+function hideSyncIndicator() {
+  try { var el = document.getElementById('wali-sync-chip'); if (el) el.classList.remove('show'); } catch (_) {}
+}
+
 async function hydrateWaliFromSupabase() {
   if (!window.ZymataMobileSupabase) return;
   const session = window.ZymataMobileSupabase.readSession();
   if (!session) return;
   try {
+    showSyncIndicator();
     const ctx = await window.ZymataMobileSupabase.loadWaliContext(session);
     try {
       var _kids = (ctx && Array.isArray(ctx.children)) ? ctx.children : [];
@@ -2805,11 +2910,14 @@ async function hydrateWaliFromSupabase() {
       });
     } catch(_) {}
     syncWaliFinanceState();
+    appState._waliLastHydrateTs = Date.now();
     saveState();
     saveWaliDataCache();
     render();
   } catch (error) {
     console.warn('[MobileWali] gagal load Supabase:', error && error.message ? error.message : error);
+  } finally {
+    hideSyncIndicator();
   }
 }
 
@@ -2823,6 +2931,7 @@ appState.activeTab = 'home';
 appState.showAnnouncements = false;
 updateWaliClock();
 saveState();
+ensureWaliFixStyles();
 render();
 hydrateWaliFromSupabase();
 animateWaliContent();
@@ -2836,6 +2945,9 @@ animateWaliContent();
   function refreshNow(){
     if(_busy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
+    // Hemat beban server: lewati refresh berat bila data baru saja disegarkan (< 90 detik).
+    // Data keuangan (SPP/tabungan) tetap diperbarui oleh finance poll terpisah.
+    if(Date.now() - (appState._waliLastHydrateTs || 0) < 90000) return;
     _busy = true; _last = Date.now();
     Promise.resolve(hydrateWaliFromSupabase())
       .catch(function(){})
@@ -2865,7 +2977,8 @@ animateWaliContent();
     try {
       const session = window.ZymataMobileSupabase.readSession();
       if(!session) return;
-      const ctx = await window.ZymataMobileSupabase.loadWaliContext(session);
+      // Pakai ulang konteks wali yang sudah di-load hydrate (hemat query identitas anak).
+      const ctx = (window.__zymataWaliCtx && window.__zymataWaliCtx.siswa) ? window.__zymataWaliCtx : await window.ZymataMobileSupabase.loadWaliContext(session);
       if(!ctx || !ctx.siswa) return;
       const siswaId = String(ctx.siswa.id || '');
       const nis = String(ctx.siswa.nis || '');
