@@ -1843,6 +1843,25 @@ const NILAI_SEMESTER = ['Ganjil','Genap'];
 
 // ─���─ UI helpers ──────────────��───────────────────────���────────────────���─────
 // Dropdown native bergaya mobile - untuk list panjang (mapel, kategori, dll)
+function metodeMengajarField(value, lainnyaMode) {
+  var isCustom = !!(value && METODE_LIST.indexOf(value) === -1);
+  var showInput = !!(lainnyaMode || isCustom);
+  var selVal = showInput ? 'Lainnya' : value;
+  var opts = METODE_LIST.concat(['Lainnya']);
+  var safeVal = isCustom ? String(value).replace(/"/g, '&quot;') : '';
+  return `
+    <div class="mf-field">
+      <label class="mf-label">Metode Mengajar</label>
+      <div class="mf-select-wrap">
+        <select class="mf-select" data-select="jg-metode">
+          ${opts.map(o => `<option value="${o}" ${o === selVal ? 'selected' : ''}>${o}</option>`).join('')}
+        </select>
+        <span class="mf-chevron">&#8250;</span>
+      </div>
+      ${showInput ? `<input type="text" class="mf-select" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Ketik metode mengajar sendiri..." value="${safeVal}" data-jg-metode-lainnya autocomplete="off" />` : ''}
+    </div>`;
+}
+
 function selectField(label, value, options, dataAttr, hint) {
   return `
     <div class="mf-field">
@@ -2269,7 +2288,7 @@ function renderJournalModule(moduleId, detail) {
           ${chipGroup(JAM_KE_LIST, f.jamKe, 'jg-jam')}
         </div>
 
-        ${selectField('Metode Mengajar', f.metode, METODE_LIST, 'jg-metode')}
+        ${metodeMengajarField(f.metode, f.metodeLainnya)}
 
         ${textareaField('Materi yang diajarkan', f.materi || 'Ketuk untuk mengisi materi pokok yang diajarkan...', 'jg-materi')}
 
@@ -3452,14 +3471,25 @@ function renderModuleForm(moduleId, crudKey) {
         html += '<label class="field-label">'+field.label+'</label><input type="text" class="field-input" data-module-field="'+field.key+'" data-form-key="'+crudKey+'" placeholder="'+field.label+'">';
       }
     } else if (field.options && field.options.length) {
-      html += `<label class="field-label">${field.label}</label><select class="field-select" data-module-field="${field.key}" data-form-key="${crudKey}"><option value="">Pilih ${field.label}</option>`;
-      field.options.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
+      var __isMetodeF = (field.key === 'metode' || /metode/i.test(field.label||''));
+      var __optsF = __isMetodeF ? field.options.concat(['Lainnya']) : field.options;
+      html += `<label class="field-label">${field.label}</label><select class="field-select" data-module-field="${field.key}" data-form-key="${crudKey}"${__isMetodeF ? ' data-metode-select="1"' : ''}><option value="">Pilih ${field.label}</option>`;
+      __optsF.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
       html += '</select>';
+      if (__isMetodeF) {
+        html += `<input type="text" class="field-input" data-metode-manual="1" data-form-key="${crudKey}" placeholder="Ketik metode sendiri..." style="display:none;margin-top:8px;">`;
+      }
     } else {
       var codeAttr = /nis|nisn|nomor|kode|barcode|id/i.test(field.key) ? ' data-qr-target="1"' : '';
       html += '<label class="field-label">'+field.label+'</label><input type="text" class="field-input"'+codeAttr+' data-module-field="'+field.key+'" data-form-key="'+crudKey+'" placeholder="'+field.label+'">';
     }
   });
+  if (moduleId === 'jurnal-kelas' && !__orderedFields.some(function(f){ return f.key === 'metode' || /metode/i.test(f.label||''); })) {
+    var __mkOpts = ['Diskusi','Ceramah','Praktik','Proyek','Demonstrasi','Tanya Jawab','Penugasan'];
+    html += `<label class="field-label">Metode</label><select class="field-select" data-module-field="metode" data-form-key="${crudKey}" data-metode-select="1"><option value="">Pilih Metode</option>`;
+    __mkOpts.forEach(function(option) { html += `<option value="${option}">${option}</option>`; });
+    html += `</select><input type="text" class="field-input" data-metode-manual="1" data-form-key="${crudKey}" placeholder="Ketik metode sendiri..." style="display:none;margin-top:8px;">`;
+  }
   html += `<button type="button" class="save-draft-btn" data-mobile-crud-create="${crudKey}" style="margin-top:12px">Simpan</button>`;
   // Jurnal Guru: tambahkan input PDF di form Supabase
   if (moduleId === 'jurnal-guru') {
@@ -4542,6 +4572,10 @@ function bindActions() {
       fields.forEach(function(field) {
         fieldPayload[field.dataset.moduleField] = String(field.value || '').trim();
       });
+      if (fieldPayload['metode'] === 'Lainnya') {
+        var __manMet = document.querySelector('[data-metode-manual][data-form-key="'+key+'"]');
+        fieldPayload['metode'] = __manMet ? String(__manMet.value||'').trim() : '';
+      }
       const schemaDef = (window.ZymataMobileSupabase && window.ZymataMobileSupabase.MODULE_FORM_SCHEMA && window.ZymataMobileSupabase.MODULE_FORM_SCHEMA[key]) || null;
       if (schemaDef && Array.isArray(schemaDef.fields)) {
         const missing = schemaDef.fields.filter(function(f){
@@ -4750,6 +4784,17 @@ function bindActions() {
   });
 
   document.addEventListener('change', (event) => {
+    // Metode: tampilkan input manual saat opsi "Lainnya" dipilih
+    const metSelEl = event.target.closest('select[data-metode-select]');
+    if (metSelEl) {
+      var __fk = metSelEl.getAttribute('data-form-key');
+      var __manEl = document.querySelector('[data-metode-manual][data-form-key="'+__fk+'"]');
+      if (__manEl) {
+        if (metSelEl.value === 'Lainnya') { __manEl.style.display = ''; try { __manEl.focus(); } catch(e){} }
+        else { __manEl.style.display = 'none'; __manEl.value = ''; }
+      }
+      return;
+    }
     // Jurnal Guru: input file PDF
     const jgPdfInput = event.target.closest('[data-jg-pdf-input]');
     if (jgPdfInput) {
@@ -4826,7 +4871,7 @@ function bindActions() {
       if (key === 'nf-semester') { getNilaiState().semester = val; render(); return; }
       if (key === 'nf-kkm') { getNilaiState().kkm = Number(val)||70; render(); return; }
       if (key === 'jg-mapel') { getJurnalGuruState().mapel = val; saveOnlyNoRender(); return; }
-      if (key === 'jg-metode') { getJurnalGuruState().metode = val; saveOnlyNoRender(); return; }
+      if (key === 'jg-metode') { const st = getJurnalGuruState(); if (val === 'Lainnya') { st.metodeLainnya = true; if (METODE_LIST.indexOf(st.metode) !== -1) st.metode = ''; saveOnlyNoRender(); render(); return; } st.metodeLainnya = false; st.metode = val; saveOnlyNoRender(); render(); return; }
       if (key === 'jk-mapel') { getJurnalKelasState().mapel = val; saveOnlyNoRender(); return; }
       if (key === 'catatan-kat') { getCatatanState().kategori = val; saveOnlyNoRender(); return; }
       if (key === 'peng-kat') { getPengState().kategori = val; saveOnlyNoRender(); return; }
@@ -4853,6 +4898,8 @@ function bindActions() {
   }, true);
 
   document.addEventListener('input', (event) => {
+    const metLainnyaEl = event.target.closest('[data-jg-metode-lainnya]');
+    if (metLainnyaEl) { getJurnalGuruState().metode = metLainnyaEl.value; saveOnlyNoRender(); return; }
     const ketEl = event.target.closest('[data-ag-keterangan]');
     if (ketEl) {
       appState.teacherAttendance.keterangan = ketEl.value;
@@ -5620,16 +5667,20 @@ animateContent();
 
   function allSiswa(){
     var out=[];
-    try{ Object.keys(SISWA_PER_KELAS||{}).forEach(function(k){ (SISWA_PER_KELAS[k]||[]).forEach(function(s){ out.push({ nis:String(s.nis||''), name:String(s.name||s.nama||'Siswa'), kelas:k }); }); }); }catch(e){}
+    try{ Object.keys(SISWA_PER_KELAS||{}).forEach(function(k){ (SISWA_PER_KELAS[k]||[]).forEach(function(s){ out.push({ id:String(s.id||s.siswa_id||''), nis:String(s.nis||''), name:String(s.name||s.nama||'Siswa'), kelas:k }); }); }); }catch(e){}
     return out;
   }
-  function findSiswa(nis){ nis=String(nis); var a=allSiswa(); for(var i=0;i<a.length;i++){ if(a[i].nis===nis) return a[i]; } return null; }
+  // Kunci identitas siswa: utamakan id unik, fallback ke nis. Nilai kosong DIABAIKAN
+  // agar siswa ber-NIS kosong tidak saling "nyangkut" (bug: input 1 siswa, yang lain ikut).
+  function _idsOf(o){ if(o==null) return []; if(typeof o==='object'){ return [String(o.id||o.siswa_id||''), String(o.nis||'')].filter(function(x){ return x!==''; }); } var v=String(o); return v===''?[]:[v]; }
+  function _sameStudent(a,b){ var A=_idsOf(a), B=_idsOf(b); for(var i=0;i<A.length;i++){ for(var j=0;j<B.length;j++){ if(A[i]===B[j]) return true; } } return false; }
+  function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } return null; }
 
   var ST = { halaqah:null, halaqahLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
 
   function halMembers(){ return Array.isArray(ST.halaqah)?ST.halaqah:[]; }
-  function inHalaqah(nis){ nis=String(nis); return halMembers().some(function(r){ return String(r.siswa_id||r.nis||'')===nis; }); }
-  function memberById(nis){ nis=String(nis); var m=halMembers(); for(var i=0;i<m.length;i++){ if(String(m[i].siswa_id||m[i].nis||'')===nis) return m[i]; } return null; }
+  function inHalaqah(x){ return halMembers().some(function(r){ return _sameStudent(r, x); }); }
+  function memberById(x){ var m=halMembers(); for(var i=0;i<m.length;i++){ if(_sameStudent(m[i], x)) return m[i]; } return null; }
 
   async function loadHalaqah(){
     if(ST.halaqahLoading) return;
@@ -5689,16 +5740,17 @@ animateContent();
         if(!raw){ showError('Kode QR kosong / tidak terbaca.'); return; }
         var hit=await agResolveStudent(raw);
         if(!hit){ showToast(agScanNotFoundMsg(raw),'error','&#9888;'); return; }
-        if(inHalaqah(hit.nis)){ showToast(hit.name+' sudah ada di halaqah','error','&#9888;'); return; }
+        if(inHalaqah(hit)){ showToast(hit.name+' sudah ada di halaqah','error','&#9888;'); return; }
         window.zHal.add(hit.nis);
       });
     },
-    add: async function(nis){
+    add: async function(key){
       var api=SB(); if(!api){ showToast('Supabase belum siap','error','&#9888;'); return; }
-      var s=findSiswa(nis); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
-      if(inHalaqah(s.nis)){ showToast('Sudah ada di halaqah','error','&#9888;'); return; }
+      var s=findSiswa(key); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
+      if(inHalaqah(s)){ showToast('Sudah ada di halaqah','error','&#9888;'); return; }
       if(!guruNip()){ showToast('Identitas guru belum termuat','error','&#9888;'); return; }
-      var body={ client_key:'default', siswa_id:s.nis, nis:s.nis, nama_siswa:s.name, kelas:s.kelas, golongan:(ST.addGolongan||''), guru_nip:guruNip(), guru_nama:guruNama(), updated_at:nowISO() };
+      var uid=String(s.id||s.nis||''); // id unik siswa; fallback nis bila id tak ada
+      var body={ client_key:'default', siswa_id:uid, nis:s.nis, nama_siswa:s.name, kelas:s.kelas, golongan:(ST.addGolongan||''), guru_nip:guruNip(), guru_nama:guruNama(), updated_at:nowISO() };
       var res=await api.insert('halaqah_tahfidz',body);
       if(res&&res.error){ showToast('Gagal menambah siswa','error','&#9888;'); return; }
       var row=(res&&res.data&&res.data[0])?res.data[0]:body;
@@ -5905,7 +5957,7 @@ animateContent();
       html += '</div>';
       if(!cand.length){ html += '<p class="ztf-empty">Belum ada data siswa di kelas '+esc(ST.addKelas||'-')+'.</p>'; }
       else {
-        html += cand.map(function(s){ var added=inHalaqah(s.nis); var act=added?'<span class="ztf-check">&#10003; Ditambahkan</span>':'<button class="ztf-btn ztf-btn-add" onclick="window.zHal.add(\''+esc(s.nis)+'\')">+ Tambah</button>'; return '<div class="ztf-row'+(added?' on':'')+'"><div><div class="ztf-name">'+esc(s.name)+'</div><div class="ztf-meta">'+esc(ST.addKelas)+' &middot; NIS '+esc(s.nis||'-')+'</div></div>'+act+'</div>'; }).join('');
+        html += cand.map(function(s){ var added=inHalaqah(s); var key=String(s.id||s.nis||''); var act=added?'<span class="ztf-check">&#10003; Ditambahkan</span>':'<button class="ztf-btn ztf-btn-add" onclick="window.zHal.add(\''+esc(key)+'\')">+ Tambah</button>'; return '<div class="ztf-row'+(added?' on':'')+'"><div><div class="ztf-name">'+esc(s.name)+'</div><div class="ztf-meta">'+esc(ST.addKelas)+' &middot; NIS '+esc(s.nis||'-')+'</div></div>'+act+'</div>'; }).join('');
       }
       html += '</div>';
 
