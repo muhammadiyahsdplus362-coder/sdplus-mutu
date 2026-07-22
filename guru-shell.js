@@ -5814,6 +5814,30 @@ animateContent();
 
   var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
 
+  // MULTI-SURAH: draft sekolah per kategori kini berupa ARRAY entri {surah,ayat,catatan}.
+  function draftEntries(kat){
+    var d=ST.mtfDraft[kat];
+    if(Array.isArray(d)) return d.length?d:[{}];
+    if(d&&typeof d==='object'&&(d.surah||d.ayat||d.catatan)) return [{surah:d.surah,ayat:d.ayat,catatan:d.catatan}];
+    return [{}];
+  }
+  // Simpan nilai input yang sedang diketik ke ST sebelum render ulang (agar tak hilang saat tambah/hapus surah).
+  function syncDraftFromDOM(){
+    try{
+      CATS_SEKOLAH.forEach(function(kat,c){
+        var entries=draftEntries(kat), arr=[];
+        for(var r=0;r<entries.length;r++){
+          var sEl=document.getElementById('ztf-mtf-surah-'+c+'-'+r);
+          var aEl=document.getElementById('ztf-mtf-ayat-'+c+'-'+r);
+          var cEl=document.getElementById('ztf-mtf-cat-'+c+'-'+r);
+          if(!sEl&&!aEl&&!cEl){ arr.push(entries[r]||{}); continue; }
+          arr.push({ surah:(sEl?sEl.value:''), ayat:(aEl?aEl.value:''), catatan:(cEl?cEl.value:'') });
+        }
+        ST.mtfDraft[kat]=arr.length?arr:[{}];
+      });
+    }catch(e){}
+  }
+
   function halMembers(){ return Array.isArray(ST.halaqah)?ST.halaqah:[]; }
   function inHalaqah(x){ return halMembers().some(function(r){ return _sameStudent(r, x); }); }
   function memberById(x){ var m=halMembers(); for(var i=0;i<m.length;i++){ if(_sameStudent(m[i], x)) return m[i]; } return null; }
@@ -5850,13 +5874,32 @@ animateContent();
     ST.mtfLoading=true;
     if(activeMtf()) render();
     try{
-      var api=SB(); var rows=[];
-      if(api){ var res=await api.select('mutabaah_tahfidz',{ eq:{ siswa_id:String(nis) }, limit:400 }); rows=(res&&res.data)?res.data:[]; }
+      var api=SB(); var rows=[], rwRows=[];
+      if(api){
+        var res=await api.select('mutabaah_tahfidz',{ eq:{ siswa_id:String(nis) }, limit:400 }); rows=(res&&res.data)?res.data:[];
+        // Ambil riwayat sekolah utk merekonstruksi MULTI-SURAH terakhir per kategori.
+        var resR=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, limit:300 }); rwRows=(resR&&resR.data)?resR.data:[];
+      }
       var ta=curTA(), sem=curSemester(), ds={}, dw={};
+      // Wali murid: tetap satu surah per kategori (read-only).
       rows.forEach(function(r){
         if(String(r.tahun_ajaran||'')!==ta||String(r.semester||'')!==sem) return;
-        var rec={ surah:r.surah_no, ayat:r.ayat, catatan:r.catatan, juz:r.juz, progres:r.progres };
-        if(String(r.konteks||'')==='wali_murid') dw[r.kategori]=rec; else if(String(r.konteks||'')==='sekolah') ds[r.kategori]=rec;
+        if(String(r.konteks||'')!=='wali_murid') return;
+        dw[r.kategori]={ surah:r.surah_no, ayat:r.ayat, catatan:r.catatan, juz:r.juz, progres:r.progres };
+      });
+      // Sekolah: kelompokkan riwayat per kategori lalu ambil batch tanggal TERAKHIR sbg draft (bisa banyak surah).
+      var byKat={};
+      rwRows.forEach(function(r){
+        if(String(r.tahun_ajaran||'')!==ta||String(r.semester||'')!==sem) return;
+        var kat=r.kategori||''; if(!kat) return;
+        var tg=String(r.tanggal||'').slice(0,10);
+        byKat[kat]=byKat[kat]||{};
+        byKat[kat][tg]=byKat[kat][tg]||[];
+        byKat[kat][tg].push({ surah:r.surah_no, ayat:r.ayat, catatan:r.catatan });
+      });
+      CATS_SEKOLAH.forEach(function(kat){
+        var days=byKat[kat]?Object.keys(byKat[kat]).sort():[];
+        if(days.length){ ds[kat]=byKat[kat][days[days.length-1]]; }
       });
       ST.mtfDraft=ds; ST.mtfWali=dw;
     }catch(e){ ST.mtfDraft={}; ST.mtfWali={}; }
@@ -5952,48 +5995,63 @@ animateContent();
     selectSiswa: function(nis){ ST.mtfSiswaId=String(nis||''); ST.mtfDraft={}; ST.mtfWali={}; ST.riwayat=null; ST.riwayatWali=null; ST.riwayatTgl=''; render(); if(ST.mtfSiswaId){ loadMtfForSiswa(ST.mtfSiswaId); loadRiwayat(ST.mtfSiswaId); } },
     toggleRiwayat: function(){ ST.riwayatOpen=!ST.riwayatOpen; render(); },
     setRiwayatTgl: function(v){ ST.riwayatTgl=String(v||''); render(); },
-    recalc: function(idx){
-      var sEl=document.getElementById('ztf-mtf-surah-'+idx), aEl=document.getElementById('ztf-mtf-ayat-'+idx), pEl=document.getElementById('ztf-mtf-prog-'+idx);
+    addSurah: function(c){ syncDraftFromDOM(); var kat=CATS_SEKOLAH[c]; if(!kat) return; var arr=draftEntries(kat).slice(); arr.push({}); ST.mtfDraft[kat]=arr; render(); },
+    delSurah: function(c,r){ syncDraftFromDOM(); var kat=CATS_SEKOLAH[c]; if(!kat) return; var arr=draftEntries(kat).slice(); arr.splice(r,1); if(!arr.length) arr=[{}]; ST.mtfDraft[kat]=arr; render(); },
+    recalc: function(c,r){
+      var sEl=document.getElementById('ztf-mtf-surah-'+c+'-'+r), aEl=document.getElementById('ztf-mtf-ayat-'+c+'-'+r), pEl=document.getElementById('ztf-mtf-prog-'+c+'-'+r);
       if(!sEl||!aEl||!pEl) return;
-      var r=computeProgres(sEl.value, aEl.value);
-      pEl.textContent = r.juz ? ('Juz '+r.juz+' - '+r.pct+'%') : 'Belum ada';
+      var rr=computeProgres(sEl.value, aEl.value);
+      pEl.textContent = rr.juz ? ('Juz '+rr.juz+' - '+rr.pct+'%') : 'Belum ada';
     },
     save: async function(){
       var api=SB(); if(!api){ showToast('Supabase belum siap','error','&#9888;'); return; }
       if(!ST.mtfSiswaId){ showToast('Pilih siswa dulu','error','&#9888;'); return; }
       var s=memberById(ST.mtfSiswaId); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
       var tglEl=document.getElementById('ztf-mtf-tgl'); var tgl=(tglEl&&tglEl.value)?tglEl.value:todayStr();
-      var ta=curTA(), sem=curSemester(), saved=0, failed=0, filled=0, logs=[];
+      syncDraftFromDOM(); // ambil semua input surah (multi) dari layar
+      var ta=curTA(), sem=curSemester(), saved=0, failed=0, filled=0, surahCount=0, logs=[];
       // Wajibkan kolom Ayat: kalau surah dipilih tapi ayat kosong/0, jangan simpan.
-      for(var vi=0;vi<CATS_SEKOLAH.length;vi++){
-        var vsEl=document.getElementById('ztf-mtf-surah-'+vi);
-        var vaEl=document.getElementById('ztf-mtf-ayat-'+vi);
-        var vSurah=parseInt(vsEl&&vsEl.value,10)||0;
-        var vAyat=parseInt(vaEl&&vaEl.value,10)||0;
-        if(vSurah && (!vAyat||vAyat<1)){
-          showToast('Isi jumlah ayat untuk '+CATS_SEKOLAH[vi]+' dulu.','error','&#9888;');
-          if(vaEl){ try{ vaEl.focus(); }catch(e){} }
-          return;
+      for(var c=0;c<CATS_SEKOLAH.length;c++){
+        var vkat=CATS_SEKOLAH[c]; var ventries=ST.mtfDraft[vkat]||[];
+        for(var vr=0;vr<ventries.length;vr++){
+          var vSurah=parseInt(ventries[vr].surah,10)||0;
+          var vAyat=parseInt(ventries[vr].ayat,10)||0;
+          if(vSurah && (!vAyat||vAyat<1)){
+            showToast('Isi jumlah ayat untuk '+vkat+' (surah '+(vr+1)+') dulu.','error','&#9888;');
+            var vaEl=document.getElementById('ztf-mtf-ayat-'+c+'-'+vr);
+            if(vaEl){ try{ vaEl.focus(); }catch(e){} }
+            return;
+          }
         }
       }
       for(var i=0;i<CATS_SEKOLAH.length;i++){
         var kat=CATS_SEKOLAH[i];
-        var sEl=document.getElementById('ztf-mtf-surah-'+i), aEl=document.getElementById('ztf-mtf-ayat-'+i), cEl=document.getElementById('ztf-mtf-cat-'+i);
-        var surah_no=parseInt(sEl&&sEl.value,10)||0;
-        if(!surah_no) continue;
+        var entries=(ST.mtfDraft[kat]||[]).filter(function(e){ return (parseInt(e.surah,10)||0)>0; });
+        if(!entries.length) continue;
         filled++;
-        var ayat=parseInt(aEl&&aEl.value,10)||0;
-        var prog=computeProgres(surah_no,ayat);
-        var snama=(SURAH[surah_no-1]?SURAH[surah_no-1][0]:'');
-        var cat=(cEl?cEl.value:'')||'';
-        var body={ client_key:'default', konteks:'sekolah', siswa_id:String(ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:prog.pct, catatan:cat, tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
+        var parts=[], combinedCat=[], last=null;
+        for(var r=0;r<entries.length;r++){
+          var e=entries[r];
+          var surah_no=parseInt(e.surah,10)||0;
+          var ayat=parseInt(e.ayat,10)||0;
+          var prog=computeProgres(surah_no,ayat);
+          var snama=(SURAH[surah_no-1]?SURAH[surah_no-1][0]:'');
+          var cat=(e.catatan||'');
+          surahCount++;
+          // Riwayat: satu baris per surah (lengkap).
+          logs.push({ client_key:'default', konteks:'sekolah', siswa_id:String(ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:prog.pct, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:guruNip(), guru_nama:guruNama() });
+          parts.push(snama+' ('+ayat+' ayat)');
+          if(cat) combinedCat.push(snama+': '+cat);
+          last={ surah_no:surah_no, ayat:ayat, prog:prog };
+        }
+        // Ringkasan: satu baris per kategori dgn nama surah digabung.
+        var body={ client_key:'default', konteks:'sekolah', siswa_id:String(ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:last.prog.pct, catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
         var res=await api.upsert('mutabaah_tahfidz',body,'client_key,siswa_id,konteks,kategori,tahun_ajaran,semester');
         if(res&&res.error) failed++; else saved++;
-        logs.push({ client_key:'default', konteks:'sekolah', siswa_id:String(ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:prog.pct, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:guruNip(), guru_nama:guruNama() });
       }
       if(!filled){ showToast('Isi minimal 1 kategori','error','&#9888;'); return; }
       if(logs.length){ try{ await api.insert('mutabaah_tahfidz_riwayat', logs); }catch(e){} }
-      if(saved){ showToast('Tersimpan '+saved+' kategori','success','&#10003;'); loadMtfForSiswa(ST.mtfSiswaId); loadRiwayat(ST.mtfSiswaId); }
+      if(saved){ showToast('Tersimpan '+saved+' kategori \u00b7 '+surahCount+' surah','success','&#10003;'); loadMtfForSiswa(ST.mtfSiswaId); loadRiwayat(ST.mtfSiswaId); }
       else showToast('Gagal menyimpan','error','&#9888;');
     }
   };
@@ -6062,11 +6120,15 @@ animateContent();
 
   function ringkasanProgresHtml(){
     var cards=CATS_SEKOLAH.map(function(kat){
-      var d=ST.mtfDraft[kat]||{};
-      var p=computeProgres(d.surah||0, d.ayat||0);
-      var surahTxt=d.surah?((SURAH[d.surah-1]?SURAH[d.surah-1][0]:'')+' : ayat '+(d.ayat!=null?d.ayat:'-')):'Belum ada';
+      var entries=draftEntries(kat).filter(function(e){ return (parseInt(e.surah,10)||0)>0; });
+      if(!entries.length){
+        return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+'</span><span class="ztf-sum-prog">-</span></div><div class="ztf-sum-surah">Belum ada</div></div>';
+      }
+      var last=entries[entries.length-1];
+      var p=computeProgres(last.surah||0, last.ayat||0);
       var progTxt=p.juz?('Juz '+p.juz+' &middot; '+p.pct+'%'):'-';
-      return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+'</span><span class="ztf-sum-prog">'+progTxt+'</span></div><div class="ztf-sum-surah">'+esc(surahTxt)+'</div></div>';
+      var names=entries.map(function(e){ var sn=(SURAH[e.surah-1]?SURAH[e.surah-1][0]:''); return sn+' : ayat '+(e.ayat!=null&&e.ayat!==''?e.ayat:'-'); }).join(' &middot; ');
+      return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+' <span class="ztf-chip" style="margin-left:4px">'+entries.length+' surah</span></span><span class="ztf-sum-prog">'+progTxt+'</span></div><div class="ztf-sum-surah">'+esc(names)+'</div></div>';
     }).join('');
     return '<div class="ztf-panel"><span class="ztf-lbl">Ringkasan progres tersimpan</span><div class="ztf-sum-grid">'+cards+'</div></div>';
   }
@@ -6217,17 +6279,27 @@ animateContent();
     } else {
       html += ringkasanProgresHtml();
       html += '<div class="ztf-cat-card"><span class="ztf-lbl">Tanggal setoran</span><input class="ztf-inp" type="date" id="ztf-mtf-tgl" value="'+todayStr()+'"></div>';
-      html += CATS_SEKOLAH.map(function(kat,idx){
-        var d=ST.mtfDraft[kat]||{};
-        var prog=computeProgres(d.surah||0, d.ayat||0);
-        var progTxt=prog.juz?('Juz '+prog.juz+' &middot; '+prog.pct+'%'):'Belum ada';
+      html += CATS_SEKOLAH.map(function(kat,c){
+        var entries=draftEntries(kat);
+        var rowsHtml=entries.map(function(d,r){
+          var prog=computeProgres(d.surah||0, d.ayat||0);
+          var progTxt=prog.juz?('Juz '+prog.juz+' &middot; '+prog.pct+'%'):'Belum ada';
+          var delBtn=(entries.length>1)?('<button class="ztf-btn ztf-btn-del" style="margin-top:8px" onclick="window.zMtf.delSurah('+c+','+r+')">Hapus surah</button>'):'';
+          var sep=(r>0)?'border-top:1px dashed rgba(148,163,184,.18);padding-top:10px;margin-top:10px':'';
+          return '<div class="ztf-surah-row" style="'+sep+'">'
+            +'<div class="ztf-cat-head" style="margin-bottom:6px"><span class="ztf-meta">Surah '+(r+1)+'</span><span class="ztf-prog" id="ztf-mtf-prog-'+c+'-'+r+'">'+progTxt+'</span></div>'
+            +'<div class="ztf-grid2">'
+            +'<select class="ztf-sel" id="ztf-mtf-surah-'+c+'-'+r+'" onchange="window.zMtf.recalc('+c+','+r+')">'+surahOptions(d.surah||'')+'</select>'
+            +'<input class="ztf-inp" id="ztf-mtf-ayat-'+c+'-'+r+'" type="number" min="1" placeholder="Ayat (wajib)" value="'+(d.ayat?esc(d.ayat):'')+'" oninput="window.zMtf.recalc('+c+','+r+')">'
+            +'</div>'
+            +'<input class="ztf-inp" id="ztf-mtf-cat-'+c+'-'+r+'" style="margin-top:8px" placeholder="Catatan (opsional)" value="'+esc(d.catatan||'')+'">'
+            +delBtn
+            +'</div>';
+        }).join('');
         return '<div class="ztf-cat-card">'
-          +'<div class="ztf-cat-head"><span class="ztf-cat-title">'+esc(kat)+'</span><span class="ztf-prog" id="ztf-mtf-prog-'+idx+'">'+progTxt+'</span></div>'
-          +'<div class="ztf-grid2">'
-          +'<select class="ztf-sel" id="ztf-mtf-surah-'+idx+'" onchange="window.zMtf.recalc('+idx+')">'+surahOptions(d.surah||'')+'</select>'
-          +'<input class="ztf-inp" id="ztf-mtf-ayat-'+idx+'" type="number" min="1" placeholder="Ayat (wajib)" value="'+(d.ayat?esc(d.ayat):'')+'" oninput="window.zMtf.recalc('+idx+')">'
-          +'</div>'
-          +'<input class="ztf-inp" id="ztf-mtf-cat-'+idx+'" style="margin-top:8px" placeholder="Catatan (opsional)" value="'+esc(d.catatan||'')+'">'
+          +'<div class="ztf-cat-head"><span class="ztf-cat-title">'+esc(kat)+'</span></div>'
+          +rowsHtml
+          +'<button class="ztf-btn ztf-btn-add" style="margin-top:10px;width:100%" onclick="window.zMtf.addSurah('+c+')">+ Tambah Surah</button>'
           +'</div>';
       }).join('');
       html += '<button class="ztf-btn ztf-btn-save" onclick="window.zMtf.save()">Simpan Mutaba\'ah</button>';
