@@ -6551,3 +6551,68 @@ animateContent();
   }
 
   /* Klik: tab kategori / upload / hapus (delegation dipasang sekali) */
+  document.addEventListener('click', function(e){
+    var el=e.target; if(!el||!el.closest) return;
+    var tab=el.closest('[data-pp-jenis]');
+    if(tab){ var j=tab.getAttribute('data-pp-jenis'); if(j&&j!==PP.jenis){ PP.jenis=j; PP.rows=null; loadPP(); if(typeof render==='function') render(); } return; }
+    var upBtn=el.closest('[data-pp-action="upload"]'); if(upBtn){ e.preventDefault(); doUpload(); return; }
+    var delBtn=el.closest('[data-pp-del]');
+    if(delBtn){ e.preventDefault(); var id=delBtn.getAttribute('data-pp-del'); var key=delBtn.getAttribute('data-pp-key')||''; if(window.confirm('Hapus berkas ini? File juga akan dihapus dari penyimpanan.')) doDelete(id,key); return; }
+  }, false);
+
+  /* Simpan isian form (keterangan/kelas/mapel) ke state agar tidak hilang saat re-render */
+  document.addEventListener('input', function(e){
+    var el=e.target; if(!el||!el.id) return;
+    if(el.id==='ppg-ket') PP.draftKet=el.value||'';
+    else if(el.id==='ppg-kelas') PP.draftKelas=el.value||'';
+    else if(el.id==='ppg-mapel') PP.draftMapel=el.value||'';
+  }, false);
+  document.addEventListener('change', function(e){
+    var el=e.target; if(!el||!el.id) return;
+    if(el.id==='ppg-ket') PP.draftKet=el.value||'';
+    else if(el.id==='ppg-kelas') PP.draftKelas=el.value||'';
+    else if(el.id==='ppg-mapel') PP.draftMapel=el.value||'';
+  }, false);
+  /* Change: tampilkan nama berkas terpilih tanpa re-render */
+  document.addEventListener('change', function(e){
+    var el=e.target; if(!el||el.id!=='ppg-file') return;
+    var f=el.files&&el.files[0];
+    var lbl=document.getElementById('ppg-fname');
+    if(!lbl) return;
+    PP.pendingFile=f||null;
+    if(f){ lbl.textContent=f.name; lbl.classList.add('has'); }
+    else { lbl.textContent='Ketuk untuk memilih dari perangkat'; lbl.classList.remove('has'); }
+  }, false);
+
+  window.renderPerangkatPembelajaranGuruModule = function(detail){
+    var head=styleTag()+headerCard(detail);
+    var wrapOpen='<section class="section"><div class="ppg-wrap">'+tabsHtml()+formHtml();
+    var wrapClose='</div></section>';
+    if(PP.rows===null){ if(!PP.loading) loadPP(); return head+wrapOpen+'<div class="ppg-empty">Memuat berkas\u2026</div>'+wrapClose; }
+    var rows=PP.rows||[];
+    var body;
+    if(!rows.length){
+      body='<div class="ppg-note">Kategori: <b>'+esc(catLabel(PP.jenis))+'</b></div><div class="ppg-empty">Belum ada berkas di kategori ini. Upload berkas pertama Anda di atas.</div>';
+    } else {
+      body='<div class="ppg-note">'+rows.length+' berkas &middot; kategori <b>'+esc(catLabel(PP.jenis))+'</b></div>';
+      body+=rows.map(function(r){
+        var own=String(r.guru_id||'')===guruId();
+        var meta=[]; var _kel=ppGetKelas(r); if((PP.jenis==='media-pembelajaran'||PP.jenis==='modul-ajar'||PP.jenis==='prota-promes')&&_kel) meta.push('Kelas '+esc(_kel)); if(r.tanggal) meta.push(esc(String(r.tanggal))); if(r.guru_nama) meta.push(esc(r.guru_nama)); var sz=fmtSize(r.file_size); if(sz) meta.push(sz);
+        var del=own?('<button type="button" class="ppg-del" data-pp-del="'+esc(r.id)+'" data-pp-key="'+esc(r.file_key||'')+'">Hapus</button>'):'';
+        var open=r.file_url?('<a class="ppg-open" href="'+esc(ppViewUrl(ppFixUrl(r.file_url),r))+'" target="_blank" rel="noopener">Buka berkas</a>'):'<span class="ppg-open">Tanpa berkas</span>';
+        return '<div class="ppg-card"><div class="ppg-top"><span class="ppg-ic">\u25AB</span><div class="ppg-info">'
+          +'<div class="ppg-name">'+esc(r.file_name||ppCleanKet(r)||'Berkas')+'</div>'
+          +'<div class="ppg-meta">'+meta.join(' &middot; ')+'</div>'
+          +(ppCleanKet(r)?('<div class="ppg-ket">'+esc(ppCleanKet(r))+'</div>'):'')
+          +'</div></div>'
+          +'<div class="ppg-actions">'+open+del+'</div></div>';
+      }).join('');
+    }
+    return head+wrapOpen+body+wrapClose;
+  };
+
+  if(typeof modulePlaceholders!=='undefined'){
+    modulePlaceholders['perangkat-pembelajaran']={ eyebrow:'Akademik', title:'Perangkat Pembelajaran', subtitle:'Prota, modul ajar & media pembelajaran.', stats:[], focus:[] };
+  }
+  console.log('[Zymata Guru] Modul Perangkat Pembelajaran v1 aktif');
+})();
