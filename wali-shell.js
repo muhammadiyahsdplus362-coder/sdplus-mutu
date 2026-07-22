@@ -573,6 +573,17 @@ function getFinanceStatusLabel(s) {
 function getFinanceTone(s) {
   return s==='lunas'?'green':s==='terlambat'?'red':'orange';
 }
+// Baris SPP dihitung LUNAS bila: (a) status mengandung 'lunas' (bukan 'belum'),
+// ATAU (b) baris tsb adalah bukti pembayaran/pemasukan (dari tabel keuangan /
+// spp_pembayaran) yang ditandai jenis 'Masuk'/'Setor'/'Bayar'. Ini mencegah
+// catatan pembayaran SPP tampil sebagai tagihan "Belum" di aplikasi wali.
+function waliSppLunas(t) {
+  if (!t) return false;
+  var st = String(t.status || '');
+  if (/lunas/i.test(st) && !/belum/i.test(st)) return true;
+  if (/masuk|setor|bayar/i.test(String(t.jenis || ''))) return true;
+  return false;
+}
 
 function syncWaliFinanceState(){
   var anakNama = appState.childName || '';
@@ -583,7 +594,7 @@ function syncWaliFinanceState(){
   if(!tabData.length){ try { var rawTab = localStorage.getItem('sdplus_tabungan_v1'); if(rawTab){ var arrTb = JSON.parse(rawTab); if(Array.isArray(arrTb)) tabData = arrTb; } } catch(e){} }
   var tagihanAnak = tagihanList.filter(function(t){ var nm=String(t.nama_siswa||t.nama||'').toLowerCase(); return !anakNama || (nm && nm.indexOf(anakNama.toLowerCase())>=0); });
   var tabAnak = tabData.filter(function(t){ var nm=String(t.nama_siswa||t.namaSiswa||t.nama||'').toLowerCase(); return !anakNama || (nm && nm.indexOf(anakNama.toLowerCase())>=0); });
-  var belumBayar = tagihanAnak.filter(function(t){ var st=String(t.status||''); return !(/lunas/i.test(st) && !/belum/i.test(st)); });
+  var belumBayar = tagihanAnak.filter(function(t){ return !waliSppLunas(t); });
   var totalTagihan = belumBayar.reduce(function(s,t){ return s + Number(t.nominal||0); }, 0);
   var setorTab = 0, tarikTab = 0;
   tabAnak.forEach(function(t){ var deb=Number(t.debit||0), kre=Number(t.kredit||0); if(deb||kre){ setorTab+=deb; tarikTab+=kre; } else { var n=Number(t.nominal||0); if(/setor|masuk/i.test(t.jenis||'')) setorTab+=n; else tarikTab+=n; } });
@@ -1824,7 +1835,7 @@ function renderModule(moduleId) {
     var setorUmum=0, tarikUmum=0;
     tabUmumAnak.forEach(function(t){ if(t.debit||t.kredit){ setorUmum+=Number(t.debit||0); tarikUmum+=Number(t.kredit||0); } else { var n=Number(t.nominal||0); if(/setor|masuk/i.test(t.jenis||'')) setorUmum+=n; else tarikUmum+=n; } });
     var saldoUmum = setorUmum - tarikUmum;
-    var belumBayar = tagihanAnak.filter(function(t){ var st=String(t.status||''); return !(/lunas/i.test(st) && !/belum/i.test(st)); });
+    var belumBayar = tagihanAnak.filter(function(t){ return !waliSppLunas(t); });
     var totalTagihan = belumBayar.reduce(function(s,t){ return s + Number(t.nominal||0); }, 0);
     var setorTab = 0, tarikTab = 0;
     tabAnak.forEach(function(t){ if(t.debit||t.kredit){ setorTab+=Number(t.debit||0); tarikTab+=Number(t.kredit||0); } else { var n=Number(t.nominal||0); if(/setor|masuk/i.test(t.jenis||'')) setorTab+=n; else tarikTab+=n; } });
@@ -1840,7 +1851,7 @@ function renderModule(moduleId) {
           </div>
         </section>
         ${renderWaliRiwayatList('Tagihan SPP', tagihanAnak, function(t){ return t.tanggal || t.jatuh_tempo || ''; }, function(t){
-          var lunas = (function(){ var st=String(t.status||''); return /lunas/i.test(st) && !/belum/i.test(st); })();
+          var lunas = waliSppLunas(t);
           return { time: t.tanggal || t.jatuh_tempo || '-', title: (t.keterangan || t.deskripsi || 'SPP') + ' - Rp' + Number(t.nominal||0).toLocaleString('id-ID'), meta: (appState.childName || '') + (t.kelas ? ' \u00b7 ' + t.kelas : '') + (t.tahun_ajaran ? ' \u00b7 ' + t.tahun_ajaran : ''), status: lunas ? 'Lunas' : 'Belum', tone: lunas ? 'green' : 'orange' };
         }, 'Belum ada tagihan', 'Tagihan SPP akan muncul setelah diinput oleh sekolah.')}
       `;
@@ -1889,7 +1900,7 @@ function renderModule(moduleId) {
         </div>
       </section>
       <div id="fin-sec-spp">${renderWaliRiwayatList('Tagihan SPP', tagihanAnak, function(t){ return t.tanggal || t.jatuh_tempo || ''; }, function(t){
-        var lunas = (function(){ var st=String(t.status||''); return /lunas/i.test(st) && !/belum/i.test(st); })();
+        var lunas = waliSppLunas(t);
         return {
           time: t.tanggal || t.jatuh_tempo || '-',
           title: (t.keterangan || t.deskripsi || 'SPP') + ' - Rp' + Number(t.nominal||0).toLocaleString('id-ID'),
