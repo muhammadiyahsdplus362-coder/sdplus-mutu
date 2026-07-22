@@ -3263,7 +3263,9 @@ animateWaliContent();
       for(var j=0;j<CATS_SEKOLAH.length;j++){
         var k2=CATS_SEKOLAH[j]; var r2=WT.sekolah[k2];
         if(!r2){ items+='<div class="zwtf-ro"><div class="zwtf-ro-head"><span class="zwtf-ro-title">'+esc(k2)+'</span><span class="zwtf-chip" style="background:#e2e8f0;color:#64748b">Belum diisi</span></div><div class="zwtf-ro-meta">Guru belum mengisi setoran untuk kategori ini.</div></div>'; continue; }
-        var judul=(r2.surah_nama||('Surah '+r2.surah))+(r2.ayat?' : ayat '+r2.ayat:'');
+        var _snm=String(r2.surah_nama||'');
+        // Format baru (multi-surah) sudah memuat "(X ayat)" di nama, jangan tambah ayat ganda.
+        var judul=_snm?(/ayat/.test(_snm)?_snm:(_snm+(r2.ayat?' : ayat '+r2.ayat:''))):('Surah '+r2.surah+(r2.ayat?' : ayat '+r2.ayat:''));
         var meta=(r2.juz?'Juz '+r2.juz+' \u00b7 '+(r2.progres||0)+'%':'')+(r2.catatan?(' \u00b7 '+esc(r2.catatan)):'');
         items+='<div class="zwtf-ro"><div class="zwtf-ro-head"><span class="zwtf-ro-title">'+esc(k2)+'</span><span class="zwtf-chip">'+(r2.progres||0)+'%</span></div><div class="zwtf-ro-meta"><b>'+esc(judul)+'</b></div>'+(meta?'<div class="zwtf-ro-meta">'+meta+'</div>':'')+'</div>';
       }
