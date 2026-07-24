@@ -5808,7 +5808,7 @@ animateContent();
   }
   // Kunci identitas siswa: utamakan id unik, fallback ke nis. Nilai kosong DIABAIKAN
   // agar siswa ber-NIS kosong tidak saling "nyangkut" (bug: input 1 siswa, yang lain ikut).
-  function _idsOf(o){ if(o==null) return []; if(typeof o==='object'){ return [String(o.id||o.siswa_id||''), String(o.nis||'')].filter(function(x){ return x!==''; }); } var v=String(o); return v===''?[]:[v]; }
+  function _idsOf(o){ if(o==null) return []; if(typeof o==='object'){ var ids = (o.siswa_id!=null && String(o.siswa_id)!=='') ? [String(o.siswa_id), String(o.nis||'')] : [String(o.id||''), String(o.nis||'')]; return ids.filter(function(x){ return x!==''; }); } var v=String(o); return v===''?[]:[v]; }
   function _sameStudent(a,b){ var A=_idsOf(a), B=_idsOf(b); for(var i=0;i<A.length;i++){ for(var j=0;j<B.length;j++){ if(A[i]===B[j]) return true; } } return false; }
   function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } var r=rosterAll(); for(var j=0;j<r.length;j++){ if(_sameStudent(r[j], key)) return r[j]; } return null; }
 
