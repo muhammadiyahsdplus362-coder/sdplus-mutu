@@ -1383,6 +1383,14 @@ function tabEsc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){ 
 function tabState(){ if(!appState.tabInput) appState.tabInput={ kelas:'', jenis:'Setoran', metode:'Tunai', tanggal:'', loadingSaldo:false, saldoMap:null, rows:null, loadedKelas:'' }; return appState.tabInput; }
 function tabKelasOptions(){ var wk=appState.teacherClass; if(wk && wk!=='Kelas belum terhubung') return [wk]; return (appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList : (typeof KELAS_LIST!=='undefined'?KELAS_LIST:[]); }
 function tabDelta(r){ var d=Number(r.debit||0)||0,k=Number(r.kredit||0)||0; if(!d&&!k){ var nn=Number(r.nominal||0)||0; if(/tarik|keluar|penarikan/i.test(r.jenis||'')) k=nn; else d=nn; } return {d:d,k:k}; }
+function tabNormKelas(v){ return String(v==null?'':v).toLowerCase().replace(/[^a-z0-9]/g,''); }
+function tabNormNama(v){ return String(v==null?'':v).toLowerCase().replace(/\s+/g,' ').trim(); }
+// FIX SALDO BEDA DENGAN WEB ADMIN:
+// Sebelumnya saldo HP hanya menjumlahkan baris yang kolom "kelas"-nya persis sama dan
+// hanya dicocokkan lewat NIS. Baris yang diinput dari web admin sering menyimpan
+// siswa_id / nama saja, atau format kelas berbeda (IV-B vs IV B), sehingga tidak ikut
+// terhitung dan saldo di HP tampak lebih kecil. Sekarang baris dicocokkan lewat
+// siswa_id, NIS, ATAU nama siswa di kelas tersebut.
 async function loadTabunganData(kelas){
   var S=tabState(); S.loadingSaldo=true; S.saldoMap=null; S.rows=null; S.loadedKelas=kelas;
   if(appState.activeTab==='module:tabungan') render();
@@ -1390,12 +1398,66 @@ async function loadTabunganData(kelas){
   try{
     var api=window.ZymataMobileSupabase;
     if(api&&api.select&&kelas){
-      var res=await api.select('tabungan_siswa',{ eq:{ kelas:kelas }, limit:5000 });
-      if(res&&!res.error&&Array.isArray(res.data)) rows=res.data;
-      rows.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) map['nis:'+kn]=(map['nis:'+kn]||0)+delta; if(ks) map['sid:'+ks]=(map['sid:'+ks]||0)+delta; });
+      var all=[];
+      try{ var resAll=await api.select('tabungan_siswa',{ limit:5000 }); if(resAll&&!resAll.error&&Array.isArray(resAll.data)) all=resAll.data; }catch(e1){}
+      if(!all.length){ try{ var res=await api.select('tabungan_siswa',{ eq:{ kelas:kelas }, limit:5000 }); if(res&&!res.error&&Array.isArray(res.data)) all=res.data; }catch(e2){} }
+
+      var murid=(typeof getSiswaByKelas==='function')?(getSiswaByKelas(kelas)||[]):[];
+      var byNis={}, bySid={}, byNama={};
+      murid.forEach(function(m){
+        var n=String(m.nis||''); if(n){ byNis[n]=1; byNis['#'+tabDigits(n)]=1; }
+        var i2=String(m.id||m.siswa_id||''); if(i2) bySid[i2]=1;
+        var nm=tabNormNama(m.name||m.nama||m.nama_siswa||''); if(nm) byNama[nm]=1;
+      });
+      var kelasNorm=tabNormKelas(kelas);
+
+      rows=all.filter(function(r){
+        if(kelasNorm && tabNormKelas(r.kelas)===kelasNorm) return true;
+        if(r.nis && (byNis[String(r.nis)] || byNis['#'+tabDigits(r.nis)])) return true;
+        if(r.siswa_id && bySid[String(r.siswa_id)]) return true;
+        var nm=tabNormNama(r.nama_siswa||r.nama||'');
+        if(nm && byNama[nm]) return true;
+        return false;
+      });
+
+      rows.forEach(function(r){
+        var x=tabDelta(r); var delta=x.d-x.k;
+        var kn=String(r.nis||''), ks=String(r.siswa_id||''), nm=tabNormNama(r.nama_siswa||r.nama||'');
+        if(kn) map['nis:'+kn]=(map['nis:'+kn]||0)+delta;
+        if(ks) map['sid:'+ks]=(map['sid:'+ks]||0)+delta;
+        if(nm) map['nm:'+nm]=(map['nm:'+nm]||0)+delta;
+      });
     }
   }catch(e){}
-  if(S.loadedKelas===kelas){ S.saldoMap=map; S.rows=rows; S.loadingSaldo=false; if(appState.activeTab==='module:tabungan') render(); }
+  if(S.loadedKelas===kelas){ S.saldoMap=map; S.rows=rows; S.loadedAt=Date.now(); S.loadingSaldo=false; if(appState.activeTab==='module:tabungan') render(); }
+}
+function tabDigits(v){ return String(v==null?'':v).replace(/\D/g,''); }
+// Satu baris transaksi dianggap milik siswa ini kalau salah satu identitasnya cocok:
+// siswa_id, NIS (dibandingkan angka saja), atau nama siswa.
+function tabRowMilikSiswa(r, s){
+  if(!r || !s) return false;
+  var rsid=String(r.siswa_id==null?'':r.siswa_id), ssid=String(s.id||s.siswa_id||'');
+  if(rsid && ssid && rsid===ssid) return true;
+  var rnis=tabDigits(r.nis), snis=tabDigits(s.nis);
+  if(rnis && snis && rnis===snis) return true;
+  var rnm=tabNormNama(r.nama_siswa||r.nama||''), snm=tabNormNama(s.name||s.nama||s.nama_siswa||'');
+  if(rnm && snm && rnm===snm) return true;
+  return false;
+}
+// PENTING: saldo dihitung dengan MENJUMLAHKAN SEMUA baris milik siswa (union),
+// bukan mengambil satu "ember" identitas saja. Sebelumnya, kalau sebagian baris
+// menyimpan NIS dan sebagian lagi hanya siswa_id, yang terhitung cuma salah satu
+// kelompok sehingga saldo di HP lebih kecil daripada web admin.
+function tabSaldoSiswa(S, s){
+  if(!S || !Array.isArray(S.rows)) return null;
+  var total=0, found=false;
+  S.rows.forEach(function(r){
+    if(!tabRowMilikSiswa(r, s)) return;
+    var x=tabDelta(r);
+    total += x.d - x.k;
+    found = true;
+  });
+  return found ? total : null;
 }
 function renderTabunganInputGuruModule(moduleId, detail){
   var S=tabState();
@@ -1403,7 +1465,7 @@ function renderTabunganInputGuruModule(moduleId, detail){
   if(!S.kelas && kelasOpts.length===1) S.kelas=kelasOpts[0];
   if(!S.tanggal) S.tanggal=agTodayISO();
   var siswa=S.kelas?(getSiswaByKelas(S.kelas)||[]):[];
-  if(S.kelas && S.loadedKelas!==S.kelas && !S.loadingSaldo){ loadTabunganData(S.kelas); }
+  if(S.kelas && !S.loadingSaldo && (S.loadedKelas!==S.kelas || !(Date.now()-(S.loadedAt||0) < 45000))){ loadTabunganData(S.kelas); }
   var camSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5a2 2 0 0 1 2-2h1.6l1-1.5a1 1 0 0 1 .8-.4h5.2a1 1 0 0 1 .8.4l1 1.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/></svg>';
   var html='<style id="tabin-style">'
     +'.tabin-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}'
@@ -1431,7 +1493,7 @@ function renderTabunganInputGuruModule(moduleId, detail){
     html+='</div></section>';
   }
   html+='<section class="section"><article class="input-panel">';
-  html+='<div class="tabin-head"><span class="card-label">Input Tabungan</span><button type="button" class="tabin-scan" onclick="window.zTab.scan()" title="Scan QR / Barcode" aria-label="Scan QR / Barcode">'+camSvg+'</button></div>';
+  html+='<div class="tabin-head"><span class="card-label">Input Tabungan</span><button type="button" class="tabin-reload" onclick="window.zTab.reloadSaldo()" title="Muat ulang saldo" aria-label="Muat ulang saldo" style="margin-left:auto;margin-right:8px;border:1px solid rgba(148,163,184,.28);background:rgba(148,163,184,.10);color:#cbd5e1;border-radius:12px;height:42px;padding:0 14px;font-size:12px;font-weight:600;cursor:pointer">Muat ulang</button><button type="button" class="tabin-scan" onclick="window.zTab.scan()" title="Scan QR / Barcode" aria-label="Scan QR / Barcode">'+camSvg+'</button></div>';
   html+='<div class="tabin-ctrl">';
   html+='<div><label class="field-label">Kelas</label><select class="field-select" onchange="window.zTab.setKelas(this.value)"><option value="">Pilih kelas</option>'+kelasOpts.map(function(k){ return '<option value="'+tabEsc(k)+'"'+(k===S.kelas?' selected':'')+'>'+tabEsc(k)+'</option>'; }).join('')+'</select></div>';
   html+='<div><label class="field-label">Tanggal</label><input type="date" id="tabin-tgl" class="field-input" value="'+tabEsc(S.tanggal)+'" onchange="window.zTab.setField(\'tanggal\',this.value)"></div>';
@@ -1447,7 +1509,7 @@ function renderTabunganInputGuruModule(moduleId, detail){
     html+='<div class="tabin-list">';
     html+=siswa.map(function(s){
       var nis=String(s.nis||'');
-      var saldo=(S.saldoMap && typeof S.saldoMap['nis:'+nis]==='number')?S.saldoMap['nis:'+nis]:null;
+      var saldo=tabSaldoSiswa(S, s);
       var saldoTxt=S.loadingSaldo?'\u2026':('Rp '+Number(saldo||0).toLocaleString('id-ID'));
       return '<div class="tabin-row">'
         +'<div class="tabin-si"><div class="tabin-nm">'+tabEsc(s.name||'Siswa')+'</div><div class="tabin-mt">NIS '+tabEsc(nis||'-')+' &middot; Saldo <b>'+saldoTxt+'</b></div></div>'
@@ -1467,6 +1529,7 @@ function renderTabunganInputGuruModule(moduleId, detail){
 }
 window.zTab = {
   setKelas: function(v){ var S=tabState(); S.kelas=String(v||''); S.saldoMap=null; S.rows=null; S.loadedKelas=''; render(); },
+  reloadSaldo: function(){ var S=tabState(); if(!S.kelas){ showToast('Pilih kelas dulu.','error','&#9888;'); return; } S.saldoMap=null; S.rows=null; S.loadedKelas=''; S.loadedAt=0; render(); },
   setField: function(f,v){ var S=tabState(); if(f==='jenis') S.jenis=String(v||'Setoran'); else if(f==='metode') S.metode=String(v||'Tunai'); else if(f==='tanggal') S.tanggal=String(v||''); },
   fmtNom: function(el){ if(!el) return; var d=String(el.value||'').replace(/\D/g,''); el.value = d ? Number(d).toLocaleString('id-ID') : ''; },
   scan: function(){
@@ -1523,7 +1586,7 @@ window.zTab = {
     var msg=(isSetor?'Setoran':'Penarikan')+': '+saved+' tersimpan'+(failed?(', '+failed+' gagal'):'');
     if(skipped.length) msg+=' \u00b7 saldo kurang: '+skipped.join(', ');
     showToast(msg,(failed||skipped.length)?'error':'success',(failed||skipped.length)?'&#9888;':'&#10003;');
-    S.saldoMap=null; S.rows=null; S.loadedKelas=''; render();
+    S.saldoMap=null; S.rows=null; S.loadedKelas=''; S.loadedAt=0; render();
     try{ await hydrateGuruFromSupabase(); }catch(e){}
     }finally{ S._saving=false; try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=false; b.removeAttribute('aria-disabled'); }); }catch(_e){} }
   }
@@ -1747,13 +1810,19 @@ function renderStudentAttendanceModule(detail) {
 function getTodayAbsensiMap(kelas) {
   var all = (appState.supabaseModules && appState.supabaseModules.absensi) ? appState.supabaseModules.absensi : [];
   var today = agTodayISO();
+  var idx = agSiswaIndex();
   var map = {};
   (Array.isArray(all) ? all : []).forEach(function(r){
     if (!r) return;
     var tg = absensiRowDate(r);
     var rk = String(r.kelas || r.kelas_id || '').trim();
-    var nis = String(r.siswa_id || r.nis || r.nis_siswa || r.siswa_nis || '').trim();
-    if (tg === today && nis && (!kelas || rk === kelas)) map[nis] = r;
+    var rawNis = String(r.siswa_id || r.nis || r.nis_siswa || r.siswa_nis || '').trim();
+    if (tg !== today || !rawNis || (kelas && rk !== kelas)) return;
+    // Normalkan kunci ke NIS pendek supaya cocok dengan student.nis
+    // (baris server sering menyimpan siswa_id sebagai ID panjang).
+    var rs = agResolveAbsensiSiswa(r, idx);
+    var key = (rs && rs.nis) ? rs.nis : rawNis;
+    map[key] = r;
   });
   return map;
 }
@@ -1780,6 +1849,35 @@ function agInjectAbsensiOptimistic(kelas, statusByNis) {
       arr.push({ kelas: kelas, tanggal: today, siswa_id: String(nis), status: st, __optimistic: true });
     });
   } catch (e) {}
+}
+
+// FIX: gabungkan RIWAYAT absensi lama (cache/optimistik) dengan data baru dari server,
+// supaya riwayat tidak hilang saat reload ketika loadGuruModuleData tidak mengembalikan
+// seluruh riwayat. Baris server (non-optimistik) menang untuk (kelas + siswa + tanggal) yang sama.
+function agAbsensiKey(r) {
+  var k = String((r && (r.kelas || r.kelas_id)) || '').trim();
+  var n = String((r && (r.siswa_id || r.nis || r.nis_siswa || r.siswa_nis)) || '').trim();
+  var t = absensiRowDate(r);
+  return k + '|' + n + '|' + t;
+}
+function agMergeAbsensiRiwayat(serverArr, prevArr) {
+  var out = [], seen = {};
+  // 1) Baris kanonik dari server lebih dulu (menang).
+  (Array.isArray(serverArr) ? serverArr : []).forEach(function(r){
+    if (!r) return;
+    var key = agAbsensiKey(r);
+    if (seen[key]) return;
+    seen[key] = true; out.push(r);
+  });
+  // 2) Tambahkan riwayat lama yang belum ada di server (riwayat tanggal sebelumnya
+  //    atau baris optimistik yang belum tersinkron) agar tidak hilang.
+  (Array.isArray(prevArr) ? prevArr : []).forEach(function(r){
+    if (!r) return;
+    var key = agAbsensiKey(r);
+    if (seen[key]) return;
+    seen[key] = true; out.push(r);
+  });
+  return out;
 }
 
 // FIX: tarik ulang absensi kelas terpilih dari Supabase saat guru mengganti kelas,
@@ -2567,6 +2665,72 @@ function renderPelanggaranModule(detail) {
   `;
 }
 
+// ── Auto-isi POIN pelanggaran sesuai kategori (A-J) di form HP ────────────────
+// Mengikuti Kartu Pelanggaran Siswa: A-G = 5 poin, H-J = 10 poin.
+var PELANGGARAN_POIN_KODE = { A:5, B:5, C:5, D:5, E:5, F:5, G:5, H:10, I:10, J:10 };
+var PELANGGARAN_POIN_NAMA = {
+  'terlambat ke sekolah':5, 'keluar kelas tanpa izin':5, 'atribut tidak lengkap':5,
+  'tidak membawa perlengkapan belajar':5, 'buang sampah sembarangan':5, 'makan dan minum berdiri':5,
+  'makan di dalam kelas':5, 'berbicara kotor':10, 'perundungan / membully':10,
+  'perundungan/membully':10, 'bertengkar / berkelahi':10, 'bertengkar/berkelahi':10
+};
+function poinDariPelanggaran(val){
+  var s = String(val || '').trim();
+  if (!s) return null;
+  var m = s.match(/^\s*([A-J])\b/i);
+  if (m && PELANGGARAN_POIN_KODE[m[1].toUpperCase()] != null) return PELANGGARAN_POIN_KODE[m[1].toUpperCase()];
+  var nm = s.replace(/^\s*[A-J]\s*[-\u2013.:)]\s*/i, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (PELANGGARAN_POIN_NAMA[nm] != null) return PELANGGARAN_POIN_NAMA[nm];
+  for (var key in PELANGGARAN_POIN_NAMA) {
+    if (PELANGGARAN_POIN_NAMA.hasOwnProperty(key) && nm.indexOf(key) > -1) return PELANGGARAN_POIN_NAMA[key];
+  }
+  return null;
+}
+function findPelanggaranPoinField(){
+  var cands = document.querySelectorAll('[data-form-key="guru:pelanggaran"]');
+  for (var i = 0; i < cands.length; i++) {
+    var el = cands[i];
+    var key = String(el.getAttribute('data-module-field') || '').toLowerCase();
+    var ph = String(el.getAttribute('placeholder') || '').toLowerCase();
+    if (key.indexOf('poin') > -1 || ph.indexOf('poin') > -1) return el;
+  }
+  return null;
+}
+function isPelanggaranNamaSelect(el){
+  if (!el || el.tagName !== 'SELECT') return false;
+  if (el.getAttribute('data-form-key') !== 'guru:pelanggaran') return false;
+  var key = String(el.getAttribute('data-module-field') || '').toLowerCase();
+  if (/poin|kelas|status|siswa|tanggal/.test(key)) return false;
+  if (poinDariPelanggaran(el.value) != null) return true;
+  return Array.prototype.some.call(el.options || [], function(o){ return poinDariPelanggaran(o.value || o.textContent) != null; });
+}
+function agHandlePelanggaranPoinChange(e){
+  var el = e && e.target;
+  if (!isPelanggaranNamaSelect(el)) return;
+  var poin = poinDariPelanggaran(el.value);
+  if (poin == null) return;
+  var poinEl = findPelanggaranPoinField();
+  if (poinEl) poinEl.value = poin;
+}
+// Isi otomatis saat form pertama tampil (kategori default sudah terpilih tapi poin kosong)
+function agAutofillPelanggaranPoin(){
+  try {
+    var cands = document.querySelectorAll('select[data-form-key="guru:pelanggaran"]');
+    for (var i = 0; i < cands.length; i++) {
+      if (isPelanggaranNamaSelect(cands[i])) {
+        var poin = poinDariPelanggaran(cands[i].value);
+        var poinEl = findPelanggaranPoinField();
+        if (poin != null && poinEl && !String(poinEl.value || '').trim()) poinEl.value = poin;
+        break;
+      }
+    }
+  } catch (_e) {}
+}
+if (!window.__ZYMATA_HP_PELANGGARAN_POIN__) {
+  window.__ZYMATA_HP_PELANGGARAN_POIN__ = true;
+  document.addEventListener('change', agHandlePelanggaranPoinChange, true);
+}
+
 function renderEkstrakulikulerModule(detail) {
   const ekskulItems = [];
   return `
@@ -2639,8 +2803,15 @@ function rebuildSiswaFromRows(rows) {
     var nama = String(row.nama || row.nama_siswa || row.name || 'Siswa').trim();
     var nis = String(row.nis || row.nisn || '').trim() || String(row.id || '').trim();
     var sid = String(row.id || row.siswa_id || '').trim();
+    // Kumpulkan SEMUA kemungkinan nomor identitas siswa agar baris absensi lama
+    // (yang siswa_id-nya bisa NISN / ID lama) tetap bisa dipetakan ke nama.
+    var _keys = [];
+    [row.nis, row.nisn, row.id, row.siswa_id, row.no_induk, row.nomor_induk, row.nomor, row.nis_siswa, nis, sid].forEach(function(v){
+      var s = String(v == null ? '' : v).trim();
+      if (s && _keys.indexOf(s) === -1) _keys.push(s);
+    });
     if (!SISWA_PER_KELAS[kelas]) SISWA_PER_KELAS[kelas] = [];
-    SISWA_PER_KELAS[kelas].push({ nis: nis, name: nama, id: sid });
+    SISWA_PER_KELAS[kelas].push({ nis: nis, name: nama, id: sid, nisn: String(row.nisn || '').trim(), _keys: _keys });
   });
   if (typeof KELAS_LIST !== 'undefined' && Array.isArray(KELAS_LIST)) {
     KELAS_LIST.length = 0;
@@ -3192,6 +3363,65 @@ function guruRowDate(row){
   return String(d || '').slice(0, 10);
 }
 
+// Buka PDF di HP: link data: sering diblokir webview, jadi konversi ke Blob + object URL agar bisa dibuka.
+function guruOpenPdf(url){
+  try {
+    url = String(url || '');
+    if (!url) return;
+    if (/^data:/i.test(url)) {
+      var ci = url.indexOf(',');
+      var meta = url.slice(0, ci);
+      var dataPart = url.slice(ci + 1);
+      var mime = (meta.match(/data:([^;]+)/) || [])[1] || 'application/pdf';
+      var isB64 = /;base64/i.test(meta);
+      var bytes;
+      if (isB64) {
+        var bin = atob(dataPart);
+        bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      } else {
+        var txt = decodeURIComponent(dataPart);
+        bytes = new Uint8Array(txt.length);
+        for (var j = 0; j < txt.length; j++) bytes[j] = txt.charCodeAt(j);
+      }
+      var blob = new Blob([bytes], { type: mime });
+      var blobUrl = URL.createObjectURL(blob);
+      var w = window.open(blobUrl, '_blank');
+      if (!w) {
+        var a = document.createElement('a');
+        a.href = blobUrl; a.target = '_blank'; a.rel = 'noopener'; a.download = 'jurnal.pdf';
+        document.body.appendChild(a); a.click();
+        setTimeout(function(){ try { document.body.removeChild(a); } catch(e){} }, 200);
+      }
+      setTimeout(function(){ try { URL.revokeObjectURL(blobUrl); } catch(e){} }, 60000);
+    } else {
+      window.open(url, '_blank');
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Tidak bisa membuka PDF: ' + (e && e.message ? e.message : e), 'error', '&#9888;');
+  }
+}
+
+// Ambil link PDF dari satu baris jurnal (mendukung pdf_files array/JSON string/objek {url}, pdf_url, pdf_data).
+function guruPdfLinks(row){
+  if (!row) return '';
+  var urls = [];
+  var pf = row.pdf_files;
+  if (pf) {
+    if (typeof pf === 'string') { try { pf = JSON.parse(pf); } catch(e) { pf = [pf]; } }
+    var arr = Array.isArray(pf) ? pf : [pf];
+    arr.forEach(function(u){
+      var url = (u && typeof u === 'object') ? (u.url || u.pdf_url || u.publicUrl || u.href || u.path) : u;
+      if (url) urls.push(String(url));
+    });
+  }
+  if (!urls.length && row.pdf_url) urls.push(String(row.pdf_url));
+  if (!urls.length && row.pdf_data) urls.push(String(row.pdf_data));
+  if (!urls.length) return '';
+  return '<div class="field-chip-row">' + urls.map(function(u, i){
+    return '<a class="field-chip" data-pdf-open="1" href="' + u.replace(/"/g,'&quot;') + '" target="_blank" rel="noopener">&#128196; Lihat PDF' + (urls.length > 1 ? (' ' + (i+1)) : '') + '</a>';
+  }).join('') + '</div>';
+}
 function renderModuleRiwayat(moduleId, list, detail, crudKey){
   var helper = window.ZymataMobileSupabase;
   var title = (detail && detail.title) ? detail.title : 'Data';
@@ -3204,7 +3434,7 @@ function renderModuleRiwayat(moduleId, list, detail, crudKey){
   function entryHtml(row){
     var item = helper && helper.normalizeItem ? helper.normalizeItem(row, title) : { time:'Data', title:title, meta:'Supabase', status:'Aktif', tone:'blue' };
     var actions = row.__mobileCrud && row.id ? '<div class="field-chip-row"><button type="button" class="field-chip" data-mobile-crud-update="' + row.id + '" data-mobile-crud-key="' + crudKey + '">Tandai selesai</button><button type="button" class="field-chip" data-mobile-crud-delete="' + row.id + '" data-mobile-crud-key="' + crudKey + '">Hapus</button></div>' : '';
-    return scheduleCard(item) + actions;
+    return scheduleCard(item) + guruPdfLinks(row) + actions;
   }
   var bodyHtml;
   if (!rows.length && !noDate.length) {
@@ -3242,6 +3472,34 @@ function renderModuleRiwayat(moduleId, list, detail, crudKey){
     + '</section>';
 }
 
+// Index siswa lintas kelas: cocokkan lewat SEMUA nomor identitas (NIS, NISN, id, dll).
+function agSiswaIndex(){
+  var byKey = {};
+  function reg(v, s){ var kk = String(v == null ? '' : v).trim(); if (kk && !byKey[kk]) byKey[kk] = s; }
+  Object.keys(SISWA_PER_KELAS).forEach(function(k){
+    (SISWA_PER_KELAS[k] || []).forEach(function(s){
+      if (!s) return;
+      var keys = (Array.isArray(s._keys) && s._keys.length) ? s._keys : [s.nis, s.id, s.nisn];
+      keys.forEach(function(v){ reg(v, s); });
+    });
+  });
+  return { byKey: byKey, byNis: byKey, byId: byKey };
+}
+// Resolusi nama + NIS untuk satu baris absensi (mendukung baris lama: siswa_id bisa ID panjang / NISN & tanpa nama).
+function agResolveAbsensiSiswa(r, idx){
+  var cand = [r.siswa_id, r.nis, r.nis_siswa, r.siswa_nis, r.id, r.nisn]
+    .map(function(v){ return String(v == null ? '' : v).trim(); })
+    .filter(Boolean);
+  var found = null;
+  for (var i = 0; i < cand.length && !found; i++) {
+    found = (idx.byKey && idx.byKey[cand[i]]) || null;
+  }
+  var nama = String(r.nama_siswa || r.nama || '').trim();
+  if (!nama && found) nama = found.name;
+  var nis = found ? String(found.nis).trim() : (cand[0] || '');
+  if (!nama) nama = nis || 'Siswa';
+  return { nama: nama, nis: nis };
+}
 function renderRiwayatAbsenBody(kelas){
   var all = (appState.supabaseModules && appState.supabaseModules.absensi) ? appState.supabaseModules.absensi : [];
   var rows = all.filter(function(r){
@@ -3269,11 +3527,11 @@ function renderRiwayatAbsenBody(kelas){
   html += '</select><span class="mf-chevron">&#8250;</span></div>';
   html += '<p class="riwayat-absen-count">' + rowsTgl.length + ' siswa tercatat \u00b7 ' + sumH + ' hadir</p>';
   html += '<div class="riwayat-absen-list">';
+  var _si = agSiswaIndex();
   rowsTgl.forEach(function(r){
-    var nis = String(r.siswa_id || r.nis || '').trim();
-    var nama = r.nama_siswa || r.nama || '';
-    if (!nama && nis) { (SISWA_PER_KELAS[kelas] || []).some(function(s){ if (String(s.nis) === nis) { nama = s.name; return true; } return false; }); }
-    if (!nama) nama = nis || 'Siswa';
+    var _rs = agResolveAbsensiSiswa(r, _si);
+    var nama = _rs.nama;
+    var nis = _rs.nis;
     var st = String(r.status || '').trim();
     var tone = toneClass[st] || 'h';
     html += '<article class="riwayat-row">'
@@ -3824,6 +4082,28 @@ function renderFloating() {
 }
 
 // Helper: konversi dataUrl ke File object untuk upload ke Supabase
+// Upload PDF jurnal ke storage R2 (bucket 'dokumen') lewat edge function r2-upload-url,
+// SAMA seperti fitur Perangkat Pembelajaran yang filenya bisa dibuka. Menghasilkan URL http
+// asli (https://cdn.zymata.my.id/...) yang bisa dibuka di web & HP, berbeda dgn data:base64
+// yang diblokir browser/webview sehingga halaman jadi kosong/error.
+async function zGuruUploadPdfToR2(file, folder) {
+  var api = window.ZymataMobileSupabase || window.db;
+  var c = (api && typeof api.getClient === 'function') ? api.getClient() : null;
+  if (!c || !c.functions || typeof c.functions.invoke !== 'function') throw new Error('client/functions tidak tersedia');
+  var BUCKET = 'dokumen';
+  var R2_PUBLIC_BASE = 'https://cdn.zymata.my.id';
+  var safe = String((file && file.name) || 'jurnal.pdf').replace(/[^a-z0-9_.-]+/gi, '_');
+  var id = 'jg' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  var path = (folder || 'jurnal-guru') + '/' + new Date().toISOString().slice(0, 10) + '/' + id + '-' + safe;
+  var key = BUCKET + '/' + path;
+  var fd = new FormData();
+  fd.append('file', file); fd.append('key', key); fd.append('bucket', BUCKET); fd.append('path', path);
+  var up = await c.functions.invoke('r2-upload-url', { body: fd });
+  if (up && up.error) throw new Error((up.error && up.error.message) || 'upload gagal');
+  var url = (up && up.data && up.data.url) || (R2_PUBLIC_BASE + '/' + String(key).split('/').map(encodeURIComponent).join('/'));
+  url = String(url).replace(/^https?:\/\/pub-49fe6ea9488240aeb39b45dd5c83d344\.r2\.dev/i, R2_PUBLIC_BASE);
+  return url;
+}
 function dataUrlToFile(dataUrl, fileName) {
   var arr = dataUrl.split(',');
   var mime = arr[0].match(/:(.*?);/)[1];
@@ -3884,6 +4164,7 @@ function renderContent() {
   if (contentEl) contentEl.classList.remove('zchat-active');
   if (appState.activeTab.startsWith('module:')) {
     contentEl.innerHTML = renderModulePlaceholder(appState.activeTab.replace('module:', ''));
+    if (appState.activeTab === 'module:pelanggaran') { try { agAutofillPelanggaranPoin(); } catch (_e) {} }
     return;
   }
   const renderers = {
@@ -3916,6 +4197,7 @@ function navigateTo(nextTab, opts = {}) {
   const changed = appState.activeTab !== nextTab || appState.showAnnouncements;
   appState.showAnnouncements = false;
   appState.activeTab = nextTab;
+  window.__zGuruEditTs = 0; // reset penjaga edit form saat pindah tab agar refresh normal lagi
   render();
   if (changed) animateContent();
   if (!opts.skipHistory && window.history && window.history.pushState) {
@@ -4036,6 +4318,30 @@ function bindActions() {
       const nextTab = tabButton.dataset.tab;
       if (tabMeta[nextTab] && (appState.activeTab !== nextTab || appState.showAnnouncements)) {
         navigateTo(nextTab);
+      }
+      return;
+    }
+
+    // Buka PDF jurnal (data:/http) lewat Blob agar bisa dibuka di webview HP.
+    const pdfOpenEl = event.target.closest('[data-pdf-open]');
+    if (pdfOpenEl) {
+      event.preventDefault();
+      guruOpenPdf(pdfOpenEl.getAttribute('href'));
+      return;
+    }
+
+    // Hapus satu file PDF dari lampiran (tanpa render ulang seluruh form).
+    const pdfRemoveEl = event.target.closest('[data-jg-pdf-remove]');
+    if (pdfRemoveEl) {
+      var _ri = parseInt(pdfRemoveEl.getAttribute('data-jg-pdf-remove'), 10);
+      var _fr = getJurnalGuruState();
+      if (_fr.pdfFiles && _ri >= 0 && _ri < _fr.pdfFiles.length) {
+        _fr.pdfFiles.splice(_ri, 1);
+        var _lhr = (_fr.pdfFiles || []).map(function (file, idx) {
+          return '<div class="jf-pdf-item"><div class="jf-pdf-item-icon">&#128196;</div><div class="jf-pdf-item-info"><strong>' + file.name + '</strong><small>' + (file.size / 1024).toFixed(0) + ' KB</small></div><button type="button" class="jf-pdf-item-remove" data-jg-pdf-remove="' + idx + '" aria-label="Hapus file">&times;</button></div>';
+        }).join('');
+        var _lsr = document.querySelectorAll('[data-jg-pdf-list]');
+        for (var _kr = 0; _kr < _lsr.length; _kr++) _lsr[_kr].innerHTML = _lhr;
       }
       return;
     }
@@ -4735,30 +5041,84 @@ function bindActions() {
         var pdfFiles = pdfFileInput && pdfFileInput.files && pdfFileInput.files.length ? Array.from(pdfFileInput.files) : [];
         // Cek juga dari state lokal (yang sudah dipilih sebelumnya)
         var jgState = getJurnalGuruState();
+        var pdfDataUrls = [];
         if (jgState.pdfFiles && jgState.pdfFiles.length) {
           // Sudah ada di state lokal, konversi dataUrl ke Blob
           jgState.pdfFiles.forEach(function(pf){
             if (pf.dataUrl) {
+              pdfDataUrls.push(pf.dataUrl);
               try { pdfFiles.push(dataUrlToFile(pf.dataUrl, pf.name)); } catch(e) {}
             }
           });
         }
-        if (pdfFiles.length && window.ZymataMobileSupabase && window.ZymataMobileSupabase.uploadPdfFile) {
+        if (pdfFiles.length) {
           var uploadedUrls = [];
-          for (var pi = 0; pi < pdfFiles.length; pi++) {
+          var _pdfFolder = String(appState.activeTab || '').indexOf('jurnal-kelas') !== -1 ? 'jurnal-kelas' : 'jurnal-guru';
+          // UTAMA: upload ke storage R2 (URL http asli, bisa dibuka di web & HP) -
+          // mekanisme sama dgn Perangkat Pembelajaran yang filenya terbukti bisa dibuka.
+          for (var pr = 0; pr < pdfFiles.length; pr++) {
             try {
-              var upRes = await window.ZymataMobileSupabase.uploadPdfFile(pdfFiles[pi], 'jurnal-guru');
-              uploadedUrls.push(upRes.url);
-            } catch(uploadErr) {
-              console.warn('Upload PDF gagal:', uploadErr);
-              showToast('Upload PDF gagal: ' + (uploadErr.message || 'error'), 'error', '⚠');
+              var _r2url = await zGuruUploadPdfToR2(pdfFiles[pr], _pdfFolder);
+              if (_r2url) uploadedUrls.push(_r2url);
+            } catch (r2err) {
+              console.warn('[JurnalPDF] Upload R2 gagal:', r2err && r2err.message ? r2err.message : r2err);
             }
           }
-          if (uploadedUrls.length) payload.pdf_files = uploadedUrls;
+          // Cadangan: fungsi upload bawaan HP (kalau tersedia).
+          if (!uploadedUrls.length) {
+            var canUpload = window.ZymataMobileSupabase && window.ZymataMobileSupabase.uploadPdfFile;
+            if (canUpload) {
+              for (var pi = 0; pi < pdfFiles.length; pi++) {
+                try {
+                  var upRes = await window.ZymataMobileSupabase.uploadPdfFile(pdfFiles[pi], 'jurnal-guru');
+                  if (upRes && upRes.url) uploadedUrls.push(upRes.url);
+                } catch(uploadErr) {
+                  console.warn('Upload PDF gagal:', uploadErr);
+                }
+              }
+            }
+          }
+          // Fallback terakhir: base64 data URL (tersimpan, tapi sulit dibuka di sebagian perangkat).
+          if (!uploadedUrls.length && pdfDataUrls.length) {
+            uploadedUrls = pdfDataUrls.slice();
+          }
+          if (uploadedUrls.length) {
+            payload.pdf_files = uploadedUrls;
+            // Pengaman: tulis juga lewat jalur fields (yang terbukti tersimpan seperti materi/kegiatan)
+            // agar peluang masuk ke kolom pdf_files maksimal, apa pun cara insert bawaannya.
+            try { if (payload.fields && typeof payload.fields === 'object') payload.fields.pdf_files = uploadedUrls; } catch(e){}
+            showToast(uploadedUrls.length + ' PDF dilampirkan', 'success', '&#128196;');
+          }
+          else showToast('PDF gagal diproses, coba pilih ulang filenya', 'error', '&#9888;');
         }
         const saved = await window.ZymataMobileSupabase.createSpecificOrFallback(key, payload);
+        // [PDF FIX] Fungsi simpan bawaan sering membuang kolom pdf_files. Tulis langsung ke baris
+        // yang baru tersimpan lewat client Supabase mentah, melewati pemetaan bawaan.
+        try {
+          var _pdfVals = (typeof uploadedUrls !== 'undefined' && uploadedUrls && uploadedUrls.length) ? uploadedUrls : null;
+          var _isJurnal = String(appState.activeTab || '').indexOf('jurnal') !== -1;
+          if (_pdfVals && _isJurnal && window.ZymataMobileSupabase && typeof window.ZymataMobileSupabase.getClient === 'function') {
+            var _tbl = String(appState.activeTab || '').indexOf('jurnal-kelas') !== -1 ? 'jurnal_kelas' : 'jurnal_guru';
+            var _cli = window.ZymataMobileSupabase.getClient();
+            if (_cli && typeof _cli.from === 'function') {
+              var _rowId = saved && (saved.id || (saved.data && (saved.data.id || (Array.isArray(saved.data) && saved.data[0] && saved.data[0].id))));
+              if (!_rowId) {
+                var _gn = (payload.__guru && payload.__guru.nama) || appState.teacherName || '';
+                var _sel = await _cli.from(_tbl).select('id').eq('guru_nama', _gn).order('created_at', { ascending: false }).limit(1);
+                if (_sel && !_sel.error && Array.isArray(_sel.data) && _sel.data.length) _rowId = _sel.data[0].id;
+              }
+              if (_rowId) {
+                var _u = await _cli.from(_tbl).update({ pdf_files: _pdfVals }).eq('id', _rowId).select();
+                if (_u && _u.error) { console.warn('[JurnalPDF] gagal tulis pdf_files:', _u.error.message || _u.error); showToast('PDF gagal disinkron ke web: ' + (_u.error.message || 'error'), 'error', '&#9888;'); }
+                else { console.log('[JurnalPDF] pdf_files tersimpan ke', _tbl, _rowId); }
+              } else { console.warn('[JurnalPDF] tidak menemukan id baris untuk tulis pdf_files'); }
+            }
+          }
+        } catch (ePdf) { console.warn('[JurnalPDF] error tulis pdf_files:', ePdf); }
         if (input) input.value = '';
         fields.forEach(function(field) { field.value = ''; });
+        // Bersihkan lampiran PDF agar tidak ikut ke jurnal berikutnya.
+        try { if (jgState) jgState.pdfFiles = []; var _pl = document.querySelector('[data-jg-pdf-list]'); if (_pl) _pl.innerHTML = ''; } catch(e) {}
         showToast('Data berhasil disimpan', 'success', '&#10003;');
         await hydrateGuruFromSupabase();
       } catch (error) { showError(error && error.message ? error.message : 'Gagal menyimpan data.'); }
@@ -4964,7 +5324,17 @@ function bindActions() {
         }
         if (added) {
           setTimeout(function () {
-            render();
+            // Update HANYA daftar PDF, jangan render() ulang seluruh form agar kolom yang sudah diisi tidak ke-reset.
+            try {
+              var f3 = getJurnalGuruState();
+              var listHtml = (f3.pdfFiles || []).map(function (file, idx) {
+                return '<div class="jf-pdf-item"><div class="jf-pdf-item-icon">&#128196;</div>'
+                  + '<div class="jf-pdf-item-info"><strong>' + file.name + '</strong><small>' + (file.size / 1024).toFixed(0) + ' KB</small></div>'
+                  + '<button type="button" class="jf-pdf-item-remove" data-jg-pdf-remove="' + idx + '" aria-label="Hapus file">&times;</button></div>';
+              }).join('');
+              var lists = document.querySelectorAll('[data-jg-pdf-list]');
+              for (var li = 0; li < lists.length; li++) lists[li].innerHTML = listHtml;
+            } catch (e) {}
             showToast(added + ' file PDF ditambahkan', 'success', '&#10003;');
           }, 300);
         }
@@ -5675,7 +6045,34 @@ async function hydrateGuruFromSupabase() {
         if (_allSiswa && !_allSiswa.error && Array.isArray(_allSiswa.data)) rebuildSiswaFromRows(_allSiswa.data);
       } catch (_eAll) {}
     }
+    // Simpan riwayat absensi yang sudah ada (dari cache lokal / optimistik) SEBELUM ditimpa.
+    var _prevAbsensiRiwayat = (appState.supabaseModules && Array.isArray(appState.supabaseModules.absensi)) ? appState.supabaseModules.absensi.slice() : [];
     if (modulesData) appState.supabaseModules = dedupeModules(modulesData);
+    // FIX: cegah RIWAYAT absensi hilang saat reload. loadGuruModuleData kadang tidak
+    // mengembalikan seluruh riwayat absensi, jadi gabungkan riwayat lama dengan data baru.
+    appState.supabaseModules = appState.supabaseModules || {};
+    appState.supabaseModules.absensi = agMergeAbsensiRiwayat(appState.supabaseModules.absensi, _prevAbsensiRiwayat);
+    // [PDF FIX] loadGuruModuleData bawaan bisa membuang kolom pdf_files. Ambil pdf_files langsung
+    // dari Supabase lalu tempelkan ke item jurnal berdasarkan id, agar PDF tampil di role guru.
+    try {
+      if (window.ZymataMobileSupabase && typeof window.ZymataMobileSupabase.getClient === 'function') {
+        var _cliH = window.ZymataMobileSupabase.getClient();
+        var _jurnalArr = (appState.supabaseModules && Array.isArray(appState.supabaseModules.jurnal)) ? appState.supabaseModules.jurnal : null;
+        if (_cliH && typeof _cliH.from === 'function' && _jurnalArr && _jurnalArr.length) {
+          var _pdfMap = {};
+          var _pdfTbls = ['jurnal_guru', 'jurnal_kelas'];
+          for (var _pti = 0; _pti < _pdfTbls.length; _pti++) {
+            try {
+              var _pres = await _cliH.from(_pdfTbls[_pti]).select('id,pdf_files').order('created_at', { ascending: false }).limit(800);
+              if (_pres && !_pres.error && Array.isArray(_pres.data)) {
+                _pres.data.forEach(function(r){ if (r && r.id != null && r.pdf_files) _pdfMap[String(r.id)] = r.pdf_files; });
+              }
+            } catch(e){}
+          }
+          _jurnalArr.forEach(function(it){ if (it && it.id != null && !it.pdf_files && _pdfMap[String(it.id)]) it.pdf_files = _pdfMap[String(it.id)]; });
+        }
+      }
+    } catch(eH){ console.warn('[JurnalPDF] gagal enrich pdf_files:', eH); }
     syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
     if (kelasUtama && appState.supabaseModules && appState.supabaseModules.absensi) {
       appState.attendanceDone = Object.keys(getTodayAbsensiMap(kelasUtama)).length;
@@ -5708,6 +6105,7 @@ animateContent();
   var _busy = false, _last = Date.now();
   function refreshNow(){
     if(window.__qrScannerOpen) return; // jangan re-render saat kamera scanner terbuka
+    if(window.__zGuruEditTs && (Date.now() - window.__zGuruEditTs < 120000)) return; // jangan render saat user sedang mengisi form (kolom bisa hilang)
     if(_busy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
     _busy = true; _last = Date.now();
@@ -5727,6 +6125,17 @@ animateContent();
     }
   } catch(_){}
   window.zGuruRefresh = refreshNow;
+  // Tandai "sedang mengisi form" agar auto-refresh tidak menghapus kolom yang belum disimpan.
+  function _markEditing(){ window.__zGuruEditTs = Date.now(); }
+  document.addEventListener('focusin', function(e){
+    if(e.target && e.target.closest && e.target.closest('[data-module-field],.field-input,.field-textarea,.field-select,[data-jg-pdf-input]')) _markEditing();
+  }, true);
+  document.addEventListener('input', function(e){
+    if(e.target && e.target.closest && e.target.closest('[data-module-field],.field-input,.field-textarea,.field-select')) _markEditing();
+  }, true);
+  document.addEventListener('click', function(e){
+    if(e.target && e.target.closest && e.target.closest('.jf-pdf-pick-btn,label[for="jg-pdf-input"],[data-jg-pdf-input]')) _markEditing();
+  }, true);
 })();
 
 
@@ -5773,9 +6182,32 @@ animateContent();
   for (var j=0;j<JUZ_START.length;j++){ JABS[j+1] = absIndex(JUZ_START[j][0], JUZ_START[j][1]); }
   function juzEndAbs(jz){ return jz<30 ? (JABS[jz+1]-1) : TOTAL_AYAT; }
   function juzOf(s,a){ var x=absIndex(s,a); for(var z=30;z>=1;z--){ if(x>=JABS[z]) return z; } return 1; }
+  // ===== URUTAN HAFALAN SEKOLAH =====
+  // Alurnya: Juz 30 (mulai An-Naba) -> Juz 29 -> lalu Juz 1 sampai 28.
+  // JUZ_ORDER dipakai untuk urutan pilihan surah dan untuk menghitung progres,
+  // supaya siswa yang baru di Juz 30 dihitung sebagai tahap awal (ke-1 dari 30).
+  var JUZ_ORDER = [30,29].concat((function(){ var a=[]; for(var z=1;z<=28;z++) a.push(z); return a; })());
+  function juzSeq(jz){ var i=JUZ_ORDER.indexOf(parseInt(jz,10)); return i<0?0:(i+1); }
+  // Daftar nomor surah per juz mengikuti urutan sekolah (untuk dropdown surah).
+  function surahListByJuz(jz){
+    var out=[];
+    for(var no=1;no<=114;no++){
+      var awal=juzOf(no,1), akhir=juzOf(no,SURAH[no-1][1]);
+      if(jz>=awal && jz<=akhir) out.push(no);
+    }
+    return out;
+  }
+  var SURAH_ORDER = (function(){
+    var seen={}, out=[];
+    JUZ_ORDER.forEach(function(jz){
+      surahListByJuz(jz).forEach(function(no){ if(!seen[no]){ seen[no]=1; out.push({ no:no, juz:jz }); } });
+    });
+    for(var no=1;no<=114;no++){ if(!seen[no]){ seen[no]=1; out.push({ no:no, juz:juzOf(no,1) }); } }
+    return out;
+  })();
   function computeProgres(surah, ayat){
     surah=parseInt(surah,10); ayat=parseInt(ayat,10);
-    if(!surah||surah<1||surah>114) return {pct:0,juz:0};
+    if(!surah||surah<1||surah>114) return {pct:0,juz:0,seq:0,pctTotal:0};
     var maxA=SURAH[surah-1][1];
     if(!ayat||ayat<1) ayat=1;
     if(ayat>maxA) ayat=maxA;
@@ -5785,7 +6217,10 @@ animateContent();
       var done=(surah-startSurah)+(ayat/maxA); pct=(done/count)*100;
     } else { var st=JABS[jz], en=juzEndAbs(jz); pct=((absIndex(surah,ayat)-st+1)/(en-st+1))*100; }
     if(pct<0)pct=0; if(pct>100)pct=100;
-    return { pct:Math.round(pct), juz:jz };
+    var seq=juzSeq(jz);
+    // Progres total mengikuti urutan sekolah: Juz 30 = tahap 1, Juz 29 = tahap 2, dst.
+    var pctTotal=seq?(((seq-1)+(pct/100))/JUZ_ORDER.length)*100:0;
+    return { pct:Math.round(pct), juz:jz, seq:seq, pctTotal:Math.round(pctTotal) };
   }
 
   var CATS_SEKOLAH = ["Ziyadah","Muroja'ah","Tilawah"];
@@ -5812,13 +6247,13 @@ animateContent();
   function _sameStudent(a,b){ var A=_idsOf(a), B=_idsOf(b); for(var i=0;i<A.length;i++){ for(var j=0;j<B.length;j++){ if(A[i]===B[j]) return true; } } return false; }
   function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } var r=rosterAll(); for(var j=0;j<r.length;j++){ if(_sameStudent(r[j], key)) return r[j]; } return null; }
 
-  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'' };
+  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'', mtfDraftTgl:'', mtfTgl:todayStr(), mtfByKat:{} };
 
   // MULTI-SURAH: draft sekolah per kategori kini berupa ARRAY entri {surah,ayat,catatan}.
   function draftEntries(kat){
     var d=ST.mtfDraft[kat];
     if(Array.isArray(d)) return d.length?d:[{}];
-    if(d&&typeof d==='object'&&(d.surah||d.ayat||d.catatan)) return [{surah:d.surah,ayat:d.ayat,catatan:d.catatan}];
+    if(d&&typeof d==='object'&&(d.surah||d.ayat||d.catatan||d.tanzil||d.halaman)) return [{surah:d.surah,ayat:d.ayat,catatan:d.catatan,tanzil:d.tanzil,halaman:d.halaman}];
     return [{}];
   }
   // Simpan nilai input yang sedang diketik ke ST sebelum render ulang (agar tak hilang saat tambah/hapus surah).
@@ -5830,8 +6265,11 @@ animateContent();
           var sEl=document.getElementById('ztf-mtf-surah-'+c+'-'+r);
           var aEl=document.getElementById('ztf-mtf-ayat-'+c+'-'+r);
           var cEl=document.getElementById('ztf-mtf-cat-'+c+'-'+r);
-          if(!sEl&&!aEl&&!cEl){ arr.push(entries[r]||{}); continue; }
-          arr.push({ surah:(sEl?sEl.value:''), ayat:(aEl?aEl.value:''), catatan:(cEl?cEl.value:'') });
+          var tEl=document.getElementById('ztf-mtf-tanzil-'+c+'-'+r);
+          var hEl=document.getElementById('ztf-mtf-hal-'+c+'-'+r);
+          if(!sEl&&!aEl&&!cEl&&!tEl&&!hEl){ arr.push(entries[r]||{}); continue; }
+          var prevE=entries[r]||{};
+          arr.push({ surah:(sEl?sEl.value:''), ayat:(aEl?aEl.value:''), catatan:(cEl?cEl.value:''), tanzil:(tEl?tEl.value:(prevE.tanzil||'')), halaman:(hEl?hEl.value:(prevE.halaman||'')) });
         }
         ST.mtfDraft[kat]=arr.length?arr:[{}];
       });
@@ -5895,16 +6333,46 @@ animateContent();
         var tg=String(r.tanggal||'').slice(0,10);
         byKat[kat]=byKat[kat]||{};
         byKat[kat][tg]=byKat[kat][tg]||[];
-        byKat[kat][tg].push({ surah:r.surah_no, ayat:r.ayat, catatan:r.catatan });
+        var _rawCat=String(r.catatan==null?'':r.catatan);
+        var _mT=_rawCat.match(/At-Tanzil\s*(\d+)/i);
+        var _mH=_rawCat.match(/Hal\.?\s*(\d+)/i);
+        byKat[kat][tg].push({ surah:r.surah_no, ayat:r.ayat, catatan:stripTanzilNote(_rawCat), tanzil:(_mT?_mT[1]:''), halaman:(_mH?_mH[1]:'') });
       });
-      CATS_SEKOLAH.forEach(function(kat){
-        var days=byKat[kat]?Object.keys(byKat[kat]).sort():[];
-        if(days.length){ ds[kat]=byKat[kat][days[days.length-1]]; }
-      });
-      ST.mtfDraft=ds; ST.mtfWali=dw;
-    }catch(e){ ST.mtfDraft={}; ST.mtfWali={}; }
+      ST.mtfByKat=byKat; ST.mtfWali=dw;
+      buildDraftForTgl(ST.mtfTgl||todayStr());
+    }catch(e){ ST.mtfDraft={}; ST.mtfWali={}; ST.mtfDraftTgl=''; ST.mtfByKat={}; }
     ST.mtfLoading=false;
     if(activeMtf()) render();
+  }
+
+  // Isi form mengikuti TANGGAL setoran yang dipilih.
+  // - Tanggal itu sudah ada setoran  -> tampilkan data tanggal tersebut.
+  // - Tanggal HARI INI belum ada     -> boleh terisi dari setoran terakhir sbg acuan.
+  // - Tanggal lain belum ada setoran -> form dibiarkan kosong.
+  function buildDraftForTgl(tgl){
+    var byKat=ST.mtfByKat||{}, ds={}, srcTgl='';
+    var tg=String(tgl||'').slice(0,10), hariIni=(tg===todayStr());
+    var dedupe=function(arr){
+      var seen={}, out=[];
+      (arr||[]).forEach(function(e){
+        var sg=String(e.surah||'')+'|'+String(e.ayat||'');
+        if(seen[sg]) return; seen[sg]=1; out.push(e);
+      });
+      return out;
+    };
+    CATS_SEKOLAH.forEach(function(kat){
+      var days=byKat[kat]?Object.keys(byKat[kat]).sort():[];
+      if(!days.length) return;
+      var pakai='';
+      if(byKat[kat][tg]) pakai=tg;
+      else if(hariIni) pakai=days[days.length-1];
+      if(!pakai) return;
+      var arrE=dedupe(byKat[kat][pakai]);
+      if(!arrE.length) return;
+      ds[kat]=arrE;
+      if(pakai>srcTgl) srcTgl=pakai;
+    });
+    ST.mtfDraft=ds; ST.mtfDraftTgl=srcTgl;
   }
 
   async function loadRiwayat(nis){
@@ -5977,7 +6445,7 @@ animateContent();
 
   window.zMtf = {
     setTab: function(t){ ST.mtfTab=(t==='wali_murid')?'wali_murid':'sekolah'; render(); },
-    setGolongan: function(v){ ST.mtfGolongan=String(v||''); ST.mtfSiswaId=''; ST.mtfDraft={}; ST.mtfWali={}; ST.riwayat=null; ST.riwayatWali=null; ST.riwayatTgl=''; render(); },
+    setGolongan: function(v){ ST.mtfGolongan=String(v||''); ST.mtfSiswaId=''; ST.mtfDraftTgl=''; ST.mtfTgl=todayStr(); ST.mtfByKat={}; ST.mtfDraft={}; ST.mtfWali={}; ST.riwayat=null; ST.riwayatWali=null; ST.riwayatTgl=''; render(); },
     scan: function(){
       openQrScanner(async function(code){
         var raw=String(code||'').trim();
@@ -5992,22 +6460,75 @@ animateContent();
         showToast(hit.name+' terpilih','success','&#10003;');
       });
     },
-    selectSiswa: function(nis){ ST.mtfSiswaId=String(nis||''); ST.mtfDraft={}; ST.mtfWali={}; ST.riwayat=null; ST.riwayatWali=null; ST.riwayatTgl=''; render(); if(ST.mtfSiswaId){ loadMtfForSiswa(ST.mtfSiswaId); loadRiwayat(ST.mtfSiswaId); } },
+    selectSiswa: function(nis){ ST.mtfSiswaId=String(nis||''); ST.mtfDraftTgl=''; ST.mtfTgl=todayStr(); ST.mtfByKat={}; ST.mtfDraft={}; ST.mtfWali={}; ST.riwayat=null; ST.riwayatWali=null; ST.riwayatTgl=''; render(); if(ST.mtfSiswaId){ var _mSel=memberById(ST.mtfSiswaId); var _kSel=_mSel?String(_mSel.nis||ST.mtfSiswaId):String(ST.mtfSiswaId); loadMtfForSiswa(_kSel); loadRiwayat(_kSel); } },
     toggleRiwayat: function(){ ST.riwayatOpen=!ST.riwayatOpen; render(); },
+    // Kosongkan form supaya isi otomatis dari setoran terakhir tidak ikut tersimpan lagi.
+    kosongkanDraft: function(){
+      ST.mtfDraft={}; ST.mtfDraftTgl='';
+      CATS_SEKOLAH.forEach(function(kat){ ST.mtfDraft[kat]=[{}]; });
+      render();
+      showToast('Form dikosongkan.','success','&#10003;');
+    },
+    // Bersihkan baris riwayat kembar: tanggal + kategori + surah + ayat sama disisakan satu.
+    bersihkanKembar: async function(){
+      var api=SB(); if(!api){ showToast('Supabase belum siap','error','&#9888;'); return; }
+      if(!ST.mtfSiswaId){ showToast('Pilih siswa dulu','error','&#9888;'); return; }
+      var s=memberById(ST.mtfSiswaId); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
+      var key=String(s.nis||ST.mtfSiswaId);
+      var nm=s.nama_siswa||s.name||'siswa ini';
+      if(typeof confirm==='function'){
+        if(!confirm('Hapus baris riwayat kembar untuk '+nm+'? Satu baris per kategori + surah + ayat per tanggal akan disisakan.')) return;
+        if(!confirm('Konfirmasi terakhir: baris kembar '+nm+' akan dihapus permanen. Lanjutkan?')) return;
+      }
+      try{
+        var res=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:key, konteks:'sekolah' }, limit:1000 });
+        var rows=(res&&res.data)?res.data:[];
+        var seen={}, hapus=[];
+        rows.slice().sort(function(a,b){ return (parseInt(a.id,10)||0)-(parseInt(b.id,10)||0); }).forEach(function(r){
+          var sg=[String(r.tanggal||'').slice(0,10),String(r.kategori||''),String(r.surah_no||''),String(r.ayat||'')].join('|');
+          if(seen[sg]){ if(r.id!=null) hapus.push(r.id); return; }
+          seen[sg]=1;
+        });
+        if(!hapus.length){ showToast('Tidak ada baris kembar.','success','&#10003;'); return; }
+        var client=(api.getClient?api.getClient():null);
+        if(!client||!client.from){ showToast('Tidak bisa menghapus: koneksi Supabase belum siap.','error','&#9888;'); return; }
+        var del=await client.from('mutabaah_tahfidz_riwayat').delete().in('id', hapus);
+        if(del&&del.error){ showToast('Gagal menghapus: '+(del.error.message||''),'error','&#9888;'); return; }
+        showToast(hapus.length+' baris kembar dihapus.','success','&#10003;');
+        loadMtfForSiswa(key); loadRiwayat(key);
+      }catch(e){ showToast('Gagal membersihkan riwayat.','error','&#9888;'); }
+    },
     setRiwayatTgl: function(v){ ST.riwayatTgl=String(v||''); render(); },
+    setTanggal: function(v){
+      syncDraftFromDOM();
+      ST.mtfTgl=String(v||'').slice(0,10)||todayStr();
+      buildDraftForTgl(ST.mtfTgl);
+      render();
+    },
     addSurah: function(c){ syncDraftFromDOM(); var kat=CATS_SEKOLAH[c]; if(!kat) return; var arr=draftEntries(kat).slice(); arr.push({}); ST.mtfDraft[kat]=arr; render(); },
     delSurah: function(c,r){ syncDraftFromDOM(); var kat=CATS_SEKOLAH[c]; if(!kat) return; var arr=draftEntries(kat).slice(); arr.splice(r,1); if(!arr.length) arr=[{}]; ST.mtfDraft[kat]=arr; render(); },
     recalc: function(c,r){
       var sEl=document.getElementById('ztf-mtf-surah-'+c+'-'+r), aEl=document.getElementById('ztf-mtf-ayat-'+c+'-'+r), pEl=document.getElementById('ztf-mtf-prog-'+c+'-'+r);
-      if(!sEl||!aEl||!pEl) return;
+      if(!pEl) return;
+      var kat=CATS_SEKOLAH[c]||'';
+      // Tilawah: progres memakai jilid At-Tanzil + halaman.
+      if(isTilawahKat(kat)){
+        var tEl=document.getElementById('ztf-mtf-tanzil-'+c+'-'+r), hEl=document.getElementById('ztf-mtf-hal-'+c+'-'+r);
+        var tp=computeTanzilProgres(tEl?tEl.value:'', hEl?hEl.value:'');
+        if(tp.tanzil){
+          pEl.textContent='At-Tanzil '+tp.tanzil+'/6'+(tp.halaman?(' - Hal. '+tp.halaman):'')+' - '+tp.pct+'%';
+          return;
+        }
+      }
+      if(!sEl||!aEl) return;
       var rr=computeProgres(sEl.value, aEl.value);
-      pEl.textContent = rr.juz ? ('Juz '+rr.juz+' - '+rr.pct+'%') : 'Belum ada';
+      pEl.textContent = rr.juz ? ('Juz '+rr.juz+' - '+rr.pct+'%'+(rr.seq?(' - tahap '+rr.seq+'/30'):'')) : 'Belum ada';
     },
     save: async function(){
       var api=SB(); if(!api){ showToast('Supabase belum siap','error','&#9888;'); return; }
       if(!ST.mtfSiswaId){ showToast('Pilih siswa dulu','error','&#9888;'); return; }
       var s=memberById(ST.mtfSiswaId); if(!s){ showToast('Siswa tidak ditemukan','error','&#9888;'); return; }
-      var tglEl=document.getElementById('ztf-mtf-tgl'); var tgl=(tglEl&&tglEl.value)?tglEl.value:todayStr();
+      var tglEl=document.getElementById('ztf-mtf-tgl'); var tgl=(tglEl&&tglEl.value)?tglEl.value:(ST.mtfTgl||todayStr()); ST.mtfTgl=String(tgl).slice(0,10);
       syncDraftFromDOM(); // ambil semua input surah (multi) dari layar
       var ta=curTA(), sem=curSemester(), saved=0, failed=0, filled=0, surahCount=0, logs=[];
       // Wajibkan kolom Ayat: kalau surah dipilih tapi ayat kosong/0, jangan simpan.
@@ -6036,22 +6557,48 @@ animateContent();
           var ayat=parseInt(e.ayat,10)||0;
           var prog=computeProgres(surah_no,ayat);
           var snama=(SURAH[surah_no-1]?SURAH[surah_no-1][0]:'');
-          var cat=(e.catatan||'');
+          var cat=stripTanzilNote(e.catatan||'');
+          if(isTilawahKat(kat)){
+            var _note=tanzilNote(e.tanzil, e.halaman);
+            if(_note) cat = cat ? (cat+' '+_note) : _note;
+          }
           surahCount++;
+          // Tilawah: nilai progres yang disimpan memakai jilid At-Tanzil + halaman.
+          var _progVal=prog.pct;
+          if(isTilawahKat(kat)){ var _tzp=computeTanzilProgres(e.tanzil, e.halaman); if(_tzp.tanzil) _progVal=_tzp.pct; }
           // Riwayat: satu baris per surah (lengkap).
-          logs.push({ client_key:'default', konteks:'sekolah', siswa_id:String(ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:prog.pct, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:guruNip(), guru_nama:guruNama() });
+          logs.push({ client_key:'default', konteks:'sekolah', siswa_id:String(s.nis||ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:_progVal, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:guruNip(), guru_nama:guruNama() });
           parts.push(snama+' ('+ayat+' ayat)');
           if(cat) combinedCat.push(snama+': '+cat);
-          last={ surah_no:surah_no, ayat:ayat, prog:prog };
+          last={ surah_no:surah_no, ayat:ayat, prog:prog, progVal:_progVal };
         }
         // Ringkasan: satu baris per kategori dgn nama surah digabung.
-        var body={ client_key:'default', konteks:'sekolah', siswa_id:String(ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:last.prog.pct, catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
+        var body={ client_key:'default', konteks:'sekolah', siswa_id:String(s.nis||ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:(last.progVal!=null?last.progVal:last.prog.pct), catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
         var res=await api.upsert('mutabaah_tahfidz',body,'client_key,siswa_id,konteks,kategori,tahun_ajaran,semester');
         if(res&&res.error) failed++; else saved++;
       }
       if(!filled){ showToast('Isi minimal 1 kategori','error','&#9888;'); return; }
+      // ANTI-DOBEL RIWAYAT: buang baris kembar di dalam form, lalu buang baris
+      // yang sudah tersimpan pada tanggal yang sama, supaya Simpan berulang atau
+      // form yang terisi otomatis tidak menumpuk data.
+      var skipDobel=0;
+      if(logs.length){
+        var _sigOf=function(l){ return [String(l.kategori||''),String(l.surah_no||''),String(l.ayat||''),String(l.tanggal||'').slice(0,10)].join('|'); };
+        var _seen={}, _uniq=[];
+        logs.forEach(function(l){ var sg=_sigOf(l); if(_seen[sg]){ skipDobel++; return; } _seen[sg]=1; _uniq.push(l); });
+        logs=_uniq;
+        try{
+          var _exRes=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(s.nis||ST.mtfSiswaId), konteks:'sekolah', tanggal:tgl }, limit:400 });
+          var _exRows=(_exRes&&_exRes.data)?_exRes.data:[];
+          if(_exRows.length){
+            var _exSig={}; _exRows.forEach(function(r){ _exSig[_sigOf(r)]=1; });
+            logs=logs.filter(function(l){ if(_exSig[_sigOf(l)]){ skipDobel++; return false; } return true; });
+          }
+        }catch(e){}
+      }
       if(logs.length){ try{ await api.insert('mutabaah_tahfidz_riwayat', logs); }catch(e){} }
-      if(saved){ showToast('Tersimpan '+saved+' kategori \u00b7 '+surahCount+' surah','success','&#10003;'); loadMtfForSiswa(ST.mtfSiswaId); loadRiwayat(ST.mtfSiswaId); }
+      if(skipDobel) showToast(skipDobel+' baris kembar dilewati (sudah tercatat di tanggal ini).','info','&#8505;');
+      if(saved){ showToast('Tersimpan '+saved+' kategori \u00b7 '+surahCount+' surah','success','&#10003;'); loadMtfForSiswa(String(s.nis||ST.mtfSiswaId)); loadRiwayat(String(s.nis||ST.mtfSiswaId)); }
       else showToast('Gagal menyimpan','error','&#9888;');
     }
   };
@@ -6112,9 +6659,72 @@ animateContent();
   }
   function loadingShell(detail,msg){ return headerCard(detail, esc(msg||'Memuat...')); }
 
+  // At-Tanzil: jilid/juz mushaf At-Tanzil 1-6 (khusus kategori Tilawah).
+  function tanzilOptions(sel){
+    var o='<option value="">- At-Tanzil -</option>';
+    for(var i=1;i<=6;i++){ o+='<option value="'+i+'"'+(String(sel)===String(i)?' selected':'')+'>At-Tanzil '+i+'</option>'; }
+    return o;
+  }
+  function isTilawahKat(kat){ return /tilawah/i.test(String(kat||'')); }
+  function tanzilNote(tanzil, halaman){
+    var t=parseInt(tanzil,10)||0, h=parseInt(halaman,10)||0;
+    if(!t && !h) return '';
+    var parts=[];
+    if(t) parts.push('At-Tanzil '+t);
+    if(h) parts.push('Hal. '+h);
+    return '['+parts.join(' \u00b7 ')+']';
+  }
+  // ===== PROGRES TILAWAH: berbasis jilid At-Tanzil + halaman =====
+  // Jumlah halaman tiap jilid. Ubah angka di sini (atau set window.ZTF_TANZIL_HAL)
+  // kalau jumlah halaman At-Tanzil di sekolah berbeda.
+  var TANZIL_HAL_DEFAULT = { 1:44, 2:44, 3:44, 4:44, 5:44, 6:44 };
+  function tanzilHal(){
+    var o=window.ZTF_TANZIL_HAL;
+    if(o&&typeof o==='object'){
+      var out={};
+      for(var j=1;j<=6;j++){ out[j]=parseInt(o[j],10)||TANZIL_HAL_DEFAULT[j]; }
+      return out;
+    }
+    return TANZIL_HAL_DEFAULT;
+  }
+  function parseTanzilNote(cat){
+    // Ambil kemunculan TERAKHIR, karena catatan ringkasan bisa memuat beberapa surah.
+    var raw=String(cat==null?'':cat), t=0, h=0, m;
+    var reT=/At-Tanzil\s*(\d+)/gi; while((m=reT.exec(raw))!==null){ t=parseInt(m[1],10)||0; }
+    var reH=/Hal\.?\s*(\d+)/gi; while((m=reH.exec(raw))!==null){ h=parseInt(m[1],10)||0; }
+    return { tanzil:t, halaman:h };
+  }
+  // Progres = (halaman jilid sebelumnya + halaman berjalan) / total halaman 6 jilid.
+  function computeTanzilProgres(tanzil, halaman){
+    var t=parseInt(tanzil,10)||0, h=parseInt(halaman,10)||0;
+    if(t<1||t>6) return { tanzil:0, halaman:h, pct:0, total:0 };
+    var HAL=tanzilHal(), total=0, sebelum=0;
+    for(var j=1;j<=6;j++){ total+=HAL[j]; if(j<t) sebelum+=HAL[j]; }
+    var maxH=HAL[t]||0;
+    if(h<0) h=0; if(maxH&&h>maxH) h=maxH;
+    var pct=total?(((sebelum+h)/total)*100):0;
+    if(pct<0)pct=0; if(pct>100)pct=100;
+    return { tanzil:t, halaman:h, pct:Math.round(pct), total:total };
+  }
+  function tanzilProgText(tanzil, halaman){
+    var p=computeTanzilProgres(tanzil, halaman);
+    if(!p.tanzil) return '';
+    return 'At-Tanzil '+p.tanzil+'/6'+(p.halaman?(' &middot; Hal. '+p.halaman):'')+' &middot; '+p.pct+'%';
+  }
+  function stripTanzilNote(cat){ return String(cat==null?'':cat).replace(/\s*\[At-Tanzil[^\]]*\]\s*$/i,'').replace(/\s*\[Hal\.[^\]]*\]\s*$/i,''); }
+
   function surahOptions(sel){
     var o='<option value="">- Pilih surah -</option>';
-    for(var i=0;i<SURAH.length;i++){ var no=i+1; o+='<option value="'+no+'"'+(String(sel)===String(no)?' selected':'')+'>'+no+'. '+esc(SURAH[i][0])+'</option>'; }
+    var curJuz=null;
+    SURAH_ORDER.forEach(function(it){
+      if(it.juz!==curJuz){
+        if(curJuz!==null) o+='</optgroup>';
+        curJuz=it.juz;
+        o+='<optgroup label="Juz '+curJuz+'">';
+      }
+      o+='<option value="'+it.no+'"'+(String(sel)===String(it.no)?' selected':'')+'>'+it.no+'. '+esc(SURAH[it.no-1][0])+'</option>';
+    });
+    if(curJuz!==null) o+='</optgroup>';
     return o;
   }
 
@@ -6126,7 +6736,13 @@ animateContent();
       }
       var last=entries[entries.length-1];
       var p=computeProgres(last.surah||0, last.ayat||0);
-      var progTxt=p.juz?('Juz '+p.juz+' &middot; '+p.pct+'%'):'-';
+      var progTxt=p.juz?('Juz '+p.juz+' &middot; '+p.pct+'%'+(p.seq?(' &middot; tahap '+p.seq+'/30'):'')):'-';
+      if(isTilawahKat(kat)){
+        var _lt=entries[entries.length-1]||{};
+        var _tp=parseTanzilNote(_lt.catatan||'');
+        var _tv=(_lt.tanzil||_tp.tanzil), _hv=(_lt.halaman||_tp.halaman);
+        var _tt=tanzilProgText(_tv, _hv); if(_tt) progTxt=_tt;
+      }
       var names=entries.map(function(e){ var sn=(SURAH[e.surah-1]?SURAH[e.surah-1][0]:''); return sn+' : ayat '+(e.ayat!=null&&e.ayat!==''?e.ayat:'-'); }).join(' &middot; ');
       return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+' <span class="ztf-chip" style="margin-left:4px">'+entries.length+' surah</span></span><span class="ztf-sum-prog">'+progTxt+'</span></div><div class="ztf-sum-surah">'+esc(names)+'</div></div>';
     }).join('');
@@ -6155,7 +6771,13 @@ animateContent();
       body+=rowsTgl.map(function(r){
         var snama=r.surah_nama||(r.surah_no&&SURAH[r.surah_no-1]?SURAH[r.surah_no-1][0]:'');
         var surah=r.surah_no?(snama+' : ayat '+(r.ayat!=null?r.ayat:'-')):'-';
-        var prog=(r.surah_no)?('Juz '+(r.juz!=null?r.juz:'-')+' &middot; '+(r.progres!=null?r.progres:'-')+'%'):'';
+        // Progres riwayat dihitung ulang dari surah+ayat memakai urutan sekolah
+        // (Juz 30 -> 29 -> 1..28), supaya data lama ikut aturan baru.
+        var _pr=r.surah_no?computeProgres(r.surah_no, r.ayat):null;
+        var _tzTxt=isTilawahKat(r.kategori||'')?(function(){ var q=parseTanzilNote(r.catatan||''); return tanzilProgText(q.tanzil, q.halaman); })():'';
+        var prog=(r.surah_no)?('Juz '+((_pr&&_pr.juz)||(r.juz!=null?r.juz:'-'))+' &middot; '+((_pr&&_pr.pct!=null)?_pr.pct:(r.progres!=null?r.progres:'-'))+'%'+((_pr&&_pr.seq)?(' &middot; tahap '+_pr.seq+'/30'):''))
+          :'';
+        if(_tzTxt) prog=_tzTxt;
         return '<div class="ztf-rw"><div class="ztf-rw-top"><span class="ztf-rw-kat">'+esc(r.kategori||'-')+'</span>'+(prog?('<span class="ztf-rw-prog">'+prog+'</span>'):'')+'</div><div class="ztf-rw-body">'+esc(surah)+'</div>'+(r.catatan?('<div class="ztf-rw-note">'+esc(r.catatan)+'</div>'):'')+'</div>';
       }).join('');
     }
@@ -6264,10 +6886,21 @@ animateContent();
         var d=ST.mtfWali[kat]||{};
         if(d.surah) anyWali=true;
         var surahTxt=d.surah?(d.surah+'. '+(SURAH[d.surah-1]?SURAH[d.surah-1][0]:'')+' : ayat '+(d.ayat!=null?d.ayat:'-')):'-';
-        var progTxt=(d.surah)?('Juz '+(d.juz!=null?d.juz:'-')+' &middot; '+(d.progres!=null?d.progres:'-')+'%'):'Belum ada';
+        var _pw=d.surah?computeProgres(d.surah, d.ayat):null;
+        var progTxt=(d.surah)?('Juz '+((_pw&&_pw.juz)||(d.juz!=null?d.juz:'-'))+' &middot; '+((_pw&&_pw.pct!=null)?_pw.pct:(d.progres!=null?d.progres:'-'))+'%'+((_pw&&_pw.seq)?(' &middot; tahap '+_pw.seq+'/30'):''))
+          :'Belum ada';
+        // Tilawah dari wali: baca jilid At-Tanzil + halaman yang tersimpan di catatan.
+        var _qw=parseTanzilNote(d.catatan||'');
+        var _catW=stripTanzilNote(d.catatan||'');
+        var _tzLine='';
+        if(isTilawahKat(kat)){
+          var _ttw=tanzilProgText(_qw.tanzil, _qw.halaman);
+          if(_ttw){ progTxt=_ttw; _tzLine='At-Tanzil '+_qw.tanzil+'/6'+(_qw.halaman?(' &middot; Hal. '+_qw.halaman):''); }
+        }
         return '<div class="ztf-cat-card"><div class="ztf-cat-head"><span class="ztf-cat-title">'+esc(kat)+'</span><span class="ztf-prog">'+progTxt+'</span></div>'
           +'<div class="ztf-static">'+esc(surahTxt)+'</div>'
-          +(d.catatan?('<div class="ztf-static" style="margin-top:8px">'+esc(d.catatan)+'</div>'):'')
+          +(_tzLine?('<div class="ztf-static" style="margin-top:8px">'+_tzLine+'</div>'):'')
+          +(_catW?('<div class="ztf-static" style="margin-top:8px">'+esc(_catW)+'</div>'):'')
           +'</div>';
       }).join('');
       if(!anyWali){
@@ -6278,12 +6911,33 @@ animateContent();
       html += '<div class="ztf-note">Data ini diisi wali murid lewat aplikasi mereka. Guru hanya melihat (read-only).</div>';
     } else {
       html += ringkasanProgresHtml();
-      html += '<div class="ztf-cat-card"><span class="ztf-lbl">Tanggal setoran</span><input class="ztf-inp" type="date" id="ztf-mtf-tgl" value="'+todayStr()+'"></div>';
+      html += '<div class="ztf-cat-card"><span class="ztf-lbl">Tanggal setoran</span><input class="ztf-inp" type="date" id="ztf-mtf-tgl" value="'+esc(ST.mtfTgl||todayStr())+'" onchange="window.zMtf.setTanggal(this.value)"></div>';
+      // Penanda bahwa form terisi otomatis dari setoran terakhir + aksi perapihan.
+      var _tgSel=String(ST.mtfTgl||todayStr()).slice(0,10);
+      var _samaTgl=(String(ST.mtfDraftTgl||'').slice(0,10)===_tgSel);
+      if(!ST.mtfDraftTgl && !ST.mtfLoading && ST.mtfSiswaId){
+        html += '<div class="ztf-panel"><p class="ztf-empty" style="margin:0">'
+          +(_tgSel===todayStr()?'Belum ada setoran hari ini. Silakan isi di bawah.':'Belum ada setoran pada tanggal ini, form dibiarkan kosong.')
+          +'</p></div>';
+      }
+      if(ST.mtfDraftTgl){
+        var _lblTgl=(typeof formatTanggalID==='function')?formatTanggalID(ST.mtfDraftTgl):ST.mtfDraftTgl;
+        html += '<div class="ztf-panel" style="border:1px solid rgba(250,204,21,.28);background:rgba(250,204,21,.07)">'
+          +'<span class="ztf-lbl">'+(_samaTgl?'Sudah ada setoran pada tanggal ini':'Form terisi dari setoran terakhir sebagai acuan')+' &middot; '+esc(_lblTgl)+'</span>'
+          +'<p class="ztf-empty" style="margin:6px 0 10px">Ubah sesuai setoran hari ini. Baris yang sama tidak akan tercatat dua kali.</p>'
+          +'<button class="ztf-btn" style="width:100%;background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.28);color:#cbd5e1" onclick="window.zMtf.kosongkanDraft()">Kosongkan form</button>'
+          +'<details style="margin-top:10px">'
+          +'<summary style="cursor:pointer;font-size:12px;color:#94a3b8;padding:6px 0">Perapihan data (lanjutan)</summary>'
+          +'<p class="ztf-empty" style="margin:6px 0 8px">Menghapus baris riwayat kembar milik siswa ini. Tindakan ini permanen dan minta konfirmasi dua kali.</p>'
+          +'<button class="ztf-btn" style="width:100%;background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.35);color:#fca5a5;font-size:12px" onclick="window.zMtf.bersihkanKembar()">Bersihkan riwayat kembar</button>'
+          +'</details></div>';
+      }
       html += CATS_SEKOLAH.map(function(kat,c){
         var entries=draftEntries(kat);
         var rowsHtml=entries.map(function(d,r){
           var prog=computeProgres(d.surah||0, d.ayat||0);
-          var progTxt=prog.juz?('Juz '+prog.juz+' &middot; '+prog.pct+'%'):'Belum ada';
+          var progTxt=prog.juz?('Juz '+prog.juz+' &middot; '+prog.pct+'%'+(prog.seq?(' &middot; tahap '+prog.seq+'/30'):'')):'Belum ada';
+          if(isTilawahKat(kat)){ var _tt=tanzilProgText(d.tanzil, d.halaman); if(_tt) progTxt=_tt; }
           var delBtn=(entries.length>1)?('<button class="ztf-btn ztf-btn-del" style="margin-top:8px" onclick="window.zMtf.delSurah('+c+','+r+')">Hapus surah</button>'):'';
           var sep=(r>0)?'border-top:1px dashed rgba(148,163,184,.18);padding-top:10px;margin-top:10px':'';
           return '<div class="ztf-surah-row" style="'+sep+'">'
@@ -6292,7 +6946,11 @@ animateContent();
             +'<select class="ztf-sel" id="ztf-mtf-surah-'+c+'-'+r+'" onchange="window.zMtf.recalc('+c+','+r+')">'+surahOptions(d.surah||'')+'</select>'
             +'<input class="ztf-inp" id="ztf-mtf-ayat-'+c+'-'+r+'" type="number" min="1" placeholder="Ayat (wajib)" value="'+(d.ayat?esc(d.ayat):'')+'" oninput="window.zMtf.recalc('+c+','+r+')">'
             +'</div>'
-            +'<input class="ztf-inp" id="ztf-mtf-cat-'+c+'-'+r+'" style="margin-top:8px" placeholder="Catatan (opsional)" value="'+esc(d.catatan||'')+'">'
+            +(isTilawahKat(kat)?('<div class="ztf-grid2" style="margin-top:8px">'
+              +'<select class="ztf-sel" id="ztf-mtf-tanzil-'+c+'-'+r+'" onchange="window.zMtf.recalc('+c+','+r+')">'+tanzilOptions(d.tanzil||'')+'</select>'
+              +'<input class="ztf-inp" id="ztf-mtf-hal-'+c+'-'+r+'" type="number" min="1" placeholder="Halaman" value="'+(d.halaman?esc(d.halaman):'')+'" oninput="window.zMtf.recalc('+c+','+r+')">'
+              +'</div>'):'')
+            +'<input class="ztf-inp" id="ztf-mtf-cat-'+c+'-'+r+'" style="margin-top:8px" placeholder="Catatan (opsional)" value="'+esc(stripTanzilNote(d.catatan||''))+'">'
             +delBtn
             +'</div>';
         }).join('');
