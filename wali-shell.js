@@ -1501,7 +1501,7 @@ async function loadWaliProgramKegiatan() {
   }
   var rows = [];
   try {
-    var res = await helper.select('program_kegiatan', { order: 'no', ascending: true, limit: 300 });
+    var res = await helper.select('program_kegiatan', { order: 'no', ascending: true, limit: 100 });
     rows = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
   } catch (e) { console.warn('[Program Kegiatan Wali] gagal load:', e); }
   rows.sort(function(a, b){ return (parseInt(a.no) || 0) - (parseInt(b.no) || 0); });
@@ -3130,14 +3130,15 @@ animateWaliContent();
     } catch(_){}
     _last = Date.now();
   }
-  // Poll ringan tiap 60 detik (hemat Disk I/O Supabase). Sebelumnya 15 detik.
-  setInterval(pollFinance, 60000); // 60 detik
+  // EGRESS: poll berkala DIMATIKAN. Dulu tiap 60 detik = 1.440 tarikan/hari
+  // per wali walau HP cuma didiamkan. Sekarang data ditarik saat wali
+  // kembali membuka aplikasi (lihat visibilitychange/focus di bawah).
   // Juga pas visibility/focus
   document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible' && Date.now() - _last > 5000) pollFinance();
+    if(document.visibilityState === 'visible' && Date.now() - _last > 120000) pollFinance();
   });
   window.addEventListener('focus', function(){
-    if(Date.now() - _last > 5000) pollFinance();
+    if(Date.now() - _last > 120000) pollFinance();
   });
 })();
 
@@ -3283,7 +3284,7 @@ animateWaliContent();
   function childKelas(){ return String(appState.childClass||(childProfile&&childProfile.className)||''); }
   function toast(msg,type){ try{ if(typeof waliToast==='function'){ waliToast(msg,type); return; } }catch(e){} }
 
-  var WT = { tab:'wali_murid', wali:{}, sekolah:{}, riwayat:[], riwayatSekolah:[], loading:false, loadedNis:null, tgl:todayStr(), cleared:false };
+  var WT = { tab:'wali_murid', wali:{}, sekolah:{}, riwayat:[], riwayatSekolah:[], loading:false, loadedNis:null, tgl:todayStr(), cleared:false, draft:{} };
 
   // Isi form mengikuti TANGGAL yang dipilih: kalau tanggal itu belum ada setoran,
   // form dibiarkan kosong supaya wali tidak menyimpan ulang data lama.
@@ -3315,6 +3316,52 @@ animateWaliContent();
     return false;
   }
 
+  // MULTI-SURAH (wali): entri per kategori berupa ARRAY {surah,ayat,catatan,tanzil,halaman}
+  function wEntriesForKat(kat){
+    var d=WT.draft[kat];
+    if(Array.isArray(d)) return d.length?d:[{}];
+    if(WT.cleared) return [{}];
+    var rows=rowsForTgl(kat);
+    if(rows.length){
+      return rows.map(function(r){
+        var tz=parseTanzilNote(r.catatan||'');
+        return { surah:r.surah_no, ayat:r.ayat, catatan:stripTanzilNote(r.catatan||''), tanzil:(tz.tanzil||''), halaman:(tz.halaman||'') };
+      });
+    }
+    var rc=recForKat(kat);
+    if(rc&&rc.surah){
+      var tz2=parseTanzilNote(rc.catatan||'');
+      return [{ surah:rc.surah, ayat:rc.ayat, catatan:stripTanzilNote(rc.catatan||''), tanzil:(tz2.tanzil||''), halaman:(tz2.halaman||'') }];
+    }
+    return [{}];
+  }
+  // Simpan isi input yang sedang diketik supaya tidak hilang saat tambah/hapus surah.
+  function wSyncDraftFromDOM(){
+    try{
+      CATS_WALI.forEach(function(kat,c){
+        var entries=wEntriesForKat(kat), arr=[];
+        for(var r=0;r<entries.length;r++){
+          var prev=entries[r]||{};
+          var sEl=document.getElementById('zwtf-surah-'+c+'-'+r);
+          var aEl=document.getElementById('zwtf-ayat-'+c+'-'+r);
+          var cEl=document.getElementById('zwtf-cat-'+c+'-'+r);
+          var tEl=document.getElementById('zwtf-tanzil-'+c+'-'+r);
+          var hEl=document.getElementById('zwtf-hal-'+c+'-'+r);
+          if(!sEl&&!aEl&&!cEl&&!tEl&&!hEl){ arr.push(prev); continue; }
+          arr.push({ surah:(sEl?sEl.value:prev.surah), ayat:(aEl?aEl.value:prev.ayat), catatan:(cEl?cEl.value:prev.catatan), tanzil:(tEl?tEl.value:(prev.tanzil||'')), halaman:(hEl?hEl.value:(prev.halaman||'')) });
+        }
+        WT.draft[kat]=arr.length?arr:[{}];
+      });
+    }catch(e){}
+  }
+  function adaIsiDraft(){
+    for(var i=0;i<CATS_WALI.length;i++){
+      var ents=wEntriesForKat(CATS_WALI[i]);
+      for(var r=0;r<ents.length;r++){ if((parseInt(ents[r].surah,10)||0)>0) return true; }
+    }
+    return false;
+  }
+
   async function loadTahfidz(nis){
     if(WT.loading) return;
     WT.loading=true; WT.loadedNis=nis;
@@ -3328,8 +3375,8 @@ animateWaliContent();
         if(String(r.konteks||'')==='wali_murid') dw[r.kategori]=rec; else if(String(r.konteks||'')==='sekolah') dsk[r.kategori]=rec;
       });
       WT.wali=dw; WT.sekolah=dsk;
-      try{ if(api&&nis){ var rr=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'wali_murid' }, order:'tanggal', ascending:false, limit:150 }); WT.riwayat=(rr&&rr.data)?rr.data:[]; } else { WT.riwayat=[]; } }catch(e){ WT.riwayat=[]; }
-      try{ if(api&&nis){ var rs=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, limit:150 }); WT.riwayatSekolah=(rs&&rs.data)?rs.data:[]; } else { WT.riwayatSekolah=[]; } }catch(e){ WT.riwayatSekolah=[]; }
+      try{ if(api&&nis){ var rr=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'wali_murid' }, order:'tanggal', ascending:false, limit:800 }); WT.riwayat=(rr&&rr.data)?rr.data:[]; } else { WT.riwayat=[]; } }catch(e){ WT.riwayat=[]; }
+      try{ if(api&&nis){ var rs=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, limit:800 }); WT.riwayatSekolah=(rs&&rs.data)?rs.data:[]; } else { WT.riwayatSekolah=[]; } }catch(e){ WT.riwayatSekolah=[]; }
     }catch(e){ WT.wali={}; WT.sekolah={}; WT.riwayat=[]; WT.riwayatSekolah=[]; }
     WT.loading=false;
     if(activeTahfidz()) render();
@@ -3337,51 +3384,73 @@ animateWaliContent();
 
   window.zwTf = {
     setTab: function(t){ WT.tab=(t==='sekolah')?'sekolah':'wali_murid'; render(); },
-    setTanggal: function(v){ WT.tgl=String(v||'').slice(0,10)||todayStr(); WT.cleared=false; render(); },
-    kosongkanForm: function(){ WT.cleared=true; render(); toast('Form dikosongkan.','info'); },
-    recalc: function(idx){
-      var sEl=document.getElementById('zwtf-surah-'+idx), aEl=document.getElementById('zwtf-ayat-'+idx), pEl=document.getElementById('zwtf-prog-'+idx);
+    setTanggal: function(v){ WT.tgl=String(v||'').slice(0,10)||todayStr(); WT.cleared=false; WT.draft={}; render(); },
+    kosongkanForm: function(){ WT.cleared=true; WT.draft={}; render(); toast('Form dikosongkan.','info'); },
+    recalc: function(c,r){
+      var sEl=document.getElementById('zwtf-surah-'+c+'-'+r), aEl=document.getElementById('zwtf-ayat-'+c+'-'+r), pEl=document.getElementById('zwtf-prog-'+c+'-'+r);
       if(!pEl) return;
-      var kat=CATS_WALI[idx]||'';
+      var kat=CATS_WALI[c]||'';
       if(isTilawahKat(kat)){
-        var tEl=document.getElementById('zwtf-tanzil-'+idx), hEl=document.getElementById('zwtf-hal-'+idx);
+        var tEl=document.getElementById('zwtf-tanzil-'+c+'-'+r), hEl=document.getElementById('zwtf-hal-'+c+'-'+r);
         var tp=computeTanzilProgres(tEl?tEl.value:'', hEl?hEl.value:'');
         if(tp.tanzil){ pEl.textContent='At-Tanzil '+tp.tanzil+'/6'+(tp.halaman?(' - Hal. '+tp.halaman):'')+' - '+tp.pct+'%'; return; }
       }
       if(!sEl||!aEl) return;
-      var r=computeProgres(sEl.value, aEl.value);
-      pEl.textContent = r.juz ? ('Juz '+r.juz+' - '+r.pct+'%'+(r.seq?(' - tahap '+r.seq+'/30'):'')) : 'Belum ada';
+      var rp=computeProgres(sEl.value, aEl.value);
+      pEl.textContent = rp.juz ? ('Juz '+rp.juz+' - '+rp.pct+'%'+(rp.seq?(' - tahap '+rp.seq+'/30'):'')) : 'Belum ada';
     },
+    addSurah: function(c){ wSyncDraftFromDOM(); var kat=CATS_WALI[c]; if(!kat) return; var arr=wEntriesForKat(kat).slice(); arr.push({}); WT.cleared=false; WT.draft[kat]=arr; render(); },
+    delSurah: function(c,r){ wSyncDraftFromDOM(); var kat=CATS_WALI[c]; if(!kat) return; var arr=wEntriesForKat(kat).slice(); arr.splice(r,1); if(!arr.length) arr=[{}]; WT.draft[kat]=arr; render(); },
     save: async function(){
       var api=SB(); if(!api){ toast('Supabase belum siap','error'); return; }
       var nis=childNis(); if(!nis){ toast('Data anak belum termuat','error'); return; }
       var nama=childNama(), kelas=childKelas();
       var tglEl=document.getElementById('zwtf-tanggal'); var tgl=(tglEl&&tglEl.value)?tglEl.value:(WT.tgl||todayStr()); WT.tgl=String(tgl).slice(0,10);
       var ta=curTA(), sem=curSemester(), saved=0, failed=0, filled=0, logs=[];
+      wSyncDraftFromDOM();
+      // Wajibkan kolom Ayat: surah dipilih tapi ayat kosong -> jangan simpan.
+      for(var vc=0;vc<CATS_WALI.length;vc++){
+        var vkat=CATS_WALI[vc], vents=wEntriesForKat(vkat);
+        for(var vr=0;vr<vents.length;vr++){
+          var vs=parseInt(vents[vr].surah,10)||0, va=parseInt(vents[vr].ayat,10)||0;
+          if(vs && (!va||va<1)){
+            toast('Isi jumlah ayat untuk '+vkat+' (surah '+(vr+1)+') dulu.','error');
+            var vaEl=document.getElementById('zwtf-ayat-'+vc+'-'+vr);
+            if(vaEl){ try{ vaEl.focus(); }catch(err){} }
+            return;
+          }
+        }
+      }
       for(var i=0;i<CATS_WALI.length;i++){
         var kat=CATS_WALI[i];
-        var sEl=document.getElementById('zwtf-surah-'+i), aEl=document.getElementById('zwtf-ayat-'+i), cEl=document.getElementById('zwtf-cat-'+i);
-        var surah_no=parseInt(sEl&&sEl.value,10)||0;
-        if(!surah_no) continue;
+        var entries=wEntriesForKat(kat).filter(function(en){ return (parseInt(en.surah,10)||0)>0; });
+        if(!entries.length) continue;
         filled++;
-        var ayat=parseInt(aEl&&aEl.value,10)||0;
-        var prog=computeProgres(surah_no,ayat);
-        var snama=(SURAH[surah_no-1]?SURAH[surah_no-1][0]:'');
-        var cat=stripTanzilNote((cEl?cEl.value:'')||'');
-        // Tilawah: simpan jilid At-Tanzil + halaman di catatan, progres memakai jilid+halaman.
-        var _progVal=prog.pct;
-        if(isTilawahKat(kat)){
-          var tEl=document.getElementById('zwtf-tanzil-'+i), hEl=document.getElementById('zwtf-hal-'+i);
-          var _tv=tEl?tEl.value:'', _hv=hEl?hEl.value:'';
-          var _note=tanzilNote(_tv,_hv);
-          if(_note) cat = cat ? (cat+' '+_note) : _note;
-          var _tzp=computeTanzilProgres(_tv,_hv);
-          if(_tzp.tanzil) _progVal=_tzp.pct;
+        var parts=[], combinedCat=[], last=null;
+        for(var r=0;r<entries.length;r++){
+          var en=entries[r];
+          var surah_no=parseInt(en.surah,10)||0;
+          var ayat=parseInt(en.ayat,10)||0;
+          var prog=computeProgres(surah_no,ayat);
+          var snama=(SURAH[surah_no-1]?SURAH[surah_no-1][0]:'');
+          var cat=stripTanzilNote(en.catatan||'');
+          var _progVal=prog.pct;
+          if(isTilawahKat(kat)){
+            var _note=tanzilNote(en.tanzil, en.halaman);
+            if(_note) cat = cat ? (cat+' '+_note) : _note;
+            var _tzp=computeTanzilProgres(en.tanzil, en.halaman);
+            if(_tzp.tanzil) _progVal=_tzp.pct;
+          }
+          // Riwayat: satu baris per surah.
+          logs.push({ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:_progVal, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:'', guru_nama:('Wali - '+nama) });
+          parts.push(snama+' ('+ayat+' ayat)');
+          if(cat) combinedCat.push(snama+': '+cat);
+          last={ surah_no:surah_no, ayat:ayat, prog:prog, progVal:_progVal };
         }
-        var body={ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:_progVal, catatan:cat, tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
+        // Ringkasan: satu baris per kategori, nama surah digabung.
+        var body={ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:(last.progVal!=null?last.progVal:last.prog.pct), catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
         var res=await api.upsert('mutabaah_tahfidz',body,'client_key,siswa_id,konteks,kategori,tahun_ajaran,semester');
         if(res&&res.error) failed++; else saved++;
-        logs.push({ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:_progVal, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:'', guru_nama:('Wali - '+nama) });
       }
       if(!filled){ toast('Isi minimal 1 kategori','error'); return; }
       // ANTI-DOBEL: baris dengan kategori + surah + ayat + tanggal yang sama tidak ditulis dua kali.
@@ -3402,7 +3471,7 @@ animateWaliContent();
       }
       if(logs.length){ try{ await api.insert('mutabaah_tahfidz_riwayat', logs); }catch(e){} }
       if(skipDobel) toast(skipDobel+' data kembar dilewati (sudah tercatat hari ini).','info');
-      if(saved){ toast('Tersimpan '+saved+' kategori','success'); WT.cleared=false; WT.loadedNis=null; loadTahfidz(nis); }
+      if(saved){ toast('Tersimpan '+saved+' kategori','success'); WT.cleared=false; WT.draft={}; WT.loadedNis=null; loadTahfidz(nis); }
       else toast('Gagal menyimpan','error');
     }
   };
@@ -3421,6 +3490,12 @@ animateWaliContent();
       +'.zwtf-ro-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}'
       +'.zwtf-ro-title{font-weight:800;font-size:14px;color:#0f172a}'
       +'.zwtf-ro-meta{font-size:12px;color:#64748b;margin-top:2px}'
+      +'.zwtf-row-sep{border-top:1px dashed #e2e8f0;margin-top:12px;padding-top:12px}'
+      +'.zwtf-row-head{display:flex;align-items:center;justify-content:space-between;margin:2px 0 6px}'
+      +'.zwtf-row-no{font-size:12px;font-weight:800;color:#475569}'
+      +'.zwtf-count{background:#e0f2fe;color:#0369a1}'
+      +'.zwtf-add{width:100%;margin-top:10px;border:1px dashed #0f766e;background:#f0fdfa;color:#0f766e;border-radius:12px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;-webkit-tap-highlight-color:transparent}'
+      +'.zwtf-del{width:100%;margin-top:8px;border:1px solid #fecaca;background:#fff1f2;color:#b91c1c;border-radius:12px;padding:9px;font-size:12px;font-weight:800;cursor:pointer;-webkit-tap-highlight-color:transparent}'
       +'.zwtf-note{text-align:center;color:#64748b;font-size:12px;font-weight:700;margin:10px 0}'
       +'</style>';
   }
@@ -3504,26 +3579,35 @@ animateWaliContent();
     if(tab==='wali_murid'){
       var cards='';
       for(var i=0;i<CATS_WALI.length;i++){
-        var kat=CATS_WALI[i]; var rec=recForKat(kat);
-        var _pw=rec.surah?computeProgres(rec.surah, rec.ayat):null;
-        var progText=(_pw&&_pw.juz)?('Juz '+_pw.juz+' - '+_pw.pct+'%'+(_pw.seq?(' - tahap '+_pw.seq+'/30'):''))
-          :(rec.juz?('Juz '+rec.juz+' - '+(rec.progres||0)+'%'):'Belum ada');
-        var _tz=parseTanzilNote(rec.catatan||'');
-        var _catVal=stripTanzilNote(rec.catatan||'');
-        if(isTilawahKat(kat)){
-          var _tt=tanzilProgText(_tz.tanzil, _tz.halaman, ' - ');
-          if(_tt) progText=_tt;
+        var kat=CATS_WALI[i];
+        var ents=wEntriesForKat(kat);
+        var rowsHtml='';
+        for(var r=0;r<ents.length;r++){
+          var en=ents[r]||{};
+          var _tzE=parseTanzilNote(en.catatan||'');
+          var _tzv=(en.tanzil||_tzE.tanzil||''), _hlv=(en.halaman||_tzE.halaman||'');
+          var _catVal=stripTanzilNote(en.catatan||'');
+          var _pw=en.surah?computeProgres(en.surah, en.ayat):null;
+          var progText=(_pw&&_pw.juz)?('Juz '+_pw.juz+' - '+_pw.pct+'%'+(_pw.seq?(' - tahap '+_pw.seq+'/30'):'')):'Belum ada';
+          if(isTilawahKat(kat)){ var _tt=tanzilProgText(_tzv, _hlv, ' - '); if(_tt) progText=_tt; }
+          var delBtn=(ents.length>1)?('<button type="button" class="zwtf-del" onclick="window.zwTf.delSurah('+i+','+r+')">Hapus surah '+(r+1)+'</button>'):'';
+          rowsHtml+='<div class="zwtf-row'+(r>0?' zwtf-row-sep':'')+'">'
+            +'<div class="zwtf-row-head"><span class="zwtf-row-no">Surah '+(r+1)+'</span><span class="zwtf-chip" id="zwtf-prog-'+i+'-'+r+'">'+progText+'</span></div>'
+            +'<label class="field-label">Surah</label><select class="field-select" id="zwtf-surah-'+i+'-'+r+'" onchange="window.zwTf.recalc('+i+','+r+')">'+surahOptions(en.surah)+'</select>'
+            +'<label class="field-label">Ayat terakhir</label><input type="number" inputmode="numeric" class="field-input" id="zwtf-ayat-'+i+'-'+r+'" value="'+(en.ayat!=null&&en.ayat!==''?esc(en.ayat):'')+'" oninput="window.zwTf.recalc('+i+','+r+')" placeholder="mis. 10">'
+            +(isTilawahKat(kat)?('<label class="field-label">At-Tanzil</label><select class="field-select" id="zwtf-tanzil-'+i+'-'+r+'" onchange="window.zwTf.recalc('+i+','+r+')">'+tanzilOptions(_tzv)+'</select>'
+              +'<label class="field-label">Halaman</label><input type="number" inputmode="numeric" class="field-input" id="zwtf-hal-'+i+'-'+r+'" value="'+(_hlv?esc(_hlv):'')+'" oninput="window.zwTf.recalc('+i+','+r+')" placeholder="mis. 12">'):'')
+            +'<label class="field-label">Catatan</label><input type="text" class="field-input" id="zwtf-cat-'+i+'-'+r+'" value="'+esc(_catVal)+'" placeholder="Catatan (opsional)">'
+            +delBtn
+            +'</div>';
         }
         cards+='<div class="zwtf-cat">'
-          +'<div class="zwtf-cat-head"><span class="zwtf-cat-title">'+esc(kat)+'</span><span class="zwtf-chip" id="zwtf-prog-'+i+'">'+progText+'</span></div>'
-          +'<label class="field-label">Surah</label><select class="field-select" id="zwtf-surah-'+i+'" onchange="window.zwTf.recalc('+i+')">'+surahOptions(rec.surah)+'</select>'
-          +'<label class="field-label">Ayat terakhir</label><input type="number" inputmode="numeric" class="field-input" id="zwtf-ayat-'+i+'" value="'+(rec.ayat!=null&&rec.ayat!==''?esc(rec.ayat):'')+'" oninput="window.zwTf.recalc('+i+')" placeholder="mis. 10">'
-          +(isTilawahKat(kat)?('<label class="field-label">At-Tanzil</label><select class="field-select" id="zwtf-tanzil-'+i+'" onchange="window.zwTf.recalc('+i+')">'+tanzilOptions(_tz.tanzil||'')+'</select>'
-            +'<label class="field-label">Halaman</label><input type="number" inputmode="numeric" class="field-input" id="zwtf-hal-'+i+'" value="'+(_tz.halaman?esc(_tz.halaman):'')+'" oninput="window.zwTf.recalc('+i+')" placeholder="mis. 12">'):'')
-          +'<label class="field-label">Catatan</label><input type="text" class="field-input" id="zwtf-cat-'+i+'" value="'+esc(_catVal)+'" placeholder="Catatan (opsional)">'
+          +'<div class="zwtf-cat-head"><span class="zwtf-cat-title">'+esc(kat)+'</span><span class="zwtf-chip zwtf-count">'+ents.length+' surah</span></div>'
+          +rowsHtml
+          +'<button type="button" class="zwtf-add" onclick="window.zwTf.addSurah('+i+')">+ Tambah Surah</button>'
           +'</div>';
       }
-      var _adaTgl=adaSetoranTgl(), _adaIsi=adaIsiForm(), _hariIni=isHariIni();
+      var _adaTgl=adaSetoranTgl(), _adaIsi=adaIsiDraft(), _hariIni=isHariIni();
       var tglField='<label class="field-label">Tanggal</label><input type="date" class="field-input" id="zwtf-tanggal" value="'+esc(WT.tgl||todayStr())+'" onchange="window.zwTf.setTanggal(this.value)" style="margin-bottom:12px">'
         +(_adaIsi
           ? ('<div style="border:1px solid #fde68a;background:#fffbeb;border-radius:12px;padding:10px;margin-bottom:12px">'
