@@ -1380,7 +1380,77 @@ function renderTabunganGuruModule(moduleId, detail){
 
 /* ---------- Tabungan Siswa: input sekelas sekaligus (bulk per kelas) ---------- */
 function tabEsc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-function tabState(){ if(!appState.tabInput) appState.tabInput={ kelas:'', jenis:'Setoran', metode:'Tunai', tanggal:'', loadingSaldo:false, saldoMap:null, rows:null, loadedKelas:'' }; return appState.tabInput; }
+function tabState(){ if(!appState.tabInput) appState.tabInput={ kelas:'', jenis:'Setoran', metode:'Tunai', tanggal:'', loadingSaldo:false, saldoMap:null, rows:null, loadedKelas:'', draft:{} }; if(!appState.tabInput.draft) appState.tabInput.draft={}; return appState.tabInput; }
+/* ==================================================================
+ * FIX ISIAN TABUNGAN KE-RESET (kedip / re-render)
+ *
+ * MASALAH:
+ *   Nominal per siswa hanya hidup di DOM (input tanpa value=""), dan
+ *   modul ini memanggil render() penuh di beberapa tempat: saat cache
+ *   saldo 45 detik kadaluarsa, saat data Supabase datang, dan saat app
+ *   kembali aktif (auto-refresh). Kalau guru mengisi sekelas (lebih dari
+ *   45 detik), render terjadi di tengah pengisian -> semua nominal yang
+ *   sudah diketik hilang, dan yang tersimpan hanya siswa bagian bawah.
+ *
+ * SOLUSI:
+ *   1. Semua isian disimpan sebagai DRAFT di appState.tabInput.draft,
+ *      jadi render ulang tidak pernah menghapus angka.
+ *   2. Saat guru sedang mengisi, saldo diperbarui di tempat (patch teks)
+ *      tanpa render penuh -> tidak ada kedip & fokus keyboard tidak lepas.
+ *   3. Auto-reload 45 detik ditunda selama masih ada isian.
+ *   4. window.__zGuruEditTs ikut ditandai agar auto-refresh app resume
+ *      tidak menimpa form yang sedang diisi.
+ *   5. Draft hanya dihapus untuk siswa yang BERHASIL tersimpan.
+ * ================================================================== */
+function tabDraftAll(){ return tabState().draft; }
+function tabDraftGet(nis){ var d=tabDraftAll()[String(nis)]; return d || { nominal:'', ket:'' }; }
+function tabDraftSet(nis, patch, tandaiEdit){
+  var S=tabState(), k=String(nis||''); if(!k) return;
+  var cur=S.draft[k] || { nominal:'', ket:'' };
+  if(patch && patch.nominal!==undefined) cur.nominal=String(patch.nominal==null?'':patch.nominal);
+  if(patch && patch.ket!==undefined) cur.ket=String(patch.ket==null?'':patch.ket);
+  if(!String(cur.nominal||'').trim() && !String(cur.ket||'').trim()) delete S.draft[k]; else S.draft[k]=cur;
+  if(tandaiEdit!==false) window.__zGuruEditTs=Date.now();
+}
+function tabDraftHapus(nisList){ var S=tabState(); (nisList||[]).forEach(function(n){ delete S.draft[String(n)]; }); }
+function tabDraftKosongkan(){ tabState().draft={}; }
+function tabDraftJumlah(){ var D=tabDraftAll(), n=0, total=0; Object.keys(D).forEach(function(k){ var v=Number(String(D[k].nominal||'').replace(/\D/g,''))||0; if(v>0){ n++; total+=v; } }); return { count:n, total:total }; }
+// Tarik apa pun yang ada di DOM ke dalam draft (dipanggil sebelum render / simpan).
+function tabSyncDomKeDraft(){
+  try{
+    Array.prototype.slice.call(document.querySelectorAll('.tabin-nom[data-tab-nis]')).forEach(function(el){
+      var nis=el.getAttribute('data-tab-nis');
+      var ketEl=document.querySelector('.tabin-ket[data-tab-ket="'+nis+'"]');
+      tabDraftSet(nis, { nominal:String(el.value||''), ket: ketEl?String(ketEl.value||''):'' }, false);
+    });
+  }catch(_e){}
+}
+function tabSedangMengisi(){
+  tabSyncDomKeDraft();
+  return Object.keys(tabDraftAll()).length > 0;
+}
+// Perbarui angka saldo & ringkasan tanpa membongkar form (anti kedip).
+function tabPatchSaldoDom(){
+  var S=tabState();
+  if(!Array.isArray(S.rows)) return;
+  try{
+    var siswa=S.kelas?(getSiswaByKelas(S.kelas)||[]):[];
+    var byNis={}; siswa.forEach(function(s){ byNis[String(s.nis||'')]=s; });
+    Array.prototype.slice.call(document.querySelectorAll('[data-tab-saldo]')).forEach(function(el){
+      var s=byNis[String(el.getAttribute('data-tab-saldo')||'')];
+      if(!s) return;
+      var saldo=tabSaldoSiswa(S, s);
+      el.textContent='Rp '+Number(saldo||0).toLocaleString('id-ID');
+    });
+    var note=document.querySelector('.tabin-note'); if(note) note.remove();
+  }catch(_e){}
+}
+// Render yang aman: kalau guru sedang mengisi, jangan render penuh.
+function tabRenderAman(){
+  if(appState.activeTab!=='module:tabungan'){ render(); return; }
+  if(tabSedangMengisi()){ tabPatchSaldoDom(); try{ renderFloating(); }catch(_e){} return; }
+  render();
+}
 function tabKelasOptions(){ var wk=appState.teacherClass; if(wk && wk!=='Kelas belum terhubung') return [wk]; return (appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList : (typeof KELAS_LIST!=='undefined'?KELAS_LIST:[]); }
 function tabDelta(r){ var d=Number(r.debit||0)||0,k=Number(r.kredit||0)||0; if(!d&&!k){ var nn=Number(r.nominal||0)||0; if(/tarik|keluar|penarikan/i.test(r.jenis||'')) k=nn; else d=nn; } return {d:d,k:k}; }
 function tabNormKelas(v){ return String(v==null?'':v).toLowerCase().replace(/[^a-z0-9]/g,''); }
@@ -1393,14 +1463,17 @@ function tabNormNama(v){ return String(v==null?'':v).toLowerCase().replace(/\s+/
 // siswa_id, NIS, ATAU nama siswa di kelas tersebut.
 async function loadTabunganData(kelas){
   var S=tabState(); S.loadingSaldo=true; S.saldoMap=null; S.rows=null; S.loadedKelas=kelas;
-  if(appState.activeTab==='module:tabungan') render();
+  if(appState.activeTab==='module:tabungan') tabRenderAman();
   var map={}, rows=[];
   try{
     var api=window.ZymataMobileSupabase;
     if(api&&api.select&&kelas){
       var all=[];
-      try{ var resAll=await api.select('tabungan_siswa',{ limit:5000 }); if(resAll&&!resAll.error&&Array.isArray(resAll.data)) all=resAll.data; }catch(e1){}
-      if(!all.length){ try{ var res=await api.select('tabungan_siswa',{ eq:{ kelas:kelas }, limit:5000 }); if(res&&!res.error&&Array.isArray(res.data)) all=res.data; }catch(e2){} }
+      // EGRESS: ambil kelas guru ini dulu. Dulu seluruh sekolah (5000 baris)
+      // selalu diunduh lebih dahulu, padahal yang dipakai hanya satu kelas.
+      try{ var res=await api.select('tabungan_siswa',{ eq:{ kelas:kelas }, limit:50000 }); if(res&&!res.error&&Array.isArray(res.data)) all=res.data; }catch(e1){}
+      // Jaring pengaman: bila format nama kelas tidak cocok, baru unduh semua.
+      if(!all.length){ try{ var resAll=await api.select('tabungan_siswa',{ limit:50000 }); if(resAll&&!resAll.error&&Array.isArray(resAll.data)) all=resAll.data; }catch(e2){} }
 
       var murid=(typeof getSiswaByKelas==='function')?(getSiswaByKelas(kelas)||[]):[];
       var byNis={}, bySid={}, byNama={};
@@ -1429,7 +1502,7 @@ async function loadTabunganData(kelas){
       });
     }
   }catch(e){}
-  if(S.loadedKelas===kelas){ S.saldoMap=map; S.rows=rows; S.loadedAt=Date.now(); S.loadingSaldo=false; if(appState.activeTab==='module:tabungan') render(); }
+  if(S.loadedKelas===kelas){ S.saldoMap=map; S.rows=rows; S.loadedAt=Date.now(); S.loadingSaldo=false; if(appState.activeTab==='module:tabungan') tabRenderAman(); }
 }
 function tabDigits(v){ return String(v==null?'':v).replace(/\D/g,''); }
 // Satu baris transaksi dianggap milik siswa ini kalau salah satu identitasnya cocok:
@@ -1465,7 +1538,10 @@ function renderTabunganInputGuruModule(moduleId, detail){
   if(!S.kelas && kelasOpts.length===1) S.kelas=kelasOpts[0];
   if(!S.tanggal) S.tanggal=agTodayISO();
   var siswa=S.kelas?(getSiswaByKelas(S.kelas)||[]):[];
-  if(S.kelas && !S.loadingSaldo && (S.loadedKelas!==S.kelas || !(Date.now()-(S.loadedAt||0) < 45000))){ loadTabunganData(S.kelas); }
+  // Auto-muat saldo hanya kalau kelas berubah, atau cache kadaluarsa DAN tidak ada isian
+  // yang sedang dikerjakan. Dulu reload 45 detik ini jalan di tengah pengisian dan
+  // memicu render penuh -> nominal yang sudah diketik hilang.
+  if(S.kelas && !S.loadingSaldo && (S.loadedKelas!==S.kelas || (!(Date.now()-(S.loadedAt||0) < 45000) && !tabSedangMengisi()))){ loadTabunganData(S.kelas); }
   var camSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5a2 2 0 0 1 2-2h1.6l1-1.5a1 1 0 0 1 .8-.4h5.2a1 1 0 0 1 .8.4l1 1.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/></svg>';
   var html='<style id="tabin-style">'
     +'.tabin-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}'
@@ -1478,6 +1554,7 @@ function renderTabunganInputGuruModule(moduleId, detail){
     +'.tabin-nm{font-weight:600;font-size:14px;color:#e8ebf2}'
     +'.tabin-mt{font-size:12px;color:#94a3b8;margin-top:2px}'
     +'.tabin-mt b{color:#5eead4}'
+    +'.tabin-row.is-filled{border-color:rgba(45,212,191,.45);background:rgba(45,212,191,.07)}'
     +'.tabin-in{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}'
     +'@media(max-width:520px){.tabin-in{grid-template-columns:1fr}}'
     +'</style>';
@@ -1511,9 +1588,12 @@ function renderTabunganInputGuruModule(moduleId, detail){
       var nis=String(s.nis||'');
       var saldo=tabSaldoSiswa(S, s);
       var saldoTxt=S.loadingSaldo?'\u2026':('Rp '+Number(saldo||0).toLocaleString('id-ID'));
-      return '<div class="tabin-row">'
-        +'<div class="tabin-si"><div class="tabin-nm">'+tabEsc(s.name||'Siswa')+'</div><div class="tabin-mt">NIS '+tabEsc(nis||'-')+' &middot; Saldo <b>'+saldoTxt+'</b></div></div>'
-        +'<div class="tabin-in"><input type="text" inputmode="numeric" class="field-input tabin-nom" data-tab-nis="'+tabEsc(nis)+'" data-tab-nama="'+tabEsc(s.name||'')+'" placeholder="Nominal" oninput="window.zTab.fmtNom(this)"><input type="text" class="field-input tabin-ket" data-tab-ket="'+tabEsc(nis)+'" placeholder="Keterangan (opsional)"></div>'
+      // Isian dipulihkan dari draft supaya render ulang tidak menghapus angka guru.
+      var dft=tabDraftGet(nis);
+      var adaIsian=!!String(dft.nominal||'').trim();
+      return '<div class="tabin-row'+(adaIsian?' is-filled':'')+'">'
+        +'<div class="tabin-si"><div class="tabin-nm">'+tabEsc(s.name||'Siswa')+'</div><div class="tabin-mt">NIS '+tabEsc(nis||'-')+' &middot; Saldo <b data-tab-saldo="'+tabEsc(nis)+'">'+saldoTxt+'</b></div></div>'
+        +'<div class="tabin-in"><input type="text" inputmode="numeric" class="field-input tabin-nom" data-tab-nis="'+tabEsc(nis)+'" data-tab-nama="'+tabEsc(s.name||'')+'" placeholder="Nominal" value="'+tabEsc(dft.nominal||'')+'" oninput="window.zTab.fmtNom(this)" onblur="window.zTab.fmtNom(this)"><input type="text" class="field-input tabin-ket" data-tab-ket="'+tabEsc(nis)+'" placeholder="Keterangan (opsional)" value="'+tabEsc(dft.ket||'')+'" oninput="window.zTab.setKet(this)"></div>'
         +'</div>';
     }).join('');
     html+='</div>';
@@ -1528,10 +1608,28 @@ function renderTabunganInputGuruModule(moduleId, detail){
   return html;
 }
 window.zTab = {
-  setKelas: function(v){ var S=tabState(); S.kelas=String(v||''); S.saldoMap=null; S.rows=null; S.loadedKelas=''; render(); },
-  reloadSaldo: function(){ var S=tabState(); if(!S.kelas){ showToast('Pilih kelas dulu.','error','&#9888;'); return; } S.saldoMap=null; S.rows=null; S.loadedKelas=''; S.loadedAt=0; render(); },
-  setField: function(f,v){ var S=tabState(); if(f==='jenis') S.jenis=String(v||'Setoran'); else if(f==='metode') S.metode=String(v||'Tunai'); else if(f==='tanggal') S.tanggal=String(v||''); },
-  fmtNom: function(el){ if(!el) return; var d=String(el.value||'').replace(/\D/g,''); el.value = d ? Number(d).toLocaleString('id-ID') : ''; },
+  setKelas: function(v){
+    var S=tabState(); var baru=String(v||'');
+    if(baru!==S.kelas && tabSedangMengisi()){
+      var j=tabDraftJumlah();
+      var ok=window.confirm('Ada isian '+j.count+' siswa (Rp '+Number(j.total).toLocaleString('id-ID')+') yang belum disimpan. Pindah kelas dan hapus isian itu?');
+      if(!ok){ render(); return; }
+      tabDraftKosongkan();
+    }
+    S.kelas=baru; S.saldoMap=null; S.rows=null; S.loadedKelas=''; render();
+  },
+  reloadSaldo: function(){ var S=tabState(); if(!S.kelas){ showToast('Pilih kelas dulu.','error','&#9888;'); return; } tabSyncDomKeDraft(); S.saldoMap=null; S.rows=null; S.loadedKelas=''; S.loadedAt=0; render(); },
+  setField: function(f,v){ var S=tabState(); if(f==='jenis') S.jenis=String(v||'Setoran'); else if(f==='metode') S.metode=String(v||'Tunai'); else if(f==='tanggal') S.tanggal=String(v||''); window.__zGuruEditTs=Date.now(); },
+  // Nominal & keterangan langsung disimpan ke draft -> aman dari render ulang.
+  fmtNom: function(el){
+    if(!el) return;
+    var d=String(el.value||'').replace(/\D/g,'');
+    el.value = d ? Number(d).toLocaleString('id-ID') : '';
+    tabDraftSet(el.getAttribute('data-tab-nis'), { nominal:el.value }, true);
+    try{ var row=el.closest('.tabin-row'); if(row) row.classList.toggle('is-filled', !!d); }catch(_e){}
+    try{ renderFloating(); }catch(_e){}
+  },
+  setKet: function(el){ if(!el) return; tabDraftSet(el.getAttribute('data-tab-ket'), { ket:el.value }, true); },
   scan: function(){
     openQrScanner(async function(code){
       var raw=String(code||'').trim();
@@ -1539,7 +1637,8 @@ window.zTab = {
       var hit=await agResolveStudent(raw);
       if(!hit){ showToast(agScanNotFoundMsg(raw),'error','&#9888;'); return; }
       var S=tabState();
-      if(hit.kelas && hit.kelas!==S.kelas){ S.kelas=hit.kelas; S.saldoMap=null; S.rows=null; S.loadedKelas=''; }
+      tabSyncDomKeDraft();
+      if(hit.kelas && hit.kelas!==S.kelas){ tabDraftKosongkan(); S.kelas=hit.kelas; S.saldoMap=null; S.rows=null; S.loadedKelas=''; }
       render();
       showToast('Kelas '+(hit.kelas||'')+' dimuat \u00b7 isi nominal '+hit.name,'success','&#10003;');
     });
@@ -1556,20 +1655,31 @@ window.zTab = {
     var tanggal=(tglEl&&tglEl.value)||S.tanggal||agTodayISO();
     var isSetor=/setor|masuk/i.test(jenis);
     S.jenis=jenis; S.metode=metode; S.tanggal=tanggal;
-    var noms=Array.prototype.slice.call(document.querySelectorAll('.tabin-nom[data-tab-nis]'));
+    // Sumber data = DRAFT (bukan cuma DOM), jadi walau layar sempat render ulang
+    // atau sebagian baris tidak tampil, semua isian guru tetap ikut tersimpan.
+    tabSyncDomKeDraft();
+    var muridUrut=(typeof getSiswaByKelas==='function')?(getSiswaByKelas(S.kelas)||[]):[];
+    var namaByNis={}, urutByNis={};
+    muridUrut.forEach(function(m,idx){ var n=String(m.nis||''); if(n){ namaByNis[n]=m.name||m.nama||m.nama_siswa||''; urutByNis[n]=idx; } });
+    try{ Array.prototype.slice.call(document.querySelectorAll('.tabin-nom[data-tab-nis]')).forEach(function(el){ var n=el.getAttribute('data-tab-nis'); if(n && !namaByNis[n]) namaByNis[n]=el.getAttribute('data-tab-nama')||''; }); }catch(_e){}
+    var D=tabDraftAll();
     var entries=[];
-    noms.forEach(function(el){ var nis=el.getAttribute('data-tab-nis'); var nama=el.getAttribute('data-tab-nama')||''; var nominal=Number(String(el.value||'').replace(/\D/g,''))||0; if(nominal>0){ var ketEl=document.querySelector('.tabin-ket[data-tab-ket="'+nis+'"]'); var ket=ketEl?String(ketEl.value||'').trim():''; entries.push({ nis:nis, nama:nama, nominal:nominal, ket:ket }); } });
+    Object.keys(D).forEach(function(nis){
+      var nominal=Number(String(D[nis].nominal||'').replace(/\D/g,''))||0;
+      if(nominal>0) entries.push({ nis:nis, nama:namaByNis[nis]||'', nominal:nominal, ket:String(D[nis].ket||'').trim() });
+    });
+    entries.sort(function(a,b){ var x=(urutByNis[a.nis]==null?9999:urutByNis[a.nis]), y=(urutByNis[b.nis]==null?9999:urutByNis[b.nis]); return x-y; });
     if(!entries.length){ showToast('Isi nominal minimal 1 siswa.','error','&#9888;'); return; }
     S._saving=true;
     try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=true; b.setAttribute('aria-disabled','true'); }); }catch(_e){}
     showToast('Menyimpan '+entries.length+' data\u2026','info','&#128190;');
     try{
     var sisMap={};
-    try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, limit:5000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||row.siswa_id||''), nama:row.nama||row.nama_siswa||'' }; }); } }catch(e){}
+    try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, limit:50000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||row.siswa_id||''), nama:row.nama||row.nama_siswa||'' }; }); } }catch(e){}
     var saldoByNis={}, saldoBySid={}, sigCount={};
     var _tabSig=function(sid,nis,nama,tgl,jn,nom,db,kr,ket,mtd){ return ['default',String(sid||nis||nama||'').toLowerCase().trim(),String(tgl||'').slice(0,10),String(jn||'').toLowerCase().trim(),Number(nom)||0,Number(db)||0,Number(kr)||0,String(ket||'').toLowerCase().trim(),String(mtd||'').toLowerCase().trim()].join('|'); };
-    try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, limit:5000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; var _sg=_tabSig(r.siswa_id,r.nis,r.nama_siswa,r.tanggal,r.jenis,r.nominal,r.debit,r.kredit,r.keterangan,r.metode); sigCount[_sg]=(sigCount[_sg]||0)+1; }); } }catch(e){}
-    var saved=0, failed=0, skipped=[];
+    try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, limit:50000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; var _sg=_tabSig(r.siswa_id,r.nis,r.nama_siswa,r.tanggal,r.jenis,r.nominal,r.debit,r.kredit,r.keterangan,r.metode); sigCount[_sg]=(sigCount[_sg]||0)+1; }); } }catch(e){}
+    var saved=0, failed=0, skipped=[], savedNis=[];
     for(var i=0;i<entries.length;i++){
       var e=entries[i]; var info=sisMap[e.nis]||{}; var siswaId=info.id||''; var namaSiswa=e.nama||info.nama||'';
       var saldoBerjalan=(siswaId && typeof saldoBySid[siswaId]==='number')?saldoBySid[siswaId]:(saldoByNis[e.nis]||0);
@@ -1581,11 +1691,15 @@ window.zTab = {
       var _h=0; for(var _ci=0;_ci<_uidKey.length;_ci++){ _h=((_h<<5)-_h+_uidKey.charCodeAt(_ci))|0; }
       var rowUid='tab-'+(_h>>>0).toString(36);
       var payload={ client_key:'default', row_uid:rowUid, siswa_id:siswaId||null, nis:e.nis||null, nama_siswa:namaSiswa||null, kelas:S.kelas||null, jenis:isSetor?'Setoran':'Penarikan', nominal:e.nominal, debit:debit, kredit:kredit, saldo:saldoBaru, keterangan:e.ket||null, tanggal:tanggal, petugas:appState.teacherName||'Guru', metode:metode||'Tunai' };
-      try{ var res=await api.upsert('tabungan_siswa', payload, 'row_uid'); if(res&&res.error){ failed++; } else { saved++; if(siswaId) saldoBySid[siswaId]=saldoBaru; if(e.nis) saldoByNis[e.nis]=saldoBaru; } }catch(err){ failed++; }
+      try{ var res=await api.upsert('tabungan_siswa', payload, 'row_uid'); if(res&&res.error){ failed++; } else { saved++; savedNis.push(e.nis); if(siswaId) saldoBySid[siswaId]=saldoBaru; if(e.nis) saldoByNis[e.nis]=saldoBaru; } }catch(err){ failed++; }
     }
     var msg=(isSetor?'Setoran':'Penarikan')+': '+saved+' tersimpan'+(failed?(', '+failed+' gagal'):'');
     if(skipped.length) msg+=' \u00b7 saldo kurang: '+skipped.join(', ');
     showToast(msg,(failed||skipped.length)?'error':'success',(failed||skipped.length)?'&#9888;':'&#10003;');
+    // Hanya isian yang BERHASIL tersimpan yang dihapus. Yang gagal / saldo kurang
+    // tetap tertinggal di form supaya guru tidak perlu mengetik ulang.
+    tabDraftHapus(savedNis);
+    window.__zGuruEditTs=0;
     S.saldoMap=null; S.rows=null; S.loadedKelas=''; S.loadedAt=0; render();
     try{ await hydrateGuruFromSupabase(); }catch(e){}
     }finally{ S._saving=false; try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=false; b.removeAttribute('aria-disabled'); }); }catch(_e){} }
@@ -1964,7 +2078,7 @@ async function loadMasterMapel(){
   try {
     var db = window.db || window.ZymataMobileSupabase;
     if (!db || typeof db.select !== 'function') return;
-    var r = await db.select('master_mapel', { limit: 1000 });
+    var r = await db.select('master_mapel', { limit: 300 });
     if (r && !r.error && Array.isArray(r.data)) {
       var set = {}, out = [];
       r.data.forEach(function(m){ var v = String((m && (m.nama || m.mapel || m.kode)) || '').trim(); if (v && !set[v.toLowerCase()]) { set[v.toLowerCase()] = 1; out.push(v); } });
@@ -4029,7 +4143,7 @@ function renderFloating() {
     <div class="sticky-action-bar is-floating">
       <div>
         <strong>Simpan Tabungan Kelas ${_tab.kelas}</strong>
-        <span>Isi nominal siswa lalu simpan sekaligus</span>
+        <span>${(function(){ try{ var j=tabDraftJumlah(); return j.count ? (j.count + ' siswa terisi &middot; Rp ' + Number(j.total).toLocaleString('id-ID') + ' belum disimpan') : 'Isi nominal siswa lalu simpan sekaligus'; }catch(_e){ return 'Isi nominal siswa lalu simpan sekaligus'; } })()}</span>
       </div>
       <button type="button" class="sticky-save-btn" data-save-tabungan>Simpan Semua</button>
     </div>` : '';
@@ -4928,11 +5042,11 @@ function bindActions() {
         var saldoBerjalan = 0;
         var existing = [];
         if (siswaId) {
-          var rEx = await _S.select('tabungan_siswa', { eq: { siswa_id: siswaId }, limit: 3000 });
+          var rEx = await _S.select('tabungan_siswa', { eq: { siswa_id: siswaId }, limit: 50000 });
           if (rEx && !rEx.error && Array.isArray(rEx.data)) existing = rEx.data;
         }
         if (!existing.length && selNis) {
-          var rEx2 = await _S.select('tabungan_siswa', { eq: { nis: selNis }, limit: 3000 });
+          var rEx2 = await _S.select('tabungan_siswa', { eq: { nis: selNis }, limit: 50000 });
           if (rEx2 && !rEx2.error && Array.isArray(rEx2.data)) existing = rEx2.data;
         }
         existing.forEach(function(r){
@@ -5792,7 +5906,7 @@ async function loadMessagesFromSupabase(kelasUtama) {
   if (!db || typeof db.select !== 'function') return;
   try {
     // Ambil surat/pesan dari wali murid untuk kelas ini (max 50, terbaru dulu)
-    const res = await db.select('surat', { order: 'tanggal', ascending: false, limit: 50 });
+    const res = await db.select('surat', { order: 'tanggal', ascending: false, limit: 30 });
     const rows = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
     // Normalisasi nama kelas agar cocok walau beda spasi/kapital/awalan "Kelas" atau pemisah (-, /, spasi)
     var _normKelas = function(v){ return String(v == null ? '' : v).replace(/^kelas\s*/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase(); };
@@ -6288,7 +6402,10 @@ animateContent();
     if(ST.rosterLoading) return; ST.rosterLoading=true;
     try{
       var api=SB();
-      if(api){ var res=await api.select('siswa',{ limit:5000 }); if(res&&!res.error&&Array.isArray(res.data)){ ST.roster=res.data.map(function(row){ return { id:String(row.id||row.siswa_id||''), nis:String(row.nis||row.nisn||''), name:String(row.nama||row.nama_siswa||row.name||'Siswa'), kelas:String(row.kelas||row.kelas_id||row.rombel||row.kelas_nama||'').trim() }; }); } else if(ST.roster===null){ ST.roster=[]; } }
+      if(api){ var res=await api.select('siswa',{ columns:'id,nis,nama,kelas', limit:50000 });
+        // Jaring pengaman: bila salah satu nama kolom tidak ada, ulangi cara lama.
+        if(res&&res.error){ try{ res=await api.select('siswa',{ limit:50000 }); }catch(_e){} }
+        if(res&&!res.error&&Array.isArray(res.data)){ ST.roster=res.data.map(function(row){ return { id:String(row.id||row.siswa_id||''), nis:String(row.nis||row.nisn||''), name:String(row.nama||row.nama_siswa||row.name||'Siswa'), kelas:String(row.kelas||row.kelas_id||row.rombel||row.kelas_nama||'').trim() }; }); } else if(ST.roster===null){ ST.roster=[]; } }
       else if(ST.roster===null){ ST.roster=[]; }
     }catch(e){ if(ST.roster===null) ST.roster=[]; }
     ST.rosterLoading=false;
@@ -6302,7 +6419,7 @@ animateContent();
     try{
       var api=SB();
       if(!nip || !api){ ST.halaqah=[]; }
-      else { var res=await api.select('halaqah_tahfidz',{ eq:{ guru_nip:nip }, limit:3000 }); ST.halaqah=(res&&res.data)?res.data:[]; }
+      else { var res=await api.select('halaqah_tahfidz',{ eq:{ guru_nip:nip }, limit:50000 }); ST.halaqah=(res&&res.data)?res.data:[]; }
     }catch(e){ ST.halaqah=[]; }
     ST.halaqahLoading=false;
     if(appState.activeTab==='module:kelola-halaqah'||appState.activeTab==='module:mutabaah-tahfidz') render();
@@ -7345,4 +7462,174 @@ animateContent();
     modulePlaceholders['perangkat-pembelajaran']={ eyebrow:'Akademik', title:'Perangkat Pembelajaran', subtitle:'Prota, modul ajar & media pembelajaran.', stats:[], focus:[] };
   }
   console.log('[Zymata Guru] Modul Perangkat Pembelajaran v1 aktif');
+})();
+
+/* ==================================================================
+ * zymata-range-v1  -- pembacaan bertahap (.range) untuk aplikasi guru
+ *
+ * MASALAH YANG DIATASI:
+ *   Server memotong setiap permintaan pada batas max-rows. Angka
+ *   limit:2000 / 3000 / 5000 di dalam aplikasi tidak pernah benar-
+ *   benar terpenuhi kalau batas server lebih kecil, dan tidak ada
+ *   pesan error sama sekali - baris hilang dalam diam.
+ *   Kasus 29 Juli 2026: tabungan kelas III-B kurang Rp 14.000 di HP
+ *   guru sementara Supabase dan web admin benar Rp 346.000.
+ *
+ * CARA KERJA:
+ *   Membungkus window.ZymataMobileSupabase.select. Kalau pemanggil
+ *   meminta lebih dari 900 baris, data diambil bertahap per 900
+ *   baris memakai .range() sampai habis, lalu disambung jadi satu.
+ *   Permintaan di bawah 900 baris dilewatkan apa adanya ke fungsi
+ *   aslinya, jadi tidak ada perubahan perilaku di sana.
+ *
+ * SIFAT AMAN:
+ *   - Fungsi asli tidak diubah, hanya dibungkus. Disimpan di
+ *     api.__selectAsli.
+ *   - Kalau apa pun gagal (tabel tanpa kolom id, jaringan, bentuk
+ *     opsi tak dikenal), otomatis kembali memakai cara lama.
+ *     Tidak pernah lebih buruk dari sebelum ditambal.
+ *   - Tidak pernah MENGURANGI baris. Paling buruk hasilnya sama
+ *     seperti sebelumnya.
+ *   - Tidak menyentuh penyimpanan data (upsert/insert) sama sekali.
+ *
+ * PERIKSA DI CONSOLE:
+ *   __zRangeDebug()
+ * ================================================================== */
+(function () {
+  if (window.__ZYMATA_RANGE_V1__) return;
+  window.__ZYMATA_RANGE_V1__ = true;
+
+  var TANDA        = 'zymata-range-v1';
+  var UKURAN       = 900;     // besar satu halaman
+  var AKTIF_DI_ATAS = 900;    // hanya ikut campur kalau limit > ini
+  var MAKS         = 200000;  // pengaman mutlak
+
+  var stat = {
+    versi: TANDA,
+    terpasang: false,
+    bertahap: 0,      // berapa kali pembacaan bertahap dipakai
+    lewat: 0,         // berapa kali diteruskan ke fungsi asli
+    gagal: 0,         // berapa kali jatuh kembali ke cara lama
+    riwayat: []       // 20 terakhir
+  };
+
+  window.__zRangeDebug = function () {
+    try { return JSON.parse(JSON.stringify(stat)); } catch (e) { return stat; }
+  };
+
+  function catat(baris) {
+    stat.riwayat.push(baris);
+    if (stat.riwayat.length > 20) stat.riwayat.shift();
+  }
+
+  // ---- ambil bertahap -------------------------------------------
+  // urutkan: nama kolom untuk .order(), atau null tanpa pengurutan.
+  // Pengurutan penting supaya halaman tidak saling tumpang tindih.
+  async function ambilBertahap(tabel, opts, diminta, urutkan) {
+    var api = window.ZymataMobileSupabase;
+    var client = (api && typeof api.getClient === 'function') ? api.getClient() : null;
+    if (!client || typeof client.from !== 'function') throw new Error('client tidak tersedia');
+
+    var kolom = opts.columns || '*';
+    var batas = Math.min(diminta, MAKS);
+    var semua = [];
+    var mulai = 0;
+
+    while (mulai < batas) {
+      var akhir = Math.min(mulai + UKURAN, batas) - 1;
+      var minta = akhir - mulai + 1;
+
+      var q = client.from(tabel).select(kolom);
+
+      if (opts.eq && typeof opts.eq === 'object') {
+        Object.keys(opts.eq).forEach(function (k) { q = q.eq(k, opts.eq[k]); });
+      }
+      if (opts['in'] && typeof opts['in'] === 'object') {
+        Object.keys(opts['in']).forEach(function (k) { q = q['in'](k, opts['in'][k]); });
+      }
+      if (opts.ilike && typeof opts.ilike === 'object') {
+        Object.keys(opts.ilike).forEach(function (k) { q = q.ilike(k, opts.ilike[k]); });
+      }
+      if (opts.or) q = q.or(opts.or);
+      if (opts.client_key) q = q.eq('client_key', opts.client_key);
+
+      if (opts.order) {
+        q = q.order(opts.order, { ascending: opts.ascending !== false });
+      } else if (urutkan) {
+        q = q.order(urutkan, { ascending: true });
+      }
+
+      q = q.range(mulai, akhir);
+
+      var r = await q;
+      if (r && r.error) throw r.error;
+
+      var d = (r && Array.isArray(r.data)) ? r.data : [];
+      semua = semua.concat(d);
+
+      if (d.length < minta) break;   // sudah habis
+      mulai = akhir + 1;
+    }
+
+    return semua;
+  }
+
+  // ---- pasang pembungkus ----------------------------------------
+  function pasang() {
+    var api = window.ZymataMobileSupabase;
+    if (!api || typeof api.select !== 'function' || typeof api.getClient !== 'function') {
+      return false;
+    }
+    if (api.__rangeTerpasang) return true;
+
+    var asli = api.select.bind(api);
+    api.__selectAsli = asli;
+    api.__rangeTerpasang = true;
+
+    api.select = async function (tabel, opts) {
+      opts = opts || {};
+      var diminta = Number(opts.limit || 0) || 0;
+
+      // permintaan kecil: biarkan apa adanya
+      if (!(diminta > AKTIF_DI_ATAS)) {
+        stat.lewat++;
+        return asli(tabel, opts);
+      }
+
+      // coba diurutkan pakai id dulu; kalau tabelnya tak punya id,
+      // coba tanpa pengurutan; kalau dua-duanya gagal, cara lama.
+      var percobaan = ['id', null];
+      for (var i = 0; i < percobaan.length; i++) {
+        try {
+          var data = await ambilBertahap(tabel, opts, diminta, percobaan[i]);
+          stat.bertahap++;
+          catat(tabel + ' -> ' + data.length + ' baris (urut: ' + (percobaan[i] || 'tanpa') + ')');
+          return { data: data, error: null };
+        } catch (e) {
+          try {
+            console.warn('[' + TANDA + '] bertahap gagal pada ' + tabel +
+                         ' (urut: ' + (percobaan[i] || 'tanpa') + ')', e);
+          } catch (_) {}
+        }
+      }
+
+      stat.gagal++;
+      catat(tabel + ' -> GAGAL, pakai cara lama');
+      return asli(tabel, opts);
+    };
+
+    stat.terpasang = true;
+    try { console.log('[' + TANDA + '] pembacaan bertahap aktif'); } catch (_) {}
+    return true;
+  }
+
+  // ZymataMobileSupabase dimuat dari context.js dan bisa datang
+  // belakangan, jadi dicoba berulang sampai tersedia.
+  if (!pasang()) {
+    var n = 0;
+    var t = setInterval(function () {
+      n++;
+      if (pasang() || n > 200) clearInterval(t);   // maksimal 30 detik
+    }, 150);
+  }
 })();
