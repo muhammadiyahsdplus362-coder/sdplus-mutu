@@ -7633,3 +7633,133 @@ animateContent();
     }, 150);
   }
 })();
+
+/* ==================================================================
+ * zymata-sync-pill-v1  --  indikator "Menyegarkan data..." untuk APP GURU
+ *
+ * MASALAH:
+ *   Di aplikasi wali ada pill "Menyegarkan data..." saat data ditarik
+ *   ulang dari Supabase. Di shell guru indikator itu tidak pernah ada
+ *   (tidak ada satu pun string-nya di file ini), sehingga auto-refresh
+ *   saat app dibuka kembali berjalan diam-diam dan guru menyangka
+ *   aplikasi tidak menyegarkan apa pun.
+ *
+ * CARA KERJA:
+ *   Membungkus hydrateGuruFromSupabase(). Setiap kali penyegaran mulai,
+ *   pill muncul di tengah atas; hilang saat selesai. Tidak mengubah
+ *   logika data sama sekali, hanya menambah tampilan.
+ *
+ * SIFAT AMAN:
+ *   - Fungsi asli disimpan di window.__hydrateGuruAsli dan tetap dipakai.
+ *   - Pill hidup di <body>, di luar #appContent, jadi tidak ikut terhapus
+ *     oleh render().
+ *   - Ada jeda 250 ms sebelum tampil supaya refresh cepat tidak berkedip,
+ *     dan pengaman auto-hide 20 detik supaya tidak pernah nyangkut.
+ *
+ * PANGGILAN MANUAL:
+ *   window.zSyncPill.show('Menyegarkan data\u2026') / window.zSyncPill.hide()
+ * ================================================================== */
+(function () {
+  if (window.__ZYMATA_SYNC_PILL_V1__) return;
+  window.__ZYMATA_SYNC_PILL_V1__ = true;
+
+  var el = null, aktif = 0, timerTampil = null, timerAman = null;
+
+  function pasangStyle() {
+    if (document.getElementById('zsync-pill-style')) return;
+    var st = document.createElement('style');
+    st.id = 'zsync-pill-style';
+    st.textContent = ''
+      + '#zsyncPill{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 12px);transform:translate(-50%,-14px);'
+      + 'display:flex;align-items:center;gap:9px;max-width:calc(100vw - 32px);'
+      + 'padding:9px 16px;border-radius:999px;background:rgba(15,23,42,.94);color:#f8fafc;'
+      + 'font-size:13px;font-weight:600;letter-spacing:.1px;white-space:nowrap;'
+      + 'box-shadow:0 10px 28px rgba(2,6,23,.38);z-index:2147483000;pointer-events:none;'
+      + 'opacity:0;transition:opacity .18s ease,transform .18s ease}'
+      + '#zsyncPill.is-on{opacity:1;transform:translate(-50%,0)}'
+      + '#zsyncPill .zsync-spin{width:14px;height:14px;flex:0 0 auto;border-radius:50%;'
+      + 'border:2px solid rgba(248,250,252,.28);border-top-color:#f8fafc;animation:zsyncSpin .7s linear infinite}'
+      + '@keyframes zsyncSpin{to{transform:rotate(360deg)}}'
+      + '@media (prefers-reduced-motion:reduce){#zsyncPill .zsync-spin{animation-duration:1.6s}}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  function buat() {
+    pasangStyle();
+    if (el && document.body.contains(el)) return el;
+    el = document.createElement('div');
+    el.id = 'zsyncPill';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.innerHTML = '<span class="zsync-spin"></span><span class="zsync-txt">Menyegarkan data\u2026</span>';
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function tampil(teks) {
+    try {
+      var n = buat();
+      var t = n.querySelector('.zsync-txt');
+      if (t) t.textContent = teks || 'Menyegarkan data\u2026';
+      // paksa reflow supaya transisi jalan walau baru dibuat
+      void n.offsetWidth;
+      n.classList.add('is-on');
+    } catch (_) {}
+  }
+
+  function sembunyi() {
+    try { if (el) el.classList.remove('is-on'); } catch (_) {}
+  }
+
+  var api = {
+    show: function (teks) {
+      aktif++;
+      clearTimeout(timerAman);
+      timerAman = setTimeout(function () { aktif = 0; sembunyi(); }, 20000); // pengaman
+      if (timerTampil) return;
+      timerTampil = setTimeout(function () {
+        timerTampil = null;
+        if (aktif > 0) tampil(teks);
+      }, 250); // jeda anti-kedip untuk refresh yang sangat cepat
+    },
+    hide: function () {
+      aktif = Math.max(0, aktif - 1);
+      if (aktif > 0) return;
+      clearTimeout(timerTampil); timerTampil = null;
+      clearTimeout(timerAman); timerAman = null;
+      sembunyi();
+    },
+    // Bungkus promise apa pun dengan indikator ini.
+    wrap: function (promise, teks) {
+      api.show(teks);
+      return Promise.resolve(promise).finally(function () { api.hide(); });
+    }
+  };
+  window.zSyncPill = api;
+
+  // ---- bungkus penyegaran data guru --------------------------------
+  function pasangHook() {
+    var asli = window.hydrateGuruFromSupabase;
+    if (typeof asli !== 'function' || asli.__zPill) return false;
+    window.__hydrateGuruAsli = asli;
+    var bungkus = async function () {
+      api.show('Menyegarkan data\u2026');
+      try { return await asli.apply(this, arguments); }
+      finally { api.hide(); }
+    };
+    bungkus.__zPill = true;
+    window.hydrateGuruFromSupabase = bungkus;
+    try { console.log('[zymata-sync-pill-v1] indikator penyegaran data aktif'); } catch (_) {}
+    return true;
+  }
+
+  if (!pasangHook()) {
+    var n = 0;
+    var t = setInterval(function () { n++; if (pasangHook() || n > 200) clearInterval(t); }, 150);
+  }
+
+  // Sembunyikan kalau app masuk latar belakang saat pill masih tampil.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') { aktif = 0; clearTimeout(timerTampil); timerTampil = null; sembunyi(); }
+  });
+})();
