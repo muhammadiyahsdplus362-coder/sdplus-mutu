@@ -7737,19 +7737,56 @@ animateContent();
   };
   window.zSyncPill = api;
 
+  // ---- KAPAN pill boleh tampil (samakan dengan aplikasi wali) -------
+  // Wali hanya menampilkan indikator saat app ditutup lalu dibuka lagi.
+  // Jadi pill di sini HANYA untuk:
+  //   1. penyegaran pertama saat app baru dibuka (cold start), dan
+  //   2. penyegaran karena app kembali aktif (resume / visible / focus).
+  // Penyegaran lain -- misalnya hydrate setelah simpan absensi, nilai,
+  // atau tabungan -- TIDAK menampilkan pill, karena aksi itu sudah punya
+  // notifikasi "tersimpan" sendiri.
+  var IZIN_MS = 6000;              // jendela izin setelah app kembali aktif
+  var bolehSampai = Date.now() + 12000;  // izin untuk hydrate pertama saat app dibuka
+
+  function beriIzin() { bolehSampai = Date.now() + IZIN_MS; }
+  function pakaiIzin() {
+    if (Date.now() > bolehSampai) return false;
+    bolehSampai = 0;   // izin sekali pakai -> hydrate berikutnya tidak menampilkan pill
+    return true;
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') {
+      beriIzin();
+    } else {
+      // app masuk latar belakang: sembunyikan pill kalau masih tampil
+      aktif = 0; clearTimeout(timerTampil); timerTampil = null; sembunyi();
+    }
+  });
+  window.addEventListener('focus', beriIzin);
+  window.addEventListener('pageshow', beriIzin);
+  try {
+    var Cap = window.Capacitor;
+    if (Cap && Cap.Plugins && Cap.Plugins.App && Cap.Plugins.App.addListener) {
+      Cap.Plugins.App.addListener('resume', beriIzin);
+      Cap.Plugins.App.addListener('appStateChange', function (s) { if (s && s.isActive) beriIzin(); });
+    }
+  } catch (_) {}
+
   // ---- bungkus penyegaran data guru --------------------------------
   function pasangHook() {
     var asli = window.hydrateGuruFromSupabase;
     if (typeof asli !== 'function' || asli.__zPill) return false;
     window.__hydrateGuruAsli = asli;
     var bungkus = async function () {
-      api.show('Menyegarkan data\u2026');
+      var tampilkan = pakaiIzin();
+      if (tampilkan) api.show('Menyegarkan data\u2026');
       try { return await asli.apply(this, arguments); }
-      finally { api.hide(); }
+      finally { if (tampilkan) api.hide(); }
     };
     bungkus.__zPill = true;
     window.hydrateGuruFromSupabase = bungkus;
-    try { console.log('[zymata-sync-pill-v1] indikator penyegaran data aktif'); } catch (_) {}
+    try { console.log('[zymata-sync-pill-v1] indikator penyegaran data aktif (cold start + resume)'); } catch (_) {}
     return true;
   }
 
@@ -7757,9 +7794,4 @@ animateContent();
     var n = 0;
     var t = setInterval(function () { n++; if (pasangHook() || n > 200) clearInterval(t); }, 150);
   }
-
-  // Sembunyikan kalau app masuk latar belakang saat pill masih tampil.
-  document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState !== 'visible') { aktif = 0; clearTimeout(timerTampil); timerTampil = null; sembunyi(); }
-  });
 })();
