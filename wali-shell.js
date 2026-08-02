@@ -32,6 +32,8 @@ const appState = {
   financeDue: '-',
   financeAmount: 'Rp0',
   financeStatus: 'belum',        // 'lunas' | 'belum' | 'terlambat'
+  financeBulan: 0,               // [LABEL TAGIHAN SPP] jumlah bulan belum lunas
+  financeNote: '-',              // [LABEL TAGIHAN SPP] keterangan bawah kartu
   tabunganSaldo: 'Rp0',
   tabunganUpdate: '-',
   tabunganUmumSaldo: 'Rp0',
@@ -639,6 +641,25 @@ function waliSppWarningBanner(belumBayar){
     + '</div>';
 }
 
+// [KUNCI NIS KARTU KEUANGAN] Penyaring baris milik anak untuk kartu dashboard.
+// NIS didahulukan; nama hanya dipakai bila baris memang tidak punya NIS, dan
+// harus SAMA PERSIS (bukan sekadar mengandung) supaya nama mirip seperti
+// AFIFAH vs AFIFAH ZAHRA tidak saling tercampur.
+function waliNormNama(v){ return String(v || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+function waliRowMilikAnak(t){
+  if(!t) return false;
+  var anakNama = waliNormNama(appState.childName);
+  var anakNis  = String(appState.childNis || '').trim();
+  var rowNis   = String(t.nis || t.nis_siswa || t.siswa_nis || t.snapshot_nis || '').trim();
+  var rowNama  = waliNormNama(t.nama_siswa || t.namaSiswa || t.nama);
+  if(!anakNama || anakNama === 'belum terhubung') return true;
+  // NIS ada di kedua sisi -> NIS yang menentukan, nama tidak boleh menolong.
+  if(anakNis && rowNis) return rowNis === anakNis;
+  // Baris tanpa nama dan tanpa NIS: biarkan lewat (perilaku lama dipertahankan).
+  if(!rowNama) return true;
+  return rowNama === anakNama;
+}
+
 function syncWaliFinanceState(){
   var anakNama = appState.childName || '';
   var _smF = appState.supabaseModules || {};
@@ -646,8 +667,8 @@ function syncWaliFinanceState(){
   var tabData = Array.isArray(_smF.tabungan) ? _smF.tabungan.slice() : [];
   if(!tagihanList.length){ try { var rawTag = localStorage.getItem('zymata_tagihan_spp_v1'); if(rawTag){ var arrTg = JSON.parse(rawTag); if(Array.isArray(arrTg)) tagihanList = arrTg; } } catch(e){} }
   if(!tabData.length){ try { var rawTab = localStorage.getItem('sdplus_tabungan_v1'); if(rawTab){ var arrTb = JSON.parse(rawTab); if(Array.isArray(arrTb)) tabData = arrTb; } } catch(e){} }
-  var tagihanAnak = tagihanList.filter(function(t){ var nm=String(t.nama_siswa||t.nama||'').toLowerCase(); return !anakNama || (nm && nm.indexOf(anakNama.toLowerCase())>=0); });
-  var tabAnak = tabData.filter(function(t){ var nm=String(t.nama_siswa||t.namaSiswa||t.nama||'').toLowerCase(); return !anakNama || (nm && nm.indexOf(anakNama.toLowerCase())>=0); });
+  var tagihanAnak = tagihanList.filter(waliRowMilikAnak); // [KUNCI NIS KARTU KEUANGAN]
+  var tabAnak = tabData.filter(waliRowMilikAnak);         // [KUNCI NIS KARTU KEUANGAN]
   var belumBayar = tagihanAnak.filter(function(t){ return !waliSppLunas(t); });
   var totalTagihan = belumBayar.reduce(function(s,t){ return s + Number(t.nominal||0); }, 0);
   var setorTab = 0, tarikTab = 0;
@@ -655,7 +676,7 @@ function syncWaliFinanceState(){
   var saldoTab = setorTab - tarikTab;
   var tabUmumData = Array.isArray(_smF.tabunganUmum) ? _smF.tabunganUmum.slice() : [];
   if(!tabUmumData.length){ try { var rawTU = localStorage.getItem('sdplus_tabungan_umum_v1'); if(rawTU){ var arrTU = JSON.parse(rawTU); if(Array.isArray(arrTU)) tabUmumData = arrTU; } } catch(e){} }
-  var tabUmumAnak = tabUmumData.filter(function(t){ var nm=String(t.nama_siswa||t.namaSiswa||t.nama||'').toLowerCase(); return !anakNama || (nm && nm.indexOf(anakNama.toLowerCase())>=0); });
+  var tabUmumAnak = tabUmumData.filter(waliRowMilikAnak); // [KUNCI NIS KARTU KEUANGAN]
   var setorUmum = 0, tarikUmum = 0;
   tabUmumAnak.forEach(function(t){ var deb=Number(t.debit||0), kre=Number(t.kredit||0); if(deb||kre){ setorUmum+=deb; tarikUmum+=kre; } else { var n=Number(t.nominal||0); if(/setor|masuk/i.test(t.jenis||'')) setorUmum+=n; else tarikUmum+=n; } });
   var saldoUmum = setorUmum - tarikUmum;
@@ -664,6 +685,12 @@ function syncWaliFinanceState(){
     appState.financeAmount = 'Rp ' + Number(totalTagihan).toLocaleString('id-ID');
     appState.financeDue = belumBayar.length ? (waliSppJatuhTempo(belumBayar[0]) || '-') : '-';
     appState.financeStatus = belumBayar.length ? 'belum' : 'lunas';
+    // [LABEL TAGIHAN SPP] kartu menjumlah SEMUA tagihan belum lunas, bukan hanya bulan berjalan
+    var _jmlBlm = belumBayar.length;
+    appState.financeBulan = _jmlBlm;
+    appState.financeNote = _jmlBlm > 1
+      ? (_jmlBlm + ' bulan belum lunas')
+      : (_jmlBlm === 1 ? ('Jatuh tempo ' + (appState.financeDue || '-')) : 'Semua lunas');
   }
   if(tabAnak.length > 0){
     appState.tabunganSaldo = 'Rp ' + Number(saldoTab).toLocaleString('id-ID');
@@ -860,7 +887,7 @@ function renderHome() {
       <div class="lux-fin-row">
         <button type="button" class="lux-fin" data-module-route="module:keuangan-spp">
           <span class="lfin-ic orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-3-2-2 2-2-2-2 2-2-2-3 2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span>
-          <span class="lux-fin-lbl">SPP Bulan Ini</span>
+          <span class="lux-fin-lbl">Tagihan SPP</span>
           <span class="lux-fin-val">${appState.financeAmount || '-'}</span>
           <span class="lux-chip ${getFinanceTone(finStt)}">${getFinanceStatusLabel(finStt)}</span>
         </button>
@@ -1114,11 +1141,11 @@ function renderMore() {
       ${sectionHead('Keuangan', `<span data-module-route="module:keuangan" style="cursor:pointer;color:#4f46e5;font-size:11px;font-weight:800">Detail</span>`)}
       <div class="wali-finance-row">
         <article class="wfi-card ${getFinanceTone(finStt)}" data-module-route="module:keuangan">
-          <span class="wfi-label">SPP Bulan Ini</span>
+          <span class="wfi-label">Tagihan SPP</span>
           <strong class="wfi-amount">${appState.financeAmount}</strong>
           <div class="wfi-status">
             <span class="wfi-badge ${getFinanceTone(finStt)}">${getFinanceStatusLabel(finStt)}</span>
-            <span class="wfi-due">Jatuh tempo ${appState.financeDue}</span>
+            <span class="wfi-due">${appState.financeNote || ('Jatuh tempo ' + appState.financeDue)}</span>
           </div>
         </article>
         <article class="wfi-card green" data-module-route="module:keuangan">
@@ -1210,6 +1237,12 @@ function renderSupabaseWaliDataModule(detail, rows) {
   const list = (Array.isArray(rows) ? rows.slice() : []).sort(function(a,b){ return _rowDate(b).localeCompare(_rowDate(a)); });
   const moduleId = appState.activeTab.replace('module:', '');
   const crudKey = 'wali:' + moduleId;
+  // [RIWAYAT BULAN] Jalur data Supabase wali: saring bulan dulu, baru tanggal.
+  var _dtSet = {}, _dtList = [];
+  list.forEach(function(r){ var d = _rowDate(r); if (d && !_dtSet[d]) { _dtSet[d] = 1; _dtList.push(d); } });
+  _dtList.sort().reverse();
+  var _uiD = _dtList.length ? waliRiwayatFilterUI((detail && detail.title) || moduleId, _dtList) : { html:'', selected:'', bulan:'', jmlBulan:0, jmlTanggal:0 };
+  var _pilihD = _dtList.length ? list.filter(function(r){ return _rowDate(r) === _uiD.selected; }) : list;
   return `
     ${moduleIntro(detail, moduleParentTab(moduleId))}
     <section class="section">
@@ -1220,14 +1253,15 @@ function renderSupabaseWaliDataModule(detail, rows) {
       </article>
     </section>
     <section class="section">
+      ${_uiD.html}
       <div class="timeline">
-        ${list.length
-          ? list.slice(0, 30).map(row => {
+        ${_pilihD.length
+          ? _pilihD.slice(0, 60).map(row => {
               const item = helper && helper.normalizeItem ? helper.normalizeItem(row, detail.title) : { time:'Data', title:detail.title, meta:'Supabase', status:'Aktif', tone:'blue' };
               const actions = row.__mobileCrud && row.id ? `<div class="field-chip-row"><button type="button" class="field-chip" data-mobile-crud-update="${row.id}" data-mobile-crud-key="${crudKey}">Tandai selesai</button><button type="button" class="field-chip" data-mobile-crud-delete="${row.id}" data-mobile-crud-key="${crudKey}">Hapus</button></div>` : '';
               return scheduleCard(item) + actions;
             }).join('')
-          : scheduleCard({ time: 'Info', title: 'Belum ada data', meta: 'Data akan otomatis tampil dari Supabase.', status: 'Kosong', tone: 'blue' })}
+          : scheduleCard({ time: 'Info', title: (_dtList.length ? 'Tidak ada data pada tanggal ini' : 'Belum ada data'), meta: (_dtList.length ? 'Pilih bulan atau tanggal lain di atas.' : 'Data akan otomatis tampil dari Supabase.'), status: 'Kosong', tone: 'blue' })}
       </div>
     </section>
   `;
@@ -1257,6 +1291,78 @@ function waliRiwayatFormatTanggal(d){
   try { var dt = new Date(d); if(!isNaN(dt.getTime())) return dt.toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); } catch(e){}
   return d || 'Tanpa tanggal';
 }
+/* ==================================================================
+ * [RIWAYAT BULAN] Riwayat wali dipisah dua tingkat: pilih bulan dulu,
+ * baru pilih tanggal di dalam bulan itu. Bawaannya bulan berjalan dan
+ * tanggal hari ini bila datanya ada.
+ * ================================================================== */
+var WALI_NAMA_BULAN = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+function waliBulanDariTgl(t){ return String(t == null ? '' : t).slice(0, 7); }
+function waliLabelBulan(ym){
+  var p = String(ym || '').split('-');
+  if (p.length < 2) return ym || '-';
+  var i = parseInt(p[1], 10) - 1;
+  return (WALI_NAMA_BULAN[i] || p[1]) + ' ' + p[0];
+}
+function waliHariIniISO(){
+  var d = new Date();
+  var b = d.getMonth() + 1, t = d.getDate();
+  return d.getFullYear() + '-' + (b < 10 ? '0' : '') + b + '-' + (t < 10 ? '0' : '') + t;
+}
+function waliKunciRiwayat(title){ return String(title || 'riwayat').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'riwayat'; }
+// [RIWAYAT BULAN] Gaya penyaring bulan/tanggal, senada tema hangat aplikasi wali.
+function ensureWaliRiwayatFilterStyles(){
+  if (document.getElementById('wali-riwayat-filter-css')) return;
+  var st = document.createElement('style');
+  st.id = 'wali-riwayat-filter-css';
+  var panah = 'url("data:image/svg+xml;charset=utf8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 20 20%27 fill=%27none%27 stroke=%27%23ea580c%27 stroke-width=%272.2%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Cpath d=%27M5 8l5 5 5-5%27/%3E%3C/svg%3E")';
+  st.textContent = ''
+    + '.wrf-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px;padding:10px 12px;background:#fff;border:1px solid #f3e3d3;border-radius:16px;box-shadow:0 2px 10px rgba(124,45,18,.06)}'
+    + '.wrf-lbl{font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:#9a7b62}'
+    + '.wrf-field{position:relative;flex:1 1 150px;min-width:0}'
+    + '.wrf-field::after{content:"";position:absolute;right:10px;top:50%;width:16px;height:16px;margin-top:-8px;pointer-events:none;background:' + panah + ' no-repeat center/16px 16px}'
+    + '.wrf-select{-webkit-appearance:none;-moz-appearance:none;appearance:none;width:100%;background:#fff7ed;border:1.5px solid #ffe0c2;border-radius:12px;padding:10px 32px 10px 12px;font-size:13px;font-weight:800;color:#7c2d12;line-height:1.25;box-shadow:inset 0 1px 2px rgba(124,45,18,.04);text-overflow:ellipsis;-webkit-tap-highlight-color:transparent}'
+    + '.wrf-select:focus{outline:none;border-color:#ea580c;background:#fff;box-shadow:0 0 0 3px rgba(234,88,12,.16)}'
+    + '.wrf-select:active{transform:scale(.995)}'
+    + '.wrf-select option{color:#0f172a;font-weight:600}'
+    + '@media (max-width:420px){.wrf-field{flex:1 1 100%}}';
+  document.head.appendChild(st);
+}
+function waliRiwayatFilterUI(title, dates){
+  try { ensureWaliRiwayatFilterStyles(); } catch(e){ console.warn('[RIWAYAT BULAN] gagal pasang gaya', e); }
+  var kunci = waliKunciRiwayat(title);
+  appState.waliRiwayatBulan = appState.waliRiwayatBulan || {};
+  appState.waliRiwayatTgl = appState.waliRiwayatTgl || {};
+  var bulanIsi = {}, bulanUrut = [];
+  (dates || []).forEach(function(d){
+    var b = waliBulanDariTgl(d);
+    if (!bulanIsi[b]) { bulanIsi[b] = []; bulanUrut.push(b); }
+    bulanIsi[b].push(d);
+  });
+  bulanUrut.sort().reverse();
+  var hariIni = waliHariIniISO(), bulanIni = waliBulanDariTgl(hariIni);
+  var bulan = appState.waliRiwayatBulan[kunci];
+  if (!bulan || !bulanIsi[bulan]) bulan = bulanIsi[bulanIni] ? bulanIni : bulanUrut[0];
+  appState.waliRiwayatBulan[kunci] = bulan;
+  var tglBulan = (bulanIsi[bulan] || []).slice().sort().reverse();
+  var sel = appState.waliRiwayatTgl[kunci];
+  if (!sel || tglBulan.indexOf(sel) < 0) sel = (tglBulan.indexOf(hariIni) >= 0) ? hariIni : tglBulan[0];
+  var html = '<div class="wrf-bar">';
+  html += '<span class="wrf-lbl">Bulan</span>';
+  html += '<span class="wrf-field"><select class="wrf-select" data-select="wali-riwayat-bulan" data-wali-kunci="' + kunci + '">';
+  bulanUrut.forEach(function(b){
+    html += '<option value="' + b + '"' + (b === bulan ? ' selected' : '') + '>' + waliLabelBulan(b) + (b === bulanIni ? ' (bulan ini)' : '') + ' \u00b7 ' + bulanIsi[b].length + ' tanggal</option>';
+  });
+  html += '</select></span>';
+  html += '<span class="wrf-lbl">Tanggal</span>';
+  html += '<span class="wrf-field"><select class="wrf-select" data-select="wali-riwayat-tanggal" data-wali-kunci="' + kunci + '">';
+  tglBulan.forEach(function(d){
+    html += '<option value="' + d + '"' + (d === sel ? ' selected' : '') + '>' + waliRiwayatFormatTanggal(d) + (d === hariIni ? ' (hari ini)' : '') + '</option>';
+  });
+  html += '</select></span></div>';
+  return { html: html, selected: sel, bulan: bulan, jmlBulan: bulanUrut.length, jmlTanggal: tglBulan.length, kunci: kunci };
+}
+
 // Riwayat generik berbasis tanggal untuk daftar yang sudah punya builder kartu sendiri
 // (mis. Tagihan SPP & Mutasi Tabungan di modul Keuangan).
 function renderWaliRiwayatList(title, arr, dateOf, itemOf, emptyTitle, emptyMeta){
@@ -1274,11 +1380,11 @@ function renderWaliRiwayatList(title, arr, dateOf, itemOf, emptyTitle, emptyMeta
   arr = arr.slice().sort(function(a,b){ return String(dateOf(b)||'').slice(0,10).localeCompare(String(dateOf(a)||'').slice(0,10)); });
   arr.forEach(function(r){ var d=String(dateOf(r)||'').slice(0,10); if(d && d!=='-'){ (groups[d]=groups[d]||[]).push(r); } else { noDate.push(r); } });
   var dates = Object.keys(groups).sort().reverse();
-  var inner = '';
-  dates.forEach(function(d){
-    var rows = groups[d];
-    inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#4f46e5;margin:12px 0 6px">'+waliRiwayatFormatTanggal(d)+' \u00b7 '+rows.length+' data</p><div class="timeline">'+rows.map(function(r){ return scheduleCard(itemOf(r)); }).join('')+'</div>';
-  });
+  // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+  var ui = waliRiwayatFilterUI(title, dates);
+  var rowsSel = groups[ui.selected] || [];
+  var inner = ui.html;
+  inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#4f46e5;margin:12px 0 6px">'+waliRiwayatFormatTanggal(ui.selected)+' \u00b7 '+rowsSel.length+' data \u00b7 '+ui.jmlTanggal+' tanggal di '+waliLabelBulan(ui.bulan)+'</p><div class="timeline">'+rowsSel.map(function(r){ return scheduleCard(itemOf(r)); }).join('')+'</div>';
   if(noDate.length){
     inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#64748b;margin:12px 0 6px">Tanpa tanggal \u00b7 '+noDate.length+' data</p><div class="timeline">'+noDate.map(function(r){ return scheduleCard(itemOf(r)); }).join('')+'</div>';
   }
@@ -1308,11 +1414,11 @@ function renderWaliModuleRiwayat(list, title, crudKey){
   arr = arr.slice().sort(function(a,b){ return String(waliRiwayatRowDate(b)||'').localeCompare(String(waliRiwayatRowDate(a)||'')); });
   arr.forEach(function(r){ var d=waliRiwayatRowDate(r); if(d){ (groups[d]=groups[d]||[]).push(r); } else { noDate.push(r); } });
   var dates = Object.keys(groups).sort().reverse();
-  var inner = '';
-  dates.forEach(function(d){
-    var rows = groups[d];
-    inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#4f46e5;margin:12px 0 6px">'+waliRiwayatFormatTanggal(d)+' \u00b7 '+rows.length+' data</p><div class="timeline">'+rows.slice(0,50).map(entryHtml).join('')+'</div>';
-  });
+  // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+  var ui = waliRiwayatFilterUI(title, dates);
+  var rowsSel = groups[ui.selected] || [];
+  var inner = ui.html;
+  inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#4f46e5;margin:12px 0 6px">'+waliRiwayatFormatTanggal(ui.selected)+' \u00b7 '+rowsSel.length+' data \u00b7 '+ui.jmlTanggal+' tanggal di '+waliLabelBulan(ui.bulan)+'</p><div class="timeline">'+rowsSel.slice(0,50).map(entryHtml).join('')+'</div>';
   if(noDate.length){
     inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#64748b;margin:12px 0 6px">Tanpa tanggal \u00b7 '+noDate.length+' data</p><div class="timeline">'+noDate.slice(0,30).map(entryHtml).join('')+'</div>';
   }
@@ -1335,7 +1441,12 @@ function renderWaliMutabaahRumahRiwayat(list){
   }
   var ya = function(v){ return /^(ya|1|true|hadir|sudah)$/i.test(String(v==null?'':v).trim()); };
   var sorted = arr.slice().sort(function(a,b){ return String(b.tanggal||b.tgl||'').localeCompare(String(a.tanggal||a.tgl||'')); });
-  var cards = sorted.slice(0,60).map(function(r){
+  // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+  var _adaTgl = {};
+  sorted.forEach(function(r){ var d=String(r.tanggal||r.tgl||'').slice(0,10); if(d) _adaTgl[d]=true; });
+  var _ui = waliRiwayatFilterUI('Mutabaah Rumah', Object.keys(_adaTgl).sort().reverse());
+  var _pilih = sorted.filter(function(r){ return String(r.tanggal||r.tgl||'').slice(0,10) === _ui.selected; });
+  var cards = _ui.html + _pilih.slice(0,60).map(function(r){
     var tgl = esc(String(r.tanggal||r.tgl||'').slice(0,10) || '-');
     var shalat = [['Subuh',r.shalat_subuh],['Dzuhur',r.shalat_dzuhur],['Ashar',r.shalat_ashar],['Maghrib',r.shalat_maghrib],['Isya',r.shalat_isya]];
     var shalatHtml = shalat.map(function(s){ var ok = ya(s[1]); return '<span class="status-pill '+(ok?'green':'orange')+'">'+s[0]+'</span>'; }).join(' ');
@@ -1539,7 +1650,7 @@ function renderProgramKegiatanWali(detail) {
     if (tempat) metaParts.push('📍 ' + tempat);
     if (pj) metaParts.push('PJ: ' + pj);
     if (ket) metaParts.push(ket);
-    return scheduleCard({ time: (tgl || '—'), title: nm, meta: metaParts.join(' · ') || '-', status: done1 ? 'Terlaksana' : 'Terjadwal', tone: done1 ? 'green' : 'blue' });
+    return scheduleCard({ time: (tgl || '���'), title: nm, meta: metaParts.join(' · ') || '-', status: done1 ? 'Terlaksana' : 'Terjadwal', tone: done1 ? 'green' : 'blue' });
   }).join('') : '<p class="card-meta" style="padding:6px 2px;">Belum ada program kegiatan dari sekolah.</p>';
   return `
     ${moduleIntro(detail, moduleParentTab('program-kegiatan'))}
@@ -1581,6 +1692,12 @@ function renderModule(moduleId) {
     var att = appState.todayAttendance;
     var attLabel = getAttendanceStatusLabel(att);
     var attTone = getAttendanceTone(att);
+    // [RIWAYAT BULAN] Riwayat kehadiran disaring bulan dulu, baru tanggal.
+    var _absDates = [], _absSeen = {};
+    absRows.forEach(function(r){ var d=_absDate(r); if(d && !_absSeen[d]){ _absSeen[d]=1; _absDates.push(d); } });
+    _absDates.sort().reverse();
+    var _uiA = waliRiwayatFilterUI('Absensi Anak', _absDates);
+    var _absPilih = _uiA.selected ? absRows.filter(function(r){ return _absDate(r) === _uiA.selected; }) : [];
     return `
       ${moduleIntro(detail, moduleParentTab(moduleId))}
       <section class="section">
@@ -1607,22 +1724,23 @@ function renderModule(moduleId) {
         </article>
       </section>
       <section class="section">
-        ${sectionHead('Riwayat kehadiran', 'Terbaru')}
+        ${sectionHead('Riwayat kehadiran', _absDates.length ? (_uiA.jmlTanggal + ' tanggal di ' + waliLabelBulan(_uiA.bulan)) : 'Belum ada data')}
+        ${_uiA.html}
         <div class="timeline">
-          ${absRows.length
-            ? absRows.slice(0, 20).map(function(r){
+          ${_absPilih.length
+            ? _absPilih.map(function(r){
                 var st = _absSt(r);
                 var tone = /hadir|masuk/.test(st) ? 'green' : (/izin/.test(st) ? 'blue' : (/sakit/.test(st) ? 'gold' : 'red'));
                 var label = /hadir|masuk/.test(st) ? 'Hadir' : (/izin/.test(st) ? 'Izin' : (/sakit/.test(st) ? 'Sakit' : (/alpa|alfa|tanpa|bolos/.test(st) ? 'Alpa' : (r.status||'-'))));
                 return scheduleCard({
-                  time: _absDate(r) || '-',
+                  time: (_absDate(r) ? waliRiwayatFormatTanggal(_absDate(r)) : '-'),
                   title: label + (r.mapel ? ' \u00b7 ' + r.mapel : ''),
                   meta: r.keterangan || r.catatan || '',
                   status: label,
                   tone: tone
                 });
               }).join('')
-            : scheduleCard({ time: 'Info', title: 'Belum ada data absensi', meta: 'Data kehadiran akan muncul setelah sekolah input absensi.', status: 'Kosong', tone: 'blue' })
+            : scheduleCard({ time: 'Info', title: (_absDates.length ? 'Tidak ada absensi pada tanggal ini' : 'Belum ada data absensi'), meta: (_absDates.length ? 'Pilih bulan atau tanggal lain di atas.' : 'Data kehadiran akan muncul setelah sekolah input absensi.'), status: 'Kosong', tone: 'blue' })
           }
         </div>
       </section>
@@ -2435,6 +2553,24 @@ function bindActions() {
   });
 
   document.addEventListener('change', function(event){
+    // [RIWAYAT BULAN] Dropdown bulan & tanggal pada semua panel riwayat wali.
+    var rwBulan = event.target && event.target.closest && event.target.closest('select[data-select="wali-riwayat-bulan"]');
+    if (rwBulan) {
+      var kb = rwBulan.getAttribute('data-wali-kunci') || '';
+      appState.waliRiwayatBulan = appState.waliRiwayatBulan || {};
+      appState.waliRiwayatTgl = appState.waliRiwayatTgl || {};
+      if (kb) { appState.waliRiwayatBulan[kb] = rwBulan.value; appState.waliRiwayatTgl[kb] = ''; }
+      render();
+      return;
+    }
+    var rwTgl = event.target && event.target.closest && event.target.closest('select[data-select="wali-riwayat-tanggal"]');
+    if (rwTgl) {
+      var kt = rwTgl.getAttribute('data-wali-kunci') || '';
+      appState.waliRiwayatTgl = appState.waliRiwayatTgl || {};
+      if (kt) appState.waliRiwayatTgl[kt] = rwTgl.value;
+      render();
+      return;
+    }
     var perkMonthSel = event.target && event.target.closest && event.target.closest('select[data-select="perk-month"]');
     if (perkMonthSel) {
       var c = perkMonthSel.getAttribute('data-perk-cat');
@@ -2801,6 +2937,8 @@ function applyWaliEmptyStateData() {
   appState.financeDue = '-';
   appState.financeAmount = '-';
   appState.financeStatus = 'belum';
+  appState.financeBulan = 0;      // [LABEL TAGIHAN SPP]
+  appState.financeNote = '-';     // [LABEL TAGIHAN SPP]
   appState.tabunganSaldo = '-';
   appState.tabunganUpdate = '-';
   appState.homeMutabaahProgress = 0;
@@ -3279,7 +3417,17 @@ animateWaliContent();
   function todayStr(){ var d=new Date(); var mm=String(d.getMonth()+1); if(mm.length<2)mm='0'+mm; var dd=String(d.getDate()); if(dd.length<2)dd='0'+dd; return d.getFullYear()+'-'+mm+'-'+dd; }
   function SB(){ return window.ZymataMobileSupabase; }
   function activeTahfidz(){ return appState.activeTab==='module:mutabaah-tahfidz'; }
-  function childNis(){ return String(appState.childNis||(childProfile&&childProfile.nis)||''); }
+  // [PERBAIKAN MUTABAAH WALI] Dulu fungsi ini bisa mengembalikan tanda '-', karena profil
+  // anak memakai '-' sebagai isian kosong. Akibatnya wali menyimpan dan mencari data dengan
+  // siswa_id '-', sehingga tidak pernah bertemu data guru, dan sebaliknya.
+  function childNis(){
+    var v = String(appState.childNis || (childProfile && childProfile.nis) || '').trim();
+    if(!v || v === '-' || v === 'null' || v === 'undefined'){
+      try{ v = String(window.__ZYMATA_CHILD_NIS || '').trim(); }catch(e){ v = ''; }
+    }
+    if(v === '-' || v === 'null' || v === 'undefined') v = '';
+    return v;
+  }
   function childNama(){ return String((childProfile&&childProfile.fullName)||appState.childName||'Anak'); }
   function childKelas(){ return String(appState.childClass||(childProfile&&childProfile.className)||''); }
   function toast(msg,type){ try{ if(typeof waliToast==='function'){ waliToast(msg,type); return; } }catch(e){} }
@@ -3531,8 +3679,11 @@ animateWaliContent();
     arr = arr.slice().sort(function(a,b){ return String(b.tanggal||b.tgl||'').slice(0,10).localeCompare(String(a.tanggal||a.tgl||'').slice(0,10)); });
     arr.forEach(function(r){ var d=String(r.tanggal||r.tgl||'').slice(0,10)||'-'; (groups[d]=groups[d]||[]).push(r); });
     var dates=Object.keys(groups).sort().reverse();
-    var inner='';
-    dates.forEach(function(d){
+    // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+    var _uiT = waliRiwayatFilterUI('Mutabaah Tahfidz', dates);
+    var inner = _uiT.html;
+    var _tglTampil = (_uiT.selected && groups[_uiT.selected]) ? [_uiT.selected] : [];
+    _tglTampil.forEach(function(d){
       var rows=groups[d];
       var cards=rows.map(function(r){
         var judul=(r.surah_nama||('Surah '+r.surah_no))+(r.ayat?' : ayat '+r.ayat:'');
@@ -3553,7 +3704,7 @@ animateWaliContent();
           +(meta?'<p class="card-meta" style="margin:2px 0 0">'+meta+'</p>':'')
           +'</article>';
       }).join('');
-      inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#0f766e;margin:12px 0 6px">'+esc(d)+' \u00b7 '+rows.length+' data</p>'+cards;
+      inner += '<p class="riwayat-absen-count" style="font-weight:800;color:#0f766e;margin:12px 0 6px">'+esc(waliRiwayatFormatTanggal(d))+' \u00b7 '+rows.length+' data \u00b7 '+_uiT.jmlTanggal+' tanggal di '+esc(waliLabelBulan(_uiT.bulan))+'</p>'+cards;
     });
     return '<section class="section"><details class="riwayat-absen-toggle" open style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
       + sumOpen + '<span class="riwayat-absen-title">'+head+'</span><span class="riwayat-absen-hint" style="font-size:11px;color:#94a3b8;font-weight:700">'+arr.length+' entri \u00b7 '+dates.length+' tanggal \u203A</span></summary>'
