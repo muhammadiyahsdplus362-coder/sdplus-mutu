@@ -984,21 +984,37 @@
   async function loadWaliModuleData(context){
     const session = (context && context.session) || readSession() || {};
     const siswa = (context && context.siswa) || {};
-    const nis = clean(siswa.nis || session.nis_siswa || '');
+    let nis = clean(siswa.nis || session.nis_siswa || '');
     const siswaId = clean(siswa.id || session.siswa_id || '');
     const kelas = clean(siswa.kelas || session.kelas_siswa || '');
     const namaSiswa = clean(siswa.nama || session.nama_siswa || '');
+    // [PERBAIKAN ABSENSI WALI] Guru menyimpan NIS anak ke kolom siswa_id pada tabel
+    // absensi_siswa. Kalau sesi wali hanya membawa id internal siswa tanpa NIS, semua
+    // pencarian absensi pasti gagal dan halaman wali selalu kosong. Jadi lengkapi
+    // dulu NIS-nya dari tabel siswa sebelum menyusun penyaring.
+    if(!nis && siswaId){
+      try{
+        const _sisRow = (await safeList('siswa', { eq: { id: siswaId }, limit: 1 }))[0];
+        if(_sisRow) nis = clean(_sisRow.nis || _sisRow.nis_siswa || '');
+      }catch(_e){}
+    }
+    // [PERBAIKAN NIS ANAK] Simpan NIS yang sudah berhasil ditemukan supaya modul lain di
+    // aplikasi wali (mis. Mutaba'ah Tahfidz) tidak lagi memakai tanda '-' sebagai NIS.
+    try{ if(nis) window.__ZYMATA_CHILD_NIS = nis; }catch(_e2){}
     // STRICT: hanya filter by identitas anak (siswa_id/nis), JANGAN by kelas sendiri
     // (kelas akan menarik semua anak sekelas). Untuk tabel non-personal (pengumuman/kalender)
     // tidak pakai filter.
     const filters = [
-      siswaId ? { siswa_id: siswaId } : null,
+      // [PERBAIKAN ABSENSI WALI] NIS didahulukan, karena kolom siswa_id memang berisi NIS.
+      // Kalau id internal dicoba lebih dulu, pencarian bisa berhenti pada baris milik anak
+      // lain yang NIS-nya kebetulan sama dengan id internal anak ini.
+      nis ? { siswa_id: nis } : null,
+      (siswaId && siswaId !== nis) ? { siswa_id: siswaId } : null,
       siswaId ? { id_siswa: siswaId } : null,
       // FIX: beberapa tabel (karakter, hafalan, ibadah, prestasi, pelanggaran_siswa) tidak
       // punya kolom nis/siswa_nis sendiri - form guru menyimpan NIS siswa langsung ke
       // kolom siswa_id. Tanpa baris ini, data yang tersimpan sukses di Supabase tidak
       // pernah cocok saat wali membaca (siswa_id di baris = NIS, bukan id internal siswa).
-      nis ? { siswa_id: nis } : null,
       nis ? { nis } : null,
       nis ? { siswa_nis: nis } : null,
       nis ? { snapshot_nis: nis } : null
@@ -1008,7 +1024,11 @@
     );
     function belongsToChild(r){
       if(!r) return false;
-      if(siswaId && (String(r.siswa_id||'') === String(siswaId) || String(r.id_siswa||'') === String(siswaId))) return true;
+      // [PERBAIKAN ABSENSI WALI] Bila NIS anak sudah diketahui, jangan akui sebuah baris
+      // hanya karena siswa_id-nya sama dengan id internal. Kolom itu berisi NIS, sehingga
+      // pencocokan seperti itu bisa menarik data milik anak lain.
+      if(siswaId && String(r.id_siswa||'') === String(siswaId)) return true;
+      if(siswaId && !nis && String(r.siswa_id||'') === String(siswaId)) return true;
       // FIX: siswa_id pada beberapa tabel sebenarnya berisi NIS (lihat catatan di atas filters).
       if(nis && String(r.siswa_id||'') === String(nis)) return true;
       if(nis && (String(r.nis||'') === String(nis) || String(r.nis_siswa||'') === String(nis) || String(r.siswa_nis||'') === String(nis) || String(r.snapshot_nis||'') === String(nis))) return true;
