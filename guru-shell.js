@@ -1671,7 +1671,8 @@ window.zTab = {
     entries.sort(function(a,b){ var x=(urutByNis[a.nis]==null?9999:urutByNis[a.nis]), y=(urutByNis[b.nis]==null?9999:urutByNis[b.nis]); return x-y; });
     if(!entries.length){ showToast('Isi nominal minimal 1 siswa.','error','&#9888;'); return; }
     S._saving=true;
-    try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=true; b.setAttribute('aria-disabled','true'); }); }catch(_e){}
+    // [KUNCI TOMBOL SIMPAN TABUNGAN] Terkunci selama proses kirim ke Supabase.
+    try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=true; b.setAttribute('aria-disabled','true'); b.classList.remove('is-saved'); b.classList.add('is-saving'); b.innerHTML='Menyimpan&hellip;'; }); }catch(_e){}
     showToast('Menyimpan '+entries.length+' data\u2026','info','&#128190;');
     try{
     var sisMap={};
@@ -1700,9 +1701,15 @@ window.zTab = {
     // tetap tertinggal di form supaya guru tidak perlu mengetik ulang.
     tabDraftHapus(savedNis);
     window.__zGuruEditTs=0;
+    // [KUNCI TOMBOL SIMPAN TABUNGAN] Setelah benar-benar tersimpan, tombol tampil hijau
+    // "Tersimpan" dan tetap terkunci beberapa detik, lalu kembali normal sendiri.
+    if(saved){
+      appState._tabSavedUntil = Date.now() + 4000;
+      setTimeout(function(){ appState._tabSavedUntil = 0; try{ render(); }catch(_e){} }, 4000);
+    }
     S.saldoMap=null; S.rows=null; S.loadedKelas=''; S.loadedAt=0; render();
     try{ await hydrateGuruFromSupabase(); }catch(e){}
-    }finally{ S._saving=false; try{ Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.disabled=false; b.removeAttribute('aria-disabled'); }); }catch(_e){} }
+    }finally{ S._saving=false; try{ var _msh=(appState._tabSavedUntil && Date.now() < appState._tabSavedUntil); Array.prototype.slice.call(document.querySelectorAll('[data-save-tabungan]')).forEach(function(b){ b.classList.remove('is-saving'); if(_msh){ b.classList.add('is-saved'); b.disabled=true; b.setAttribute('aria-disabled','true'); b.innerHTML='&#10003; Tersimpan'; } else { b.classList.remove('is-saved'); b.disabled=false; b.removeAttribute('aria-disabled'); b.innerHTML='Simpan Semua'; } }); }catch(_e){} }
   }
 };
 
@@ -3351,14 +3358,13 @@ function renderTeacherAttendanceRiwayat(){
     var dateSet = {};
     rows.forEach(function(r){ dateSet[guruRowDate(r)] = true; });
     var dates = Object.keys(dateSet).sort().reverse();
-    var selected = (appState.riwayatModulTanggal[moduleId] && dateSet[appState.riwayatModulTanggal[moduleId]]) ? appState.riwayatModulTanggal[moduleId] : dates[0];
+    // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+    var ui = agRiwayatFilterUI(moduleId, dates, appState.riwayatModulTanggal[moduleId], 'riwayat-modul-tanggal', ' data-riwayat-modul="' + moduleId + '"');
+    var selected = ui.selected;
     var rowsTgl = rows.filter(function(r){ return guruRowDate(r) === selected; });
     var inner = '';
-    inner += '<label class="mf-label">Pilih tanggal</label>';
-    inner += '<div class="mf-select-wrap"><select class="mf-select" data-select="riwayat-modul-tanggal" data-riwayat-modul="' + moduleId + '">';
-    dates.forEach(function(d){ inner += '<option value="' + d + '"' + (d === selected ? ' selected' : '') + '>' + formatTanggalID(d) + '</option>'; });
-    inner += '</select><span class="mf-chevron">&#8250;</span></div>';
-    inner += '<p class="riwayat-absen-count">' + rowsTgl.length + ' presensi tercatat · ' + dates.length + ' tanggal</p>';
+    inner += ui.html;
+    inner += '<p class="riwayat-absen-count">' + rowsTgl.length + ' presensi tercatat · ' + ui.jmlTanggal + ' tanggal di ' + agLabelBulan(ui.bulan) + ' · ' + ui.jmlBulan + ' bulan</p>';
     inner += '<div class="timeline">';
     rowsTgl.forEach(function(r){ inner += scheduleCard(rowToItem(r)); });
     inner += '</div>';
@@ -3536,6 +3542,59 @@ function guruPdfLinks(row){
     return '<a class="field-chip" data-pdf-open="1" href="' + u.replace(/"/g,'&quot;') + '" target="_blank" rel="noopener">&#128196; Lihat PDF' + (urls.length > 1 ? (' ' + (i+1)) : '') + '</a>';
   }).join('') + '</div>';
 }
+/* ==================================================================
+ * [RIWAYAT BULAN] Semua riwayat di guru dipisah dua tingkat: pilih bulan
+ * dulu, baru pilih tanggal di dalam bulan itu. Bawaannya langsung ke
+ * bulan berjalan dan tanggal hari ini bila datanya ada.
+ * ================================================================== */
+var AG_NAMA_BULAN = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+function agBulanDariTgl(t){ return String(t == null ? '' : t).slice(0, 7); }
+function agLabelBulan(ym){
+  var p = String(ym || '').split('-');
+  if (p.length < 2) return ym || '-';
+  var i = parseInt(p[1], 10) - 1;
+  return (AG_NAMA_BULAN[i] || p[1]) + ' ' + p[0];
+}
+function agHariIniISO(){
+  var d = new Date();
+  var b = d.getMonth() + 1, t = d.getDate();
+  return d.getFullYear() + '-' + (b < 10 ? '0' : '') + b + '-' + (t < 10 ? '0' : '') + t;
+}
+// Membuat dua dropdown (bulan + tanggal) sekaligus menentukan tanggal terpilih.
+function agRiwayatFilterUI(kunci, dates, tglTersimpan, selectTanggalKey, extraAttr){
+  appState.riwayatBulanPilih = appState.riwayatBulanPilih || {};
+  var bulanIsi = {}, bulanUrut = [];
+  (dates || []).forEach(function(d){
+    var b = agBulanDariTgl(d);
+    if (!bulanIsi[b]) { bulanIsi[b] = []; bulanUrut.push(b); }
+    bulanIsi[b].push(d);
+  });
+  bulanUrut.sort().reverse();
+  var hariIni = agHariIniISO();
+  var bulanIni = agBulanDariTgl(hariIni);
+  var bulan = appState.riwayatBulanPilih[kunci];
+  if (!bulan || !bulanIsi[bulan]) bulan = bulanIsi[bulanIni] ? bulanIni : bulanUrut[0];
+  appState.riwayatBulanPilih[kunci] = bulan;
+  var tglBulan = (bulanIsi[bulan] || []).slice().sort().reverse();
+  var sel = tglTersimpan;
+  if (!sel || tglBulan.indexOf(sel) < 0) sel = (tglBulan.indexOf(hariIni) >= 0) ? hariIni : tglBulan[0];
+  var att = extraAttr || '';
+  var html = '';
+  html += '<label class="mf-label">Pilih bulan</label>';
+  html += '<div class="mf-select-wrap"><select class="mf-select" data-select="riwayat-bulan" data-riwayat-kunci="' + kunci + '"' + att + '>';
+  bulanUrut.forEach(function(b){
+    html += '<option value="' + b + '"' + (b === bulan ? ' selected' : '') + '>' + agLabelBulan(b) + (b === bulanIni ? ' (bulan ini)' : '') + ' \u00b7 ' + bulanIsi[b].length + ' tanggal</option>';
+  });
+  html += '</select><span class="mf-chevron">&#8250;</span></div>';
+  html += '<label class="mf-label">Pilih tanggal</label>';
+  html += '<div class="mf-select-wrap"><select class="mf-select" data-select="' + selectTanggalKey + '"' + att + '>';
+  tglBulan.forEach(function(d){
+    html += '<option value="' + d + '"' + (d === sel ? ' selected' : '') + '>' + formatTanggalID(d) + (d === hariIni ? ' (hari ini)' : '') + '</option>';
+  });
+  html += '</select><span class="mf-chevron">&#8250;</span></div>';
+  return { html: html, selected: sel, bulan: bulan, jmlBulan: bulanUrut.length, jmlTanggal: tglBulan.length };
+}
+
 function renderModuleRiwayat(moduleId, list, detail, crudKey){
   var helper = window.ZymataMobileSupabase;
   var title = (detail && detail.title) ? detail.title : 'Data';
@@ -3559,13 +3618,12 @@ function renderModuleRiwayat(moduleId, list, detail, crudKey){
       var dateSet = {};
       rows.forEach(function(r){ dateSet[guruRowDate(r)] = true; });
       var dates = Object.keys(dateSet).sort().reverse();
-      var selected = (appState.riwayatModulTanggal[moduleId] && dateSet[appState.riwayatModulTanggal[moduleId]]) ? appState.riwayatModulTanggal[moduleId] : dates[0];
+      // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+      var ui = agRiwayatFilterUI(moduleId, dates, appState.riwayatModulTanggal[moduleId], 'riwayat-modul-tanggal', ' data-riwayat-modul="' + moduleId + '"');
+      var selected = ui.selected;
       var rowsTgl = rows.filter(function(r){ return guruRowDate(r) === selected; });
-      inner += '<label class="mf-label">Pilih tanggal</label>';
-      inner += '<div class="mf-select-wrap"><select class="mf-select" data-select="riwayat-modul-tanggal" data-riwayat-modul="' + moduleId + '">';
-      dates.forEach(function(d){ inner += '<option value="' + d + '"' + (d === selected ? ' selected' : '') + '>' + formatTanggalID(d) + '</option>'; });
-      inner += '</select><span class="mf-chevron">&#8250;</span></div>';
-      inner += '<p class="riwayat-absen-count">' + rowsTgl.length + ' data tercatat \u00b7 ' + dates.length + ' tanggal</p>';
+      inner += ui.html;
+      inner += '<p class="riwayat-absen-count">' + rowsTgl.length + ' data tercatat \u00b7 ' + ui.jmlTanggal + ' tanggal di ' + agLabelBulan(ui.bulan) + ' \u00b7 ' + ui.jmlBulan + ' bulan</p>';
       inner += '<div class="timeline">';
       rowsTgl.slice(0, 50).forEach(function(r){ inner += entryHtml(r); });
       inner += '</div>';
@@ -3629,17 +3687,16 @@ function renderRiwayatAbsenBody(kelas){
   var dateSet = {};
   rows.forEach(function(r){ dateSet[absensiRowDate(r)] = true; });
   var dates = Object.keys(dateSet).sort().reverse();
-  var selected = (appState.riwayatAbsenTanggal && dateSet[appState.riwayatAbsenTanggal]) ? appState.riwayatAbsenTanggal : dates[0];
+  // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+  var ui = agRiwayatFilterUI('absensi-siswa', dates, appState.riwayatAbsenTanggal, 'riwayat-tanggal', '');
+  var selected = ui.selected;
   var rowsTgl = rows.filter(function(r){ return absensiRowDate(r) === selected; });
   var labelFull = { Hadir:'Hadir', Izin:'Izin', Sakit:'Sakit', Alpa:'Alpa' };
   var toneClass = { Hadir:'h', Izin:'i', Sakit:'s', Alpa:'a' };
   var sumH = rowsTgl.filter(function(r){ return r.status === 'Hadir'; }).length;
   var html = '';
-  html += '<label class="mf-label">Pilih tanggal</label>';
-  html += '<div class="mf-select-wrap"><select class="mf-select" data-select="riwayat-tanggal">';
-  dates.forEach(function(d){ html += '<option value="' + d + '"' + (d === selected ? ' selected' : '') + '>' + formatTanggalID(d) + '</option>'; });
-  html += '</select><span class="mf-chevron">&#8250;</span></div>';
-  html += '<p class="riwayat-absen-count">' + rowsTgl.length + ' siswa tercatat \u00b7 ' + sumH + ' hadir</p>';
+  html += ui.html;
+  html += '<p class="riwayat-absen-count">' + rowsTgl.length + ' siswa tercatat \u00b7 ' + sumH + ' hadir \u00b7 ' + ui.jmlTanggal + ' tanggal di ' + agLabelBulan(ui.bulan) + '</p>';
   html += '<div class="riwayat-absen-list">';
   var _si = agSiswaIndex();
   rowsTgl.forEach(function(r){
@@ -4118,7 +4175,7 @@ function ensureAbsenTodayStyles(){
   if(document.getElementById('absen-today-lock-styles')) return;
   var st = document.createElement('style');
   st.id = 'absen-today-lock-styles';
-  st.textContent = '#appFloating .premium-att-row.is-saved-today{border-color:#16a34a;background:linear-gradient(135deg,rgba(22,163,74,.10),rgba(15,23,42,.02))}#appFloating .premium-att-row.is-saved-today .absen-chip:disabled,#appFloating .absen-save-dock.is-locked .sticky-save-btn:disabled{opacity:.55;cursor:not-allowed;filter:grayscale(.25)}#appFloating .absen-saved-badge{display:inline-flex;align-items:center;gap:4px;margin:8px 0 0 52px;padding:5px 9px;border-radius:999px;background:#dcfce7;color:#166534;font-size:11px;font-weight:800}#appFloating .absen-locked-note{margin-top:6px;color:#166534;font-weight:800}';
+  st.textContent = '#appFloating .premium-att-row.is-saved-today{border-color:#16a34a;background:linear-gradient(135deg,rgba(22,163,74,.10),rgba(15,23,42,.02))}#appFloating .premium-att-row.is-saved-today .absen-chip:disabled,#appFloating .absen-save-dock.is-locked .sticky-save-btn:disabled{opacity:.55;cursor:not-allowed;filter:grayscale(.25)}#appFloating .absen-saved-badge{display:inline-flex;align-items:center;gap:4px;margin:8px 0 0 52px;padding:5px 9px;border-radius:999px;background:#dcfce7;color:#166534;font-size:11px;font-weight:800}#appFloating .absen-locked-note{margin-top:6px;color:#166534;font-weight:800}#appFloating .sticky-save-btn.is-saving{background:#94a3b8!important;color:#fff!important;opacity:1!important;filter:none!important;cursor:progress;pointer-events:none}#appFloating .sticky-save-btn.is-saved{background:#16a34a!important;color:#fff!important;opacity:1!important;filter:none!important;pointer-events:none;box-shadow:0 2px 10px rgba(22,163,74,.35)}';
   (document.head || document.documentElement).appendChild(st);
 }
 
@@ -4145,7 +4202,7 @@ function renderFloating() {
         <strong>Simpan Tabungan Kelas ${_tab.kelas}</strong>
         <span>${(function(){ try{ var j=tabDraftJumlah(); return j.count ? (j.count + ' siswa terisi &middot; Rp ' + Number(j.total).toLocaleString('id-ID') + ' belum disimpan') : 'Isi nominal siswa lalu simpan sekaligus'; }catch(_e){ return 'Isi nominal siswa lalu simpan sekaligus'; } })()}</span>
       </div>
-      <button type="button" class="sticky-save-btn" data-save-tabungan>Simpan Semua</button>
+      <button type="button" class="sticky-save-btn ${(function(){ try{ var S=tabState(); if(S._saving) return 'is-saving'; }catch(_e){} return (appState._tabSavedUntil && Date.now() < appState._tabSavedUntil) ? 'is-saved' : ''; })()}" data-save-tabungan ${(function(){ try{ if(tabState()._saving) return 'disabled aria-disabled="true"'; }catch(_e){} return (appState._tabSavedUntil && Date.now() < appState._tabSavedUntil) ? 'disabled aria-disabled="true"' : ''; })()}>${(function(){ try{ if(tabState()._saving) return 'Menyimpan&hellip;'; }catch(_e){} return (appState._tabSavedUntil && Date.now() < appState._tabSavedUntil) ? '&#10003; Tersimpan' : 'Simpan Semua'; })()}</button>
     </div>` : '';
 
   if (!appState.showAnnouncements) {
@@ -4744,7 +4801,15 @@ function bindActions() {
     }
 
     const saveTab = event.target.closest('[data-save-tabungan]');
-    if (saveTab) { if (window.zTab && window.zTab.saveAll) window.zTab.saveAll(); return; }
+    if (saveTab) {
+      // [KUNCI TOMBOL SIMPAN TABUNGAN] Sekali diklik, tombol langsung terkunci dan
+      // berubah rupa. Klik berikutnya diabaikan sampai penyimpanan ke Supabase selesai.
+      try{ if (saveTab.disabled || saveTab.classList.contains('is-saving')) return; }catch(_e){}
+      try{ if (window.tabState && tabState()._saving) return; }catch(_e){}
+      try{ saveTab.classList.add('is-saving'); saveTab.disabled = true; saveTab.setAttribute('aria-disabled','true'); saveTab.innerHTML = 'Menyimpan&hellip;'; }catch(_e){}
+      if (window.zTab && window.zTab.saveAll) window.zTab.saveAll();
+      return;
+    }
 
     const saveAbsensi = event.target.closest('[data-save-absensi]');
     if (saveAbsensi) {
@@ -5502,6 +5567,17 @@ function bindActions() {
         agReloadAbsensiKelas(val); // FIX: tarik ulang absensi kelas terpilih dari Supabase saat ganti kelas
         return;
       }
+      // [RIWAYAT BULAN] Ganti bulan -> tanggal ikut disetel ulang ke isi bulan itu.
+      if (key === 'riwayat-bulan') {
+        const kk = selectEl.getAttribute('data-riwayat-kunci') || '';
+        appState.riwayatBulanPilih = appState.riwayatBulanPilih || {};
+        if (kk) appState.riwayatBulanPilih[kk] = val;
+        appState.riwayatModulTanggal = appState.riwayatModulTanggal || {};
+        if (kk) appState.riwayatModulTanggal[kk] = null;
+        if (kk === 'absensi-siswa') appState.riwayatAbsenTanggal = null;
+        render();
+        return;
+      }
       if (key === 'riwayat-tanggal') { appState.riwayatAbsenTanggal = val; render(); return; }
       if (key === 'riwayat-modul-tanggal') { const m = selectEl.getAttribute('data-riwayat-modul'); if (m) { appState.riwayatModulTanggal = appState.riwayatModulTanggal || {}; appState.riwayatModulTanggal[m] = val; render(); } return; }
     }
@@ -6219,7 +6295,8 @@ animateContent();
   var _busy = false, _last = Date.now();
   function refreshNow(){
     if(window.__qrScannerOpen) return; // jangan re-render saat kamera scanner terbuka
-    if(window.__zGuruEditTs && (Date.now() - window.__zGuruEditTs < 120000)) return; // jangan render saat user sedang mengisi form (kolom bisa hilang)
+    // [TAHAN SEGAR 10 MENIT] jangan render saat user sedang mengisi form (kolom bisa hilang)
+    if(window.__zGuruEditTs && (Date.now() - window.__zGuruEditTs < 600000)) return;
     if(_busy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
     _busy = true; _last = Date.now();
@@ -6361,7 +6438,7 @@ animateContent();
   function _sameStudent(a,b){ var A=_idsOf(a), B=_idsOf(b); for(var i=0;i<A.length;i++){ for(var j=0;j<B.length;j++){ if(A[i]===B[j]) return true; } } return false; }
   function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } var r=rosterAll(); for(var j=0;j<r.length;j++){ if(_sameStudent(r[j], key)) return r[j]; } return null; }
 
-  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'', mtfDraftTgl:'', mtfTgl:todayStr(), mtfByKat:{} };
+  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'', riwayatBulan:'', mtfDraftTgl:'', mtfTgl:todayStr(), mtfByKat:{} };
 
   // MULTI-SURAH: draft sekolah per kategori kini berupa ARRAY entri {surah,ayat,catatan}.
   function draftEntries(kat){
@@ -6616,6 +6693,8 @@ animateContent();
       }catch(e){ showToast('Gagal membersihkan riwayat.','error','&#9888;'); }
     },
     setRiwayatTgl: function(v){ ST.riwayatTgl=String(v||''); render(); },
+    // [RIWAYAT BULAN] ganti bulan -> tanggal dipilih ulang di dalam bulan itu
+    setRiwayatBulan: function(v){ ST.riwayatBulan=String(v||''); ST.riwayatTgl=''; render(); },
     setTanggal: function(v){
       syncDraftFromDOM();
       ST.mtfTgl=String(v||'').slice(0,10)||todayStr();
@@ -6878,13 +6957,26 @@ animateContent();
     } else {
       var dateSet={}; rows.forEach(function(r){ var d=String(r.tanggal||'').slice(0,10); if(d) dateSet[d]=true; });
       var dates=Object.keys(dateSet).sort().reverse();
-      var sel=(ST.riwayatTgl && dateSet[ST.riwayatTgl])?ST.riwayatTgl:dates[0];
+      // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
+      var bulanIsi={}, bulanUrut=[];
+      dates.forEach(function(d){ var b=agBulanDariTgl(d); if(!bulanIsi[b]){ bulanIsi[b]=[]; bulanUrut.push(b); } bulanIsi[b].push(d); });
+      bulanUrut.sort().reverse();
+      var _hariIni=agHariIniISO(), _bulanIni=agBulanDariTgl(_hariIni);
+      var bln=ST.riwayatBulan;
+      if(!bln || !bulanIsi[bln]) bln = bulanIsi[_bulanIni] ? _bulanIni : bulanUrut[0];
+      ST.riwayatBulan=bln;
+      var tglBulan=(bulanIsi[bln]||[]).slice().sort().reverse();
+      var sel=(ST.riwayatTgl && tglBulan.indexOf(ST.riwayatTgl)>=0)?ST.riwayatTgl:((tglBulan.indexOf(_hariIni)>=0)?_hariIni:tglBulan[0]);
       var rowsTgl=rows.filter(function(r){ return String(r.tanggal||'').slice(0,10)===sel; });
-      body='<label class="mf-label">Pilih tanggal</label>';
-      body+='<div class="mf-select-wrap"><select class="mf-select" onchange="window.zMtf.setRiwayatTgl(this.value)">';
-      body+=dates.map(function(d){ var lbl=(typeof formatTanggalID==='function')?formatTanggalID(d):d; return '<option value="'+esc(d)+'"'+(d===sel?' selected':'')+'>'+esc(lbl)+'</option>'; }).join('');
+      body='<label class="mf-label">Pilih bulan</label>';
+      body+='<div class="mf-select-wrap"><select class="mf-select" onchange="window.zMtf.setRiwayatBulan(this.value)">';
+      body+=bulanUrut.map(function(b){ return '<option value="'+esc(b)+'"'+(b===bln?' selected':'')+'>'+esc(agLabelBulan(b)+(b===_bulanIni?' (bulan ini)':'')+' \u00b7 '+bulanIsi[b].length+' tanggal')+'</option>'; }).join('');
       body+='</select><span class="mf-chevron">&#8250;</span></div>';
-      body+='<p class="riwayat-absen-count">'+rowsTgl.length+' setoran tercatat \u00b7 '+dates.length+' tanggal</p>';
+      body+='<label class="mf-label">Pilih tanggal</label>';
+      body+='<div class="mf-select-wrap"><select class="mf-select" onchange="window.zMtf.setRiwayatTgl(this.value)">';
+      body+=tglBulan.map(function(d){ var lbl=(typeof formatTanggalID==='function')?formatTanggalID(d):d; return '<option value="'+esc(d)+'"'+(d===sel?' selected':'')+'>'+esc(lbl+(d===_hariIni?' (hari ini)':''))+'</option>'; }).join('');
+      body+='</select><span class="mf-chevron">&#8250;</span></div>';
+      body+='<p class="riwayat-absen-count">'+rowsTgl.length+' setoran tercatat \u00b7 '+tglBulan.length+' tanggal di '+esc(agLabelBulan(bln))+'</p>';
       body+=rowsTgl.map(function(r){
         var snama=r.surah_nama||(r.surah_no&&SURAH[r.surah_no-1]?SURAH[r.surah_no-1][0]:'');
         var surah=r.surah_no?(snama+' : ayat '+(r.ayat!=null?r.ayat:'-')):'-';
@@ -7794,4 +7886,207 @@ animateContent();
     var n = 0;
     var t = setInterval(function () { n++; if (pasangHook() || n > 200) clearInterval(t); }, 150);
   }
+})();
+
+/* ==================================================================
+ * [SERAGAM TOMBOL SIMPAN GURU]
+ *
+ * MASALAH:
+ *   Tiap modul punya tombol simpan sendiri (jurnal, catatan, pengumuman,
+ *   nilai, mutaba'ah, absensi, tabungan, form CRUD). Rupanya sama saja
+ *   sebelum dan sesudah diklik, jadi guru tidak tahu klikannya masuk atau
+ *   belum, lalu menekan berkali-kali -> data dobel.
+ *
+ * SOLUSI:
+ *   Satu penjaga pusat untuk SEMUA tombol simpan:
+ *     1. Sekali diklik -> tombol langsung abu-abu "Menyimpan..." dan terkunci.
+ *     2. Klik berikutnya diabaikan selama pengiriman ke Supabase berjalan.
+ *     3. Selesai & berhasil -> hijau "Tersimpan" 3 detik, lalu normal lagi.
+ *     4. Gagal -> langsung kembali normal supaya bisa dicoba ulang.
+ *     5. Kalau layar tergambar ulang di tengah proses, keadaan terkunci
+ *        dipasang ulang ke tombol penggantinya.
+ *
+ * Selesai-tidaknya dideteksi dari lalu lintas jaringan (fetch) ke Supabase,
+ * jadi tidak perlu mengubah satu per satu fungsi simpan tiap modul.
+ * ================================================================== */
+(function(){
+  if (window.__ZYMATA_SAVE_UX__) return;
+  window.__ZYMATA_SAVE_UX__ = true;
+
+  var SELEKTOR = [
+    '[data-draft-save]',
+    '[data-save-absensi]',
+    '[data-save-nilai]',
+    '[data-mrn-save]',
+    '[data-mqn-save]',
+    '[data-mobile-crud-create]',
+    '.ztf-btn-save',
+    '.save-draft-btn',
+    '.sticky-save-btn'
+  ].join(',');
+
+  // Tombol tabungan sudah punya penguncian sendiri di dalam zTab.saveAll.
+  var KECUALI = '[data-save-tabungan]';
+
+  /* ---------- gaya ---------- */
+  (function(){
+    if (document.getElementById('zymata-save-ux-styles')) return;
+    var st = document.createElement('style');
+    st.id = 'zymata-save-ux-styles';
+    st.textContent =
+      '.z-saving{background:#94a3b8!important;background-image:none!important;color:#fff!important;border-color:#94a3b8!important;opacity:1!important;filter:none!important;cursor:progress!important;pointer-events:none!important}' +
+      '.z-saved{background:#16a34a!important;background-image:none!important;color:#fff!important;border-color:#16a34a!important;opacity:1!important;filter:none!important;pointer-events:none!important;box-shadow:0 2px 10px rgba(22,163,74,.35)!important}' +
+      '.z-saving .z-spin{display:inline-block;width:11px;height:11px;margin-right:6px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;vertical-align:-1px;animation:zspin .7s linear infinite}' +
+      '@keyframes zspin{to{transform:rotate(360deg)}}';
+    (document.head || document.documentElement).appendChild(st);
+  })();
+
+  /* ---------- pemantau lalu lintas jaringan ---------- */
+  var aktif = 0, terakhirSelesai = 0, adaGagal = false;
+  (function(){
+    var asli = window.fetch;
+    if (typeof asli !== 'function') return;
+    window.fetch = function(){
+      aktif++;
+      var p;
+      try { p = asli.apply(this, arguments); }
+      catch (e) { aktif--; terakhirSelesai = Date.now(); adaGagal = true; throw e; }
+      return Promise.resolve(p).then(function(r){
+        aktif--; terakhirSelesai = Date.now();
+        try { if (r && r.ok === false) adaGagal = true; } catch(_e){}
+        return r;
+      }, function(e){
+        aktif--; terakhirSelesai = Date.now(); adaGagal = true;
+        throw e;
+      });
+    };
+  })();
+
+  /* ---------- penanda tombol supaya bisa dipasang ulang ---------- */
+  function selektorTombol(btn){
+    var bagian = [];
+    try {
+      var at = btn.attributes;
+      for (var i = 0; i < at.length; i++){
+        var n = at[i].name;
+        if (n.indexOf('data-') === 0 && n !== 'data-z-teks-asli'){
+          bagian.push('[' + n + '="' + String(at[i].value).replace(/"/g, '&quot;') + '"]');
+        }
+      }
+    } catch(_e){}
+    if (bagian.length) return bagian.join('');
+    try {
+      var cls = String(btn.className || '').split(/\s+/).filter(function(c){
+        return c && c.indexOf('z-sav') !== 0;
+      });
+      if (cls.length) return '.' + cls.join('.');
+    } catch(_e2){}
+    return '';
+  }
+
+  var sesi = null; // { sel, teksAsli, mulai }
+
+  function pasangMenyimpan(btn){
+    try {
+      if (!btn.getAttribute('data-z-teks-asli')) btn.setAttribute('data-z-teks-asli', btn.innerHTML);
+      btn.classList.remove('z-saved');
+      btn.classList.add('z-saving');
+      btn.setAttribute('aria-busy', 'true');
+      btn.innerHTML = '<span class="z-spin"></span>Menyimpan&hellip;';
+      setTimeout(function(){ try { btn.disabled = true; btn.setAttribute('aria-disabled','true'); } catch(_e){} }, 0);
+    } catch(_e){}
+  }
+
+  function pasangTersimpan(btn){
+    try {
+      btn.classList.remove('z-saving');
+      btn.classList.add('z-saved');
+      btn.removeAttribute('aria-busy');
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
+      btn.innerHTML = '&#10003; Tersimpan';
+    } catch(_e){}
+  }
+
+  function pulihkan(btn){
+    try {
+      btn.classList.remove('z-saving');
+      btn.classList.remove('z-saved');
+      btn.removeAttribute('aria-busy');
+      var t = btn.getAttribute('data-z-teks-asli');
+      if (t != null) btn.innerHTML = t;
+      btn.removeAttribute('data-z-teks-asli');
+      btn.disabled = false;
+      btn.removeAttribute('aria-disabled');
+    } catch(_e){}
+  }
+
+  function semuaTombolSesi(){
+    if (!sesi || !sesi.sel) return [];
+    try { return Array.prototype.slice.call(document.querySelectorAll(sesi.sel)); }
+    catch(_e){ return []; }
+  }
+
+  function selesaikan(berhasil){
+    var daftar = semuaTombolSesi();
+    if (sesi && sesi.btn && daftar.indexOf(sesi.btn) === -1) daftar.push(sesi.btn);
+    var teksAsli = sesi ? sesi.teksAsli : null;
+    sesi = null;
+    if (!berhasil){ daftar.forEach(pulihkan); return; }
+    daftar.forEach(pasangTersimpan);
+    setTimeout(function(){
+      daftar.forEach(function(b){
+        try { if (teksAsli != null && !b.getAttribute('data-z-teks-asli')) b.setAttribute('data-z-teks-asli', teksAsli); } catch(_e){}
+        pulihkan(b);
+      });
+    }, 3000);
+  }
+
+  function mulaiPantau(){
+    var mulai = Date.now();
+    var sesiIni = sesi;
+    var tick = setInterval(function(){
+      if (sesi !== sesiIni){ clearInterval(tick); return; }
+      var lama = Date.now() - mulai;
+      // Batas aman: apa pun yang terjadi, tombol tidak boleh terkunci selamanya.
+      if (lama > 20000){ clearInterval(tick); selesaikan(!adaGagal); return; }
+      if (lama < 600) return;
+      if (aktif > 0) return;
+      if (terakhirSelesai && (Date.now() - terakhirSelesai) < 500) return;
+      clearInterval(tick);
+      selesaikan(!adaGagal);
+    }, 200);
+  }
+
+  /* ---------- tangkap klik lebih dulu (fase capture) ---------- */
+  document.addEventListener('click', function(ev){
+    var btn;
+    try { btn = ev.target && ev.target.closest ? ev.target.closest(SELEKTOR) : null; } catch(_e){ btn = null; }
+    if (!btn) return;
+    try { if (btn.closest(KECUALI)) return; } catch(_e){}
+    if (btn.disabled) return;
+
+    // Sedang ada penyimpanan berjalan -> klik diabaikan sepenuhnya.
+    if (sesi || btn.classList.contains('z-saving') || btn.classList.contains('z-saved')){
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      return;
+    }
+
+    adaGagal = false;
+    sesi = { sel: selektorTombol(btn), teksAsli: btn.innerHTML, btn: btn };
+    pasangMenyimpan(btn);
+    mulaiPantau();
+  }, true);
+
+  /* ---------- pasang ulang keadaan setelah layar tergambar ulang ---------- */
+  try {
+    var mo = new MutationObserver(function(){
+      if (!sesi) return;
+      semuaTombolSesi().forEach(function(b){
+        if (!b.classList.contains('z-saving')) pasangMenyimpan(b);
+      });
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch(_e){}
 })();
