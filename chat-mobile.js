@@ -23,6 +23,54 @@
   var pendingFile = null;
   var pendingType = '';
 
+  /* ==================================================================
+   * [PERBAIKAN GRUP KELAS] Nama kelas ditulis berbeda-beda antar sisi:
+   * HP guru memakai bentuk dari data guru ('V-B'), HP wali memakai bentuk
+   * dari data siswa ('5B' / 'Kelas V B'). Karena pesan dicari dengan
+   * pencocokan huruf per huruf, keduanya tidak pernah bertemu. Grup Guru
+   * selamat karena kuncinya tetap '__GURU__' di semua sisi.
+   *
+   * Solusi: samakan bentuk nama kelas sebelum dicocokkan (abaikan spasi,
+   * tanda hubung, besar-kecil huruf, awalan 'Kelas', dan angka Romawi vs
+   * angka biasa), lalu ambil semua kemungkinan penulisannya saat memuat.
+   * ================================================================== */
+  var ROMAWI = { I: '1', II: '2', III: '3', IV: '4', V: '5', VI: '6' };
+  function normKelas(v) {
+    var t = String(v == null ? '' : v).replace(/^\s*kelas\s*/i, '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+    var m = t.match(/^(VI|IV|III|II|V|I)([A-Z0-9]*)$/);
+    if (m && ROMAWI[m[1]]) t = ROMAWI[m[1]] + m[2];
+    return t;
+  }
+  function cocokRuang(nilai) {
+    if (s.cur === GURU_ROOM) return String(nilai || '') === GURU_ROOM;
+    return !!normKelas(nilai) && normKelas(nilai) === normKelas(s.cur);
+  }
+  function variasiKelas(key) {
+    var out = {};
+    function add(v) { if (v) out[String(v)] = 1; }
+    add(key);
+    var n = normKelas(key);
+    add(n);
+    var m = n.match(/^(\d+)(.*)$/);
+    var arab = m ? m[1] : '';
+    var sisa = m ? m[2] : n;
+    var ROM = ['', 'I', 'II', 'III', 'IV', 'V', 'VI'];
+    var basis = [];
+    if (arab) { basis.push(arab); if (+arab <= 6) basis.push(ROM[+arab]); }
+    if (!basis.length) basis.push(n);
+    basis.forEach(function (b) {
+      ['', '-', ' '].forEach(function (sep) {
+        var v = sisa ? (b + sep + sisa) : b;
+        add(v);
+        add(v.toLowerCase());
+        add(sisa ? (b + sep + sisa.toLowerCase()) : v.toLowerCase());
+        add('Kelas ' + v);
+        add('kelas ' + v);
+      });
+    });
+    return Object.keys(out);
+  }
+
   function S() { try { return window.ZymataMobileSupabase; } catch (e) { return null; } }
   function client() { try { var m = S(); return m && m.getClient ? m.getClient() : null; } catch (e) { return null; } }
   function storage() { var m = S(); return m && m.storage ? m.storage : null; }
@@ -76,8 +124,17 @@
     st.textContent = [
       '.app-content.zchat-active{padding:6px 10px 92px !important;overflow:hidden !important;}',
       '.zchat-wrap{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;gap:8px;}',
+      /* [PAPAN KETIK HP] Tinggi diatur dari kode saat papan ketik muncul. */
+      '.zchat-wrap.zchat-kb{height:auto;}',
+      '.app-content.zchat-active.zchat-kb-open{padding-bottom:8px !important;}',
       '.zchat-rooms{display:flex;gap:6px;overflow-x:auto;flex-shrink:0;padding:2px;scrollbar-width:none;}',
       '.zchat-rooms::-webkit-scrollbar{display:none;}',
+      /* [DROPDOWN RUANG] Pengganti deretan tombol kelas yang memanjang. */
+      '.zchat-roombar{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:2px 2px 6px;}',
+      '.zchat-roombar .zchat-room-select{flex:1;min-width:0;}',
+      '.zchat-roombar .zchat-room{flex-shrink:0;padding:11px 14px;border-radius:12px;}',
+      '.zchat-room-select{width:100%;appearance:none;-webkit-appearance:none;border:1px solid #e2e8f0;background:#fff;color:#1A1F36;font-weight:800;font-size:14px;padding:11px 38px 11px 14px;border-radius:12px;cursor:pointer;background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'%2364748b\'%3E%3Cpath d=\'M7 10l5 5 5-5z\'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;background-size:20px;}',
+      '.zchat-room-select:focus{outline:none;border-color:#1A1F36;}',
       '.zchat-room{flex-shrink:0;border:1px solid #e2e8f0;background:#fff;color:#475569;font-weight:700;font-size:13px;padding:7px 14px;border-radius:999px;cursor:pointer;}',
       '.zchat-room.is-active{background:linear-gradient(135deg,#1A1F36,#232a4d);color:#fff;border-color:transparent;}',
       '.zchat-list{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:6px 2px;}',
@@ -125,6 +182,9 @@
       '.zchat-wrap{gap:6px;}',
       '.zchat-list{background:#0b141a;background-image:radial-gradient(circle at 18% 12%,rgba(0,168,132,.07),transparent 42%),radial-gradient(circle at 82% 88%,rgba(83,189,235,.06),transparent 42%);border-radius:14px;padding:10px 8px;gap:1px;}',
       '.zchat-room{background:rgba(255,255,255,.06);color:#c9d3d9;border:1px solid rgba(255,255,255,.10);}',
+      '.zchat-room-select{background-color:rgba(255,255,255,.06);color:#e9edef;border:1px solid rgba(255,255,255,.12);background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'%2300a884\'%3E%3Cpath d=\'M7 10l5 5 5-5z\'/%3E%3C/svg%3E");}',
+      '.zchat-room-select option{background:#111b21;color:#e9edef;}',
+      '.zchat-room-select:focus{border-color:#00a884;}',
       '.zchat-room.is-active{background:linear-gradient(135deg,#00a884,#009e77);color:#fff;border-color:transparent;}',
       '.zchat-loading,.zchat-empty{color:#8aa0ab;}',
       '.zchat-daysep{margin:12px 0 8px;}',
@@ -164,6 +224,71 @@
     document.head.appendChild(st);
   }
 
+  /* ==================================================================
+   * [PAPAN KETIK HP] Saat papan ketik muncul, layar yang terlihat menyusut
+   * tapi tinggi halaman tetap setinggi layar penuh. Akibatnya seluruh isi
+   * chat terdorong naik dan kotak ketik ikut melompat ke atas.
+   *
+   * Solusi: ikuti tinggi layar yang benar-benar terlihat, tahan halaman
+   * supaya tidak ikut tergeser, dan jaga pesan terakhir tetap di bawah.
+   * ================================================================== */
+  var vvTerpasang = false;
+
+  function keBawah() {
+    try {
+      var h = host();
+      var list = h && h.querySelector('#zchat-list');
+      if (list) list.scrollTop = list.scrollHeight;
+    } catch (e) {}
+  }
+
+  function sesuaikanTinggi() {
+    try {
+      var h = host();
+      if (!h) return;
+      var wrap = h.querySelector('.zchat-wrap');
+      if (!wrap) return;
+      var vv = window.visualViewport;
+      var tampak = vv ? vv.height : window.innerHeight;
+      var geser = vv ? vv.offsetTop : 0;
+      var kbBuka = !!vv && (window.innerHeight - vv.height) > 120;
+
+      var induk = h.closest ? h.closest('.app-content') : null;
+      if (induk) induk.classList.toggle('zchat-kb-open', kbBuka);
+
+      // Saat papan ketik terbuka, bilah menu bawah ikut tertutup, jadi ruang
+      // yang perlu disisakan di bawah jauh lebih kecil.
+      var sisaBawah = kbBuka ? 8 : 96;
+      var atas = wrap.getBoundingClientRect().top - geser;
+      var tinggi = Math.max(220, Math.round(tampak - atas - sisaBawah));
+
+      wrap.classList.add('zchat-kb');
+      wrap.style.height = tinggi + 'px';
+
+      // Tahan halaman supaya tidak ikut tergeser ke atas oleh papan ketik.
+      if (kbBuka) {
+        try { window.scrollTo(0, 0); } catch (e) {}
+        if (induk && induk.scrollTop) induk.scrollTop = 0;
+      }
+    } catch (e) {}
+  }
+
+  function pasangViewport() {
+    if (vvTerpasang) return;
+    vvTerpasang = true;
+    var jalan = function () { sesuaikanTinggi(); };
+    try {
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', function () { jalan(); keBawah(); });
+        window.visualViewport.addEventListener('scroll', jalan);
+      }
+    } catch (e) {}
+    try {
+      window.addEventListener('resize', jalan);
+      window.addEventListener('orientationchange', function () { setTimeout(jalan, 250); });
+    } catch (e) {}
+  }
+
   function build() {
     injectStyle();
     var h = host();
@@ -174,11 +299,29 @@
       return;
     }
     if (!s.cur || !s.rooms.some(function (r) { return r.key === s.cur; })) s.cur = s.rooms[0].key;
-    var tabs = s.rooms.length > 1
-      ? '<div class="zchat-rooms">' + s.rooms.map(function (r) {
-          return '<button type="button" class="zchat-room' + (r.key === s.cur ? ' is-active' : '') + '" data-zchat-room="' + esc(r.key) + '">' + esc(r.label) + '</button>';
-        }).join('') + '</div>'
-      : '';
+    // [DROPDOWN RUANG] Daftar kelas dibuat sebagai dropdown, bukan deretan
+    // tombol memanjang, supaya guru yang mengajar banyak kelas tidak perlu
+    // menggeser-geser layar untuk mencari kelasnya.
+    // Hanya daftar KELAS yang jadi dropdown. Grup Guru tetap berupa tombol
+    // tersendiri di sebelahnya supaya sekali sentuh langsung terbuka.
+    var kelasRooms = s.rooms.filter(function (r) { return r.key !== GURU_ROOM; });
+    var guruRoom = null;
+    s.rooms.forEach(function (r) { if (r.key === GURU_ROOM) guruRoom = r; });
+    var tabs = '';
+    if (s.rooms.length > 1) {
+      var selHtml = kelasRooms.length
+        ? '<select class="zchat-room-select field-select" id="zchat-room-select" aria-label="Pilih kelas">' +
+            '<option value=""' + (s.cur === GURU_ROOM ? ' selected' : '') + '>Pilih kelas\u2026</option>' +
+            kelasRooms.map(function (r) {
+              return '<option value="' + esc(r.key) + '"' + (r.key === s.cur ? ' selected' : '') + '>' + esc(r.label) + '</option>';
+            }).join('') +
+          '</select>'
+        : '';
+      var guruHtml = guruRoom
+        ? '<button type="button" class="zchat-room' + (s.cur === GURU_ROOM ? ' is-active' : '') + '" data-zchat-room="' + esc(GURU_ROOM) + '">' + esc(guruRoom.label) + '</button>'
+        : '';
+      if (selHtml || guruHtml) tabs = '<div class="zchat-roombar">' + selHtml + guruHtml + '</div>';
+    }
     h.innerHTML =
       '<div class="zchat-wrap">' +
         tabs +
@@ -188,6 +331,8 @@
         '<input type="file" id="zchat-doc" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar" hidden />' +
         '<input type="file" id="zchat-video" accept="video/*" hidden />' +
         '<div class="zchat-preview" id="zchat-preview" hidden></div>' +
+        '<div class="zchat-replybar" id="zchat-replybar" hidden></div>' +
+        '<div class="zchat-msgmenu" id="zchat-msgmenu" hidden></div>' +
         '<div class="zchat-attach-menu" id="zchat-attach-menu" hidden>' +
           '<button type="button" data-zchat-pick="zchat-kamera"><span class="zchat-ic"><svg viewBox="0 0 24 24" fill="#ffffff"><path fill-rule="evenodd" clip-rule="evenodd" d="M8.7 3.8l-1.1 1.6H5A1.8 1.8 0 0 0 3.2 7.2v9.6A1.8 1.8 0 0 0 5 18.6h14a1.8 1.8 0 0 0 1.8-1.8V7.2A1.8 1.8 0 0 0 19 5.4h-2.6l-1.1-1.6H8.7zM12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8zm0 1.7a1.7 1.7 0 1 1 0 3.4 1.7 1.7 0 0 1 0-3.4z"/></svg></span>Kamera</button>' +
           '<button type="button" data-zchat-pick="zchat-foto"><span class="zchat-ic"><svg viewBox="0 0 24 24" fill="#ffffff"><path d="M8 3h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" opacity="0.5"/><path d="M5 7h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"/></svg></span>Foto</button>' +
@@ -201,11 +346,20 @@
         '</div>' +
       '</div>';
     bind();
+    // [PAPAN KETIK HP] Ikuti tinggi layar yang benar-benar terlihat.
+    pasangViewport();
+    sesuaikanTinggi();
+    setTimeout(sesuaikanTinggi, 120);
   }
 
   function bind() {
     var h = host();
     if (!h) return;
+    // [DROPDOWN RUANG] Pindah grup lewat dropdown.
+    // [BALAS & HAPUS] Tekan lama / klik kanan / ketuk dua kali pada pesan.
+    pasangTekanLama(h.querySelector('#zchat-list'));
+    var roomSel = h.querySelector('#zchat-room-select');
+    if (roomSel) roomSel.addEventListener('change', function () { if (roomSel.value) pick(roomSel.value); });
     h.querySelectorAll('[data-zchat-room]').forEach(function (b) {
       b.addEventListener('click', function () { pick(b.getAttribute('data-zchat-room')); });
     });
@@ -230,9 +384,19 @@
       input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
       });
+      // [PAPAN KETIK HP] Begitu kotak ketik disentuh, tinggi disesuaikan lalu
+      // pesan terakhir digeser ke bawah supaya tidak tertutup papan ketik.
+      input.addEventListener('focus', function () {
+        setTimeout(function () { sesuaikanTinggi(); keBawah(); }, 60);
+        setTimeout(function () { sesuaikanTinggi(); keBawah(); }, 350);
+      });
+      input.addEventListener('blur', function () {
+        setTimeout(function () { sesuaikanTinggi(); }, 120);
+      });
       input.addEventListener('input', function () {
         input.style.height = 'auto';
         input.style.height = Math.min(input.scrollHeight, 96) + 'px';
+        keBawah();
       });
     }
   }
@@ -294,6 +458,179 @@
       if (c) c.addEventListener('click', clearPending);
     }
   }
+  /* ==================================================================
+   * [BALAS & HAPUS] Tekan lama sebuah pesan untuk membalas, menyalin, atau
+   * menghapus (menghapus hanya untuk pesan sendiri).
+   * ================================================================== */
+  function tutupMenu() {
+    s.menuId = null;
+    var h = host();
+    if (!h) return;
+    var menu = h.querySelector('#zchat-msgmenu');
+    if (menu) { menu.hidden = true; menu.innerHTML = ''; }
+    var bd = h.querySelector('#zchat-backdrop');
+    if (bd && bd.parentNode) bd.parentNode.removeChild(bd);
+    h.querySelectorAll('.zchat-row.is-pilih').forEach(function (r) { r.classList.remove('is-pilih'); });
+  }
+
+  function bukaMenu(id, mine) {
+    var h = host();
+    if (!h) return;
+    var m = cariPesan(id);
+    if (!m) return;
+    tutupMenu();
+    s.menuId = id;
+
+    var baris = h.querySelector('[data-zchat-msg="' + String(id).replace(/"/g, '') + '"]');
+    if (baris) baris.classList.add('is-pilih');
+
+    var bd = document.createElement('div');
+    bd.className = 'zchat-backdrop';
+    bd.id = 'zchat-backdrop';
+    bd.addEventListener('click', tutupMenu);
+    h.appendChild(bd);
+
+    var menu = h.querySelector('#zchat-msgmenu');
+    if (!menu) return;
+    menu.innerHTML =
+      '<button type="button" data-zchat-aksi="balas">\u21A9\uFE0F Balas</button>' +
+      '<button type="button" data-zchat-aksi="salin">\uD83D\uDCCB Salin teks</button>' +
+      (mine ? '<button type="button" class="danger" data-zchat-aksi="hapus">\uD83D\uDDD1\uFE0F Hapus pesan</button>' : '') +
+      '<button type="button" data-zchat-aksi="batal">Batal</button>';
+    menu.hidden = false;
+    menu.querySelectorAll('[data-zchat-aksi]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var aksi = b.getAttribute('data-zchat-aksi');
+        var pid = s.menuId;
+        tutupMenu();
+        if (aksi === 'balas') mulaiBalas(pid);
+        else if (aksi === 'salin') salinPesan(pid);
+        else if (aksi === 'hapus') hapusPesan(pid);
+      });
+    });
+  }
+
+  function salinPesan(id) {
+    var m = cariPesan(id);
+    if (!m) return;
+    var teks = uraiPesan(m.pesan).isi || m.lampiran_url || '';
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(teks);
+    } catch (e) {}
+  }
+
+  function gambarBilahBalas() {
+    var h = host();
+    if (!h) return;
+    var bar = h.querySelector('#zchat-replybar');
+    if (!bar) return;
+    if (!s.balasKe) { bar.hidden = true; bar.innerHTML = ''; return; }
+    bar.innerHTML =
+      '<div class="zchat-quote"><b>' + esc(s.balasKe.nama || 'Pesan') + '</b><span>' + esc(s.balasKe.kutip) + '</span></div>' +
+      '<button type="button" id="zchat-batal-balas" aria-label="Batal balas">\u2715</button>';
+    bar.hidden = false;
+    var x = bar.querySelector('#zchat-batal-balas');
+    if (x) x.addEventListener('click', batalBalas);
+    sesuaikanTinggi();
+  }
+
+  function mulaiBalas(id) {
+    var m = cariPesan(id);
+    if (!m) return;
+    s.balasKe = {
+      id: String(m.id == null ? '' : m.id),
+      nama: bersih(m.pengirim_nama || 'Tanpa nama', 40),
+      kutip: ringkasIsi(m)
+    };
+    gambarBilahBalas();
+    var h = host();
+    var input = h && h.querySelector('#zchat-input');
+    if (input) input.focus();
+  }
+
+  function batalBalas() {
+    s.balasKe = null;
+    gambarBilahBalas();
+  }
+
+  async function hapusPesan(id) {
+    var m = cariPesan(id);
+    if (!m) return;
+    if (!window.confirm('Hapus pesan ini untuk semua orang?')) return;
+    var c = client();
+    if (!c) return;
+    try {
+      var res = await c.from(TABLE).delete().eq('id', m.id);
+      if (res && res.error) throw res.error;
+      for (var i = 0; i < s.rows.length; i++) {
+        if (String(s.rows[i].id) === String(m.id)) { s.rows.splice(i, 1); break; }
+      }
+      if (s.balasKe && String(s.balasKe.id) === String(m.id)) batalBalas();
+      paint();
+    } catch (e) {
+      console.warn('[ZymataChat] hapus error', e);
+      alert('Pesan gagal dihapus. Coba lagi.');
+    }
+  }
+
+  function pasangTekanLama(list) {
+    if (!list) return;
+    var timer = null, mulaiY = 0, batal = false;
+
+    function targetDari(ev) {
+      var t = ev.target;
+      var baris = t && t.closest ? t.closest('[data-zchat-msg]') : null;
+      if (!baris) return null;
+      var id = baris.getAttribute('data-zchat-msg');
+      if (!id || id.indexOf('tmp_') === 0) return null; // pesan yang belum tersimpan
+      return { id: id, mine: baris.getAttribute('data-zchat-mine') === '1' };
+    }
+
+    list.addEventListener('touchstart', function (ev) {
+      var tg = targetDari(ev);
+      if (!tg) return;
+      batal = false;
+      mulaiY = (ev.touches && ev.touches[0]) ? ev.touches[0].clientY : 0;
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        if (batal) return;
+        try { if (navigator.vibrate) navigator.vibrate(15); } catch (e) {}
+        bukaMenu(tg.id, tg.mine);
+      }, 450);
+    }, { passive: true });
+
+    list.addEventListener('touchmove', function (ev) {
+      var y = (ev.touches && ev.touches[0]) ? ev.touches[0].clientY : 0;
+      if (Math.abs(y - mulaiY) > 10) { batal = true; clearTimeout(timer); }
+    }, { passive: true });
+
+    ['touchend', 'touchcancel'].forEach(function (n) {
+      list.addEventListener(n, function () { batal = true; clearTimeout(timer); }, { passive: true });
+    });
+
+    // Klik kanan untuk pemakaian di komputer.
+    list.addEventListener('contextmenu', function (ev) {
+      var tg = targetDari(ev);
+      if (!tg) return;
+      ev.preventDefault();
+      bukaMenu(tg.id, tg.mine);
+    });
+
+    // Ketuk dua kali untuk langsung membalas, seperti pintasan di WhatsApp.
+    var tapTerakhir = 0, idTerakhir = '';
+    list.addEventListener('click', function (ev) {
+      var tg = targetDari(ev);
+      if (!tg) return;
+      var kini = Date.now();
+      if (tg.id === idTerakhir && (kini - tapTerakhir) < 320) {
+        mulaiBalas(tg.id);
+        tapTerakhir = 0; idTerakhir = '';
+        return;
+      }
+      tapTerakhir = kini; idTerakhir = tg.id;
+    });
+  }
+
   function clearPending() {
     pendingFile = null; pendingType = '';
     ['zchat-foto', 'zchat-kamera', 'zchat-doc', 'zchat-video'].forEach(function (id) { var inp = host().querySelector('#' + id); if (inp) inp.value = ''; });
@@ -307,6 +644,14 @@
     s.cur = key;
     var h = host();
     if (h) h.querySelectorAll('[data-zchat-room]').forEach(function (b) { b.classList.toggle('is-active', b.getAttribute('data-zchat-room') === key); });
+    // [DROPDOWN RUANG] Samakan pilihan dropdown bila perpindahan datang dari kode lain.
+    try {
+      var _sel = h && h.querySelector('#zchat-room-select');
+      if (_sel) {
+        var _v = (key === GURU_ROOM) ? '' : key;
+        if (_sel.value !== _v) _sel.value = _v;
+      }
+    } catch (_e) {}
     clearPending();
     load();
   }
@@ -319,9 +664,13 @@
     if (!c) { list.innerHTML = '<div class="zchat-empty">Koneksi belum siap.</div>'; return; }
     list.innerHTML = '<div class="zchat-loading">Memuat pesan\u2026</div>';
     try {
-      var res = await c.from(TABLE).select('*').eq('kelas', s.cur).order('created_at', { ascending: true }).limit(500);
+      // [PERBAIKAN GRUP KELAS] Ambil semua kemungkinan penulisan nama kelas,
+      // lalu saring lagi di sini supaya yang tampil benar-benar kelas ini.
+      var q = c.from(TABLE).select('*');
+      q = (s.cur === GURU_ROOM) ? q.eq('kelas', GURU_ROOM) : q.in('kelas', variasiKelas(s.cur));
+      var res = await q.order('created_at', { ascending: true }).limit(500);
       if (res && res.error) throw res.error;
-      s.rows = (res && res.data) || [];
+      s.rows = ((res && res.data) || []).filter(function (r) { return cocokRuang(r && r.kelas); });
       paint();
       subscribe();
     } catch (e) {
@@ -401,15 +750,28 @@
     teardown();
     try {
       s.channel = c.channel('zchat_' + s.cur)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: TABLE, filter: 'kelas=eq.' + s.cur }, function (payload) {
+        // [PERBAIKAN GRUP KELAS] Tanpa saringan nama kelas di server, karena
+        // penulisannya berbeda-beda. Penyaringan dilakukan di bawah ini.
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: TABLE }, function (payload) {
           var row = payload && payload.new;
           if (!row) return;
+          if (!cocokRuang(row.kelas)) return;
           var idx = -1;
           for (var i = 0; i < s.rows.length; i++) {
             if ((row.client_key && s.rows[i].client_key === row.client_key) || (row.id && s.rows[i].id === row.id)) { idx = i; break; }
           }
           if (idx >= 0) s.rows[idx] = row; else s.rows.push(row);
           paint();
+        })
+        // [BALAS & HAPUS] Pesan yang dihapus di satu HP ikut hilang di HP lain.
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: TABLE }, function (payload) {
+          var lama = payload && payload.old;
+          if (!lama || lama.id == null) return;
+          var berubah = false;
+          for (var i = s.rows.length - 1; i >= 0; i--) {
+            if (String(s.rows[i].id) === String(lama.id)) { s.rows.splice(i, 1); berubah = true; }
+          }
+          if (berubah) paint();
         })
         .subscribe();
     } catch (e) { console.warn('[ZymataChat] subscribe error', e); }
@@ -447,6 +809,10 @@
         if (up.error) { alert('Upload gagal: ' + up.error); throw new Error(up.error); }
         lampUrl = up.data.url; lampTipe = typeToSend;
       }
+      // [BALAS & HAPUS] Sisipkan penanda balasan di awal isi pesan.
+      if (s.balasKe) {
+        text = '[balas|' + s.balasKe.id + '|' + bersih(s.balasKe.nama, 40) + '|' + bersih(s.balasKe.kutip) + ']\n' + text;
+      }
       var row = {
         kelas: s.cur,
         pengirim_id: String(u.id || ''),
@@ -465,6 +831,7 @@
       paint();
       if (input) { input.value = ''; input.style.height = 'auto'; }
       clearPending();
+      batalBalas(); // [BALAS & HAPUS] kutipan dilepas setelah terkirim
       var c = client();
       var ins = await c.from(TABLE).insert(row).select().single();
       if (ins.error) throw ins.error;
