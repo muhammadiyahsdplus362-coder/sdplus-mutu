@@ -2363,12 +2363,15 @@ function renderFloating() {
 }
 
 function announcementItem(item) {
+  /* [ISI PENGUMUMAN UTUH] CSS bawaan memotong isi jadi satu baris ber-elipsis.
+     Paksa teks membungkus penuh supaya pengumuman terbaca semuanya. */
+  const _wrapStyle = 'white-space:normal;overflow:visible;display:block;text-overflow:clip;-webkit-line-clamp:unset;word-break:break-word;line-height:1.45';
   return `
     <article class="announcement-item">
       <div class="announcement-time">${item.time}</div>
-      <div class="announcement-copy">
-        <h4>${item.title}</h4>
-        <p>${item.meta}</p>
+      <div class="announcement-copy" style="min-width:0">
+        <h4 style="${_wrapStyle}">${item.title}</h4>
+        <p style="${_wrapStyle}">${item.meta}</p>
       </div>
       <span class="status-pill ${item.tone}">${item.status}</span>
     </article>
