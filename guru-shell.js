@@ -1562,8 +1562,24 @@ function renderTabunganInputGuruModule(moduleId, detail){
   if(S.kelas){
     var tSetor0=0,tTarik0=0; (Array.isArray(S.rows)?S.rows:[]).forEach(function(r){ var x=tabDelta(r); tSetor0+=x.d; tTarik0+=x.k; });
     var saldo0=tSetor0-tTarik0;
+    /* [SETOR HARI INI] hitung dari baris yang sudah ada di memori, tanpa query baru.
+       Baris lama dari web admin kadang kolom tanggal kosong -> pakai created_at sebagai cadangan. */
+    var _hariIni=(typeof agTodayISO==='function')?agTodayISO():'';
+    var tSetorHariIni=0, _muridHariIni={};
+    (Array.isArray(S.rows)?S.rows:[]).forEach(function(r){
+      var tg=String(r.tanggal||r.created_at||r.createdAt||'').slice(0,10);
+      if(!tg || tg!==_hariIni) return;
+      var x=tabDelta(r);
+      if(!(x.d>0)) return;
+      tSetorHariIni+=x.d;
+      var kunci=String(r.nis||r.siswa_id||tabNormNama(r.nama_siswa||r.nama||'')||'?');
+      _muridHariIni[kunci]=1;
+    });
+    var _jmlMuridHariIni=Object.keys(_muridHariIni).length;
     var subK=(S.loadingSaldo && !Array.isArray(S.rows))?'Memuat\u2026':('Kelas '+S.kelas);
-    html+='<section class="section"><div class="module-stat-grid" style="grid-template-columns:1fr 1fr 1fr;">';
+    html+='<section class="section"><div class="module-stat-grid" style="grid-template-columns:1fr 1fr;">';
+    /* [SETOR HARI INI] kartu paling atas: yang paling sering dilihat guru saat menagih. */
+    html+=statCard('Setor Hari Ini','Rp '+Number(tSetorHariIni).toLocaleString('id-ID'),(S.loadingSaldo && !Array.isArray(S.rows))?'Memuat\u2026':(_jmlMuridHariIni+' siswa'),'green');
     html+=statCard('Setor','Rp '+Number(tSetor0).toLocaleString('id-ID'),subK,'green');
     html+=statCard('Tarik','Rp '+Number(tTarik0).toLocaleString('id-ID'),subK,'red');
     html+=statCard('Saldo','Rp '+Number(saldo0).toLocaleString('id-ID'),subK,'blue');
@@ -1737,7 +1753,9 @@ function guruModuleDataKey(moduleId) {
   return map[moduleId] || '';
 }
 
-const READONLY_GURU_MODULES = { 'mutabaah-rumah': true };
+/* [PENGUMUMAN BACA SAJA] Pengumuman hanya dibuat dari web admin sekolah,
+   jadi form input generiknya dimatikan di aplikasi guru. */
+const READONLY_GURU_MODULES = { 'mutabaah-rumah': true, 'pengumuman': true };
 function renderSupabaseGuruDataModule(detail, rows, moduleId) {
   const helper = window.ZymataMobileSupabase;
   // Modul nilai: gunakan jenis input yang dipilih (nilai / ulangan-harian / ujian-semester)
@@ -1777,8 +1795,12 @@ function renderSupabaseGuruDataModule(detail, rows, moduleId) {
         }).join('')
       + '</div></section>';
   }
+  /* [PENGUMUMAN BACA SAJA] Tiap modul baca-saja punya keterangannya sendiri. */
+  const _readonlyNote = (moduleId === 'pengumuman')
+    ? '<section class="section"><article class="input-panel"><span class="card-label">Hanya baca</span><p class="module-detail-copy">Pengumuman dibuat dari <b>web admin sekolah</b>. Di aplikasi guru, pengumuman hanya dibaca.</p></article></section>'
+    : '<section class="section"><article class="input-panel"><span class="card-label">Data dari wali (baca saja)</span><p class="module-detail-copy">Laporan mutabaah rumah diisi wali murid di rumah. Guru memeriksa lalu memberi <b>Problem/Kendala</b> dan <b>Konfirmasi Wali</b> pada tiap laporan di bawah.</p></article></section>';
   const formHtml = READONLY_GURU_MODULES[moduleId]
-    ? '<section class="section"><article class="input-panel"><span class="card-label">Data dari wali (baca saja)</span><p class="module-detail-copy">Laporan mutabaah rumah diisi wali murid di rumah. Guru memeriksa lalu memberi <b>Problem/Kendala</b> dan <b>Konfirmasi Wali</b> pada tiap laporan di bawah.</p></article></section>'
+    ? _readonlyNote
     : (nilaiPickerHtml + renderModuleForm(moduleId, crudKey));
   let listHtml;
   if (moduleId === 'kalender-akademik') {
@@ -3097,42 +3119,18 @@ function renderPengumumanGuruModule(detail) {
       <div class="timeline">${filtered.map(scheduleCard).join('')}</div>
     </section>
 
-    <!-- Form buat pengumuman kelas -->
+    <!-- [PENGUMUMAN BACA SAJA] Form buat pengumuman & panel draft dihapus.
+         Pengumuman hanya dibuat dari web admin; aplikasi guru sekadar membaca. -->
     <section class="section">
       <article class="mf-card">
         <div class="jf-toggle-row">
           <div>
-            <strong>Buat Pengumuman Kelas</strong>
-            <small>Guru dapat membuat pengumuman khusus untuk kelas binaan</small>
+            <strong>Hanya baca</strong>
+            <small>Pengumuman dibuat dari web admin sekolah.</small>
           </div>
-          <button type="button" class="jf-chip ${f.showForm?'active':''}" data-peng-toggle-form>
-            ${f.showForm ? 'Tutup' : '+ Buat'}
-          </button>
         </div>
-
-        ${f.showForm ? `
-          ${selectField('Kategori', f.kategori, PENG_KATEGORI, 'peng-kat')}
-
-          ${textareaField('Judul', 'Misal: Persiapan PTS Pekan Depan', 'peng-judul')}
-
-          ${textareaField('Isi Pengumuman', 'Tulis isi pengumuman yang akan dibaca oleh guru dan wali murid kelas 5A...', 'peng-isi')}
-
-          <div class="jf-toggle-row">
-            <div>
-              <strong>Tandai Penting</strong>
-              <small>Pengumuman muncul di bagian atas</small>
-            </div>
-            <button type="button" class="toggle-btn ${f.prioritas?'on':''}" data-peng-toggle-prio>
-              ${f.prioritas?'Ya':'Tidak'}
-            </button>
-          </div>
-
-          <button type="button" class="save-draft-btn" data-draft-save>Kirim Pengumuman Kelas</button>
-        ` : ''}
       </article>
     </section>
-
-    ${databaseDraftPanel('pengumuman',['judul','kategori','isi','target','prioritas','tanggal_mulai','tanggal_selesai'])}
   `;
 }
 
@@ -3606,6 +3604,15 @@ function renderModuleRiwayat(moduleId, list, detail, crudKey){
   var isOpen = appState.riwayatModulOpen[moduleId];
   function entryHtml(row){
     var item = helper && helper.normalizeItem ? helper.normalizeItem(row, title) : { time:'Data', title:title, meta:'Supabase', status:'Aktif', tone:'blue' };
+    /* [ISI PENGUMUMAN] normalizeItem merangkai ringkasan dari Kategori/Target dan hanya
+       memakai kolom isi sebagai cadangan terakhir, sehingga isi tak pernah tampil.
+       Samakan dengan aplikasi wali: isi jadi baris utama, kategori jadi label kanan. */
+    if (moduleId === 'pengumuman') {
+      var _isiP = String(row.isi || row.konten || row.deskripsi || row.pesan || row.keterangan || '').replace(/\s+/g, ' ').trim();
+      if (_isiP) item.meta = _isiP;
+      var _katP = String(row.kategori || '').trim();
+      if (_katP) item.status = _katP.toUpperCase();
+    }
     var actions = row.__mobileCrud && row.id ? '<div class="field-chip-row"><button type="button" class="field-chip" data-mobile-crud-update="' + row.id + '" data-mobile-crud-key="' + crudKey + '">Tandai selesai</button><button type="button" class="field-chip" data-mobile-crud-delete="' + row.id + '" data-mobile-crud-key="' + crudKey + '">Hapus</button></div>' : '';
     return scheduleCard(item) + guruPdfLinks(row) + actions;
   }
@@ -4112,12 +4119,15 @@ function messageCard(item, idx) {
 function announcementItem(item, idx) {
   const safeTitle = String(item.title || '').replace(/"/g,'&quot;');
   const safeMeta  = String(item.meta  || '').replace(/"/g,'&quot;');
+  /* [ISI PENGUMUMAN UTUH] CSS bawaan memotong isi jadi satu baris ber-elipsis.
+     Paksa teks membungkus penuh supaya pengumuman terbaca semuanya. */
+  const _wrapStyle = 'white-space:normal;overflow:visible;display:block;text-overflow:clip;-webkit-line-clamp:unset;word-break:break-word;line-height:1.45';
   return `
     <article class="announcement-item" data-announcement-open data-ann-title="${safeTitle}" data-ann-meta="${safeMeta}" style="cursor:pointer">
       <div class="announcement-time">${item.time}</div>
-      <div class="announcement-copy">
-        <h4>${item.title}</h4>
-        <p>${item.meta}</p>
+      <div class="announcement-copy" style="min-width:0">
+        <h4 style="${_wrapStyle}">${item.title}</h4>
+        <p style="${_wrapStyle}">${item.meta}</p>
       </div>
       <span class="status-pill ${item.tone}">${item.status}</span>
     </article>
@@ -4228,7 +4238,14 @@ function renderFloating() {
   let _annList;
   if (appState.syncMode === 'supabase-live') {
     _annList = (_pengRows.length && _annHelper && _annHelper.normalizeItem)
-      ? _pengRows.slice(0, 5).map(r => { const it = _annHelper.normalizeItem(r, 'Pengumuman'); return announcementItem({ time: it.time, title: it.title, meta: it.meta, status: it.status, tone: it.tone }); }).join('')
+      ? _pengRows.slice(0, 5).map(r => {
+          const it = _annHelper.normalizeItem(r, 'Pengumuman');
+          /* [ISI PENGUMUMAN] Popover "Info terbaru" pun hanya menampilkan Kategori/Target.
+             Ikuti aplikasi wali: isi pengumuman jadi baris utama, kategori jadi label. */
+          const _isiA = String(r.isi || r.konten || r.deskripsi || r.pesan || r.keterangan || '').replace(/\s+/g, ' ').trim();
+          const _katA = String(r.kategori || '').trim();
+          return announcementItem({ time: it.time, title: it.title, meta: (_isiA || it.meta), status: (_katA ? _katA.toUpperCase() : it.status), tone: it.tone });
+        }).join('')
       : '<p class="announcement-footnote" style="padding:10px 4px">Belum ada pengumuman.</p>';
   } else {
     _annList = announcements.slice(0, 5).map(announcementItem).join('');
@@ -6176,8 +6193,20 @@ async function hydrateGuruFromSupabase() {
     appState.guruKelasList = kelasList.slice();
     // Daftar MAPEL yang diajar guru (integrasi dari data mengajar) untuk dropdown mapel Jurnal Guru
     const mapelDiajarRaw = Array.isArray(guru.mapel) ? guru.mapel : String(guru.mapel || guru.mapel_diajar || guru.mata_pelajaran || guru.mapel_ajar || '').split(/[,;|]/).map(s => s.trim()).filter(Boolean);
-    const mapelFromMengajar = (ctx.mengajar || []).map(r => r.mapel || r.mata_pelajaran || r.nama_mapel).filter(Boolean);
-    const mapelList = Array.from(new Set([].concat(mapelDiajarRaw, mapelFromMengajar).filter(Boolean)));
+    /* [MAPEL GABUNG] Baris guru_mengajar kadang menyimpan beberapa mapel dalam SATU kolom,
+       mis. "FIQIH, TAHFIDZ". Dulu dipakai apa adanya sehingga muncul jadi satu pilihan
+       gabungan di dropdown. Sekarang dipecah, sama seperti kolom guru.mapel. */
+    const mapelFromMengajar = [].concat.apply([], (ctx.mengajar || [])
+      .map(r => r.mapel || r.mata_pelajaran || r.nama_mapel)
+      .filter(Boolean)
+      .map(v => Array.isArray(v) ? v : String(v).split(/[,;|\/]| dan /i)));
+    /* [MAPEL GABUNG] Dedup tanpa peduli besar-kecil huruf & spasi berlebih,
+       supaya "Fiqih" dan "FIQIH" tidak muncul dua kali. */
+    const _mapelSeen = {};
+    const mapelList = [].concat(mapelDiajarRaw, mapelFromMengajar)
+      .map(s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .filter(s => { const k = s.toLowerCase(); if (_mapelSeen[k]) return false; _mapelSeen[k] = 1; return true; });
     appState.guruMapelList = mapelList.slice();
     loadMasterMapel(); // muat daftar mapel resmi sekolah (master_mapel) di latar belakang
 
@@ -7437,6 +7466,18 @@ animateContent();
     var mapelVal=((PP.jenis==='media-pembelajaran'||PP.jenis==='modul-ajar'||PP.jenis==='prota-promes') && mapelEl)?(mapelEl.value||'').trim():'';
     var ketFinal=(PP.jenis==='prota-promes')?(function(){ var _b=ket||''; if(mapelVal) _b=(_b?_b+' ':'')+'[mapel:'+mapelVal+']'; return _b; })():(mapelVal?(mapelVal+(ket?' - '+ket:'')):ket);
     if(!file){ toast('Pilih berkas dulu','error','&#9888;'); return; }
+    /* [DIAGNOSA UPLOAD] Cegat penyebab paling sering SEBELUM upload dimulai,
+       supaya guru dapat pesan yang jelas, bukan sekadar 'Upload gagal'. */
+    try{
+      if(typeof navigator!=='undefined' && navigator.onLine===false){
+        toast('Tidak ada koneksi internet. Nyalakan data/wifi lalu coba lagi.','error','&#9888;'); return;
+      }
+      var _mb=Number(file.size||0)/1048576;
+      if(_mb>25){
+        toast('Berkas terlalu besar ('+_mb.toFixed(1)+' MB). Maksimal 25 MB. Kecilkan dulu berkasnya.','error','&#9888;'); return;
+      }
+      if(_mb>8){ toast('Berkas '+_mb.toFixed(1)+' MB, upload bisa lama. Jangan tutup aplikasi.','success','&#128196;'); }
+    }catch(_eChk){}
     if(PP.jenis==='prota-promes' && (!kelasVal||!mapelVal)){ toast('Pilih kelas dan mata pelajaran dulu','error','&#9888;'); return; }
     var c=client();
     if(!c||!c.functions){ toast('Koneksi belum siap, coba lagi','error','&#9888;'); return; }
@@ -7450,11 +7491,37 @@ animateContent();
       var key=BUCKET+'/'+path;
       var fd=new FormData();
       fd.append('file',file); fd.append('key',key); fd.append('bucket',BUCKET); fd.append('path',path);
+      /* [DIAGNOSA UPLOAD] Satu kali coba ulang otomatis: kegagalan di HP guru
+         sering hanya sinyal putus sesaat, bukan berkas atau akunnya yang salah. */
       var up=await c.functions.invoke('r2-upload-url',{ body:fd });
+      if(up && up.error){
+        try{
+          await new Promise(function(r){ setTimeout(r,1500); });
+          var fd2=new FormData();
+          fd2.append('file',file); fd2.append('key',key); fd2.append('bucket',BUCKET); fd2.append('path',path);
+          var up2=await c.functions.invoke('r2-upload-url',{ body:fd2 });
+          if(up2 && !up2.error) up=up2;
+        }catch(_eRetry){}
+      }
       if(up.error){
-        var detail=''; try{ if(up.error.context&&up.error.context.json){ var j=await up.error.context.json(); detail=j&&j.error?(': '+j.error):''; } }catch(e){}
+        /* [DIAGNOSA UPLOAD] Pesan lama cuma 'Upload gagal' tanpa petunjuk apa pun.
+           Sekarang sertakan status HTTP, jenis error, dan ukuran berkas. */
+        var detail='';
+        try{ if(up.error.context&&up.error.context.json){ var j=await up.error.context.json(); detail=j&&j.error?(': '+j.error):''; } }catch(e){}
+        var _st=''; try{ _st=String((up.error.context&&up.error.context.status)||''); }catch(e2){}
+        var _nm=''; try{ _nm=String(up.error.name||''); }catch(e3){}
+        var _msg=''; try{ _msg=String(up.error.message||''); }catch(e4){}
+        var _sz=''; try{ _sz=fmtSize(file.size||0); }catch(e5){}
+        var _petunjuk='';
+        if(_st==='401'||_st==='403') _petunjuk=' \u2014 akses ditolak server';
+        else if(_st==='413') _petunjuk=' \u2014 berkas terlalu besar untuk server';
+        else if(_st==='504'||_st==='408') _petunjuk=' \u2014 server kelamaan menunggu, sinyal lemah';
+        else if(/FunctionsFetch|Failed to fetch|NetworkError|Load failed/i.test(_nm+' '+_msg)) _petunjuk=' \u2014 koneksi putus saat mengirim, coba pakai wifi';
+        var _diag=[_st?('HTTP '+_st):'', _nm, _msg].filter(Boolean).join(' / ');
+        if(!detail && _diag) detail=': '+_diag;
+        try{ console.error('[DIAGNOSA UPLOAD]', { status:_st, name:_nm, message:_msg, size:file.size, type:file.type, path:path }); }catch(e6){}
         PP.uploading=false; if(typeof render==='function') render();
-        toast('Upload gagal'+detail,'error','&#9888;'); return;
+        toast('Upload gagal'+detail+_petunjuk+(_sz?(' ['+_sz+']'):''),'error','&#9888;'); return;
       }
       var url=ppFixUrl((up.data&&up.data.url)||publicUrl(key));
       var row={ id:id, jenis:PP.jenis, keterangan:ketFinal, tanggal:todayISO(), file_url:url, file_key:key,
