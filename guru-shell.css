@@ -4487,3 +4487,45 @@ html, body { background-color: #1A1F36; }
     box-shadow: none !important;
   }
 }
+
+/* ======================================================
+   [KARTU JADWAL RATA KIRI]
+   Kartu .schedule-card memakai justify-content: space-between,
+   sedangkan .student-info tidak punya lebar/flex sendiri sehingga
+   judul mapel terdorong ke tengah kartu. Akibatnya tiap baris jadwal
+   mulai di titik berbeda dan daftar terlihat tidak rapi.
+   Perbaikan: kolom jam berlebar tetap, blok judul mengisi sisa ruang
+   dan rata kiri, label status didorong ke kanan.
+   ====================================================== */
+.schedule-card {
+  text-align: left;
+  gap: 10px;
+}
+.schedule-card > .schedule-time {
+  flex: 0 0 56px;
+  max-width: 56px;
+  text-align: left;
+  line-height: 1.2;
+}
+.schedule-card > .student-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+.schedule-card .schedule-title {
+  text-align: left;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.schedule-card .schedule-meta {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.schedule-card > .status-pill {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+}
