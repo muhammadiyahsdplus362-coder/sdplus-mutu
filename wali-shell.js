@@ -159,6 +159,7 @@ const academicModules = [
   { id: 'nilai-anak',       icon: ICONS.nilai,      title: 'Nilai',         meta: 'Ringkasan tugas, ujian, dan capaian',      route: 'module:nilai-anak',       group: 'Akademik' },
   { id: 'perkembangan-anak',icon: ICONS.tumbuh,     title: 'Perkembangan',  meta: 'Ibadah, karakter, prestasi',      route: 'module:perkembangan-anak',group: 'Akademik' },
   { id: 'catatan-anak',     icon: ICONS.catatan,    title: 'Catatan Anak',  meta: 'Pesan dan tindak lanjut dari sekolah',     route: 'module:catatan-anak',     group: 'Akademik' },
+  { id: 'calistung-anak',   icon: ICONS.tumbuh,     title: 'Calistung',     meta: 'Literasi & numerasi anak',                 route: 'module:calistung-anak',   group: 'Akademik' }, // [CALISTUNG WALI]
   { id: 'jadwal-anak',      icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/></svg>`, title: 'Jadwal Pelajaran', meta: 'Jadwal mata pelajaran mingguan', route: 'module:jadwal-anak', group: 'Akademik' },
   { id: 'program-kegiatan', icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/><path d="M10 10.3l.62 1.28 1.4.2-1.02 1 .24 1.4-1.24-.66-1.24.66.24-1.4-1.02-1 1.4-.2z"/></svg>`, title: 'Program Kegiatan', meta: 'Agenda & kegiatan sekolah', route: 'module:program-kegiatan', group: 'Informasi' }
 ];
@@ -797,7 +798,9 @@ function renderHome() {
     { r:'module:surat-wali', t:'Kirim Surat', g:'g-amber', ic:'<path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/><path d="M3 7l9 6l9 -6"/>' },
     { r:'mutabaah', t:'Mutabaah', g:'g-emerald', ic:'<path d="M5 12l-2 0l9 -9l9 9l-2 0"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7"/><path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6"/>' },
     { r:'module:perkembangan-anak', t:'Pelanggaran', g:'g-pink', ic:'<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' },
-    { r:'module:keuangan', t:'Keuangan', g:'g-sun', ic:'<path d="M17 8v-3a1 1 0 0 0 -1 -1h-10a2 2 0 0 0 0 4h12a1 1 0 0 1 1 1v3"/><path d="M3 5v12a2 2 0 0 0 2 2h13a1 1 0 0 0 1 -1v-3"/><path d="M20 12v4h-4a2 2 0 0 1 0 -4z"/>' },
+    /* Slot ini dulu Keuangan. Keuangan tetap bisa dibuka lewat tab bawah dan
+       kartu saldo di beranda, jadi slotnya dipakai Calistung agar tidak dobel. */
+    { r:'module:calistung-anak', t:'Calistung', g:'g-sun', ic:'<path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6l0 13"/><path d="M12 6l0 13"/><path d="M21 6l0 13"/>' },
     { r:'__more__', t:'Lainnya', g:'g-slate', ic:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>' }
   ];
   const qaHtml = qa.map(function(q){
@@ -1782,6 +1785,7 @@ function renderModule(moduleId) {
   if (!detail) return renderAcademic();
   if (moduleId === 'jadwal-anak') return renderJadwalAnak(detail);
   if (moduleId === 'mutabaah-tahfidz') return renderMutabaahTahfidzWaliModule(detail);
+  if (moduleId === 'calistung-anak') return window.renderCalistungWaliModule(detail); // [CALISTUNG WALI]
   if (moduleId === 'program-kegiatan') return renderProgramKegiatanWali(detail);
   const dataKey = waliModuleDataKey(moduleId);
   // Modul write wali (form input) tidak boleh ke-render read-only/empty generic; harus jatuh ke blok custom yang punya form.
@@ -4054,4 +4058,455 @@ animateWaliContent();
     }
     return intro + styleTag() + childHtml + tabsHtml + noteHtml + body + '<div style="height:120px"></div>';
   };
+})();
+
+/* ============ MODUL: CALISTUNG (WALI — BACA SAJA) v1 ============
+ * [CALISTUNG WALI]
+ * Wali melihat Laporan Perkembangan Literasi & Numerasi ANAKNYA SENDIRI.
+ *
+ * BACA SAJA: tidak ada tombol simpan / ubah / hapus sama sekali.
+ * Data hanya bisa diubah oleh guru lewat modul Calistung di guru-shell.js.
+ *
+ * IKUT POLA WALI YANG SUDAH ADA:
+ *   - Ambil data : SB().select(tabel, { eq, order, ascending, limit })
+ *                  (sama dengan blok Mutabaah Tahfidz, bukan client langsung)
+ *   - Identitas  : childNis() / childNama() / childKelas()
+ *   - Riwayat    : renderWaliModuleRiwayat(list, title, crudKey)
+ *   - Header     : moduleIntro(detail, moduleParentTab(moduleId))
+ *
+ * Penyaring anak: eq { nis: <nis anak> } — dikunci di query, bukan di tampilan.
+ * ================================================================ */
+(function(){
+  'use strict';
+  if(window.__ZY_CALISTUNG_WALI_V1__) return;
+  window.__ZY_CALISTUNG_WALI_V1__ = true;
+
+  var MODUL='calistung-anak';
+  var TABEL='calistung';                      /* [CALISTUNG WALI] */
+
+  var SKALA={ 'BB':'Belum Berkembang', 'MB':'Mulai Berkembang',
+              'BSH':'Berkembang Sesuai Harapan', 'BSB':'Berkembang Sangat Baik' };
+
+  var ASPEK_LITERASI=[
+    ['membaca','Membaca'],
+    ['menulis','Menulis'],
+    ['menyimak_bicara','Menyimak & Berbicara']
+  ];
+  var ASPEK_NUMERASI=[
+    ['berhitung','Berhitung']
+  ];
+  var SEMUA_ASPEK=ASPEK_LITERASI.concat(ASPEK_NUMERASI);
+
+  var CW={ rows:null, loading:false, loadedNis:null, periode:'', bulan:'' };
+
+  function esc(s){
+    if(typeof window.esc==='function' && window.esc!==esc) { try{ return window.esc(s); }catch(e){} }
+    return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function SB(){ return window.ZymataMobileSupabase || null; }
+
+  /* identitas anak — pola sama dgn blok Mutabaah Tahfidz */
+  function childNis(){
+    var v = String((typeof appState!=='undefined' && appState.childNis) || (typeof childProfile!=='undefined' && childProfile && childProfile.nis) || '').trim();
+    if(!v || v==='-' || v==='null' || v==='undefined'){
+      try{ v = String(window.__ZYMATA_CHILD_NIS || '').trim(); }catch(e){ v=''; }
+    }
+    if(v==='-' || v==='null' || v==='undefined') v='';
+    return v;
+  }
+  function childNama(){
+    try{ return String((childProfile && childProfile.fullName) || appState.childName || 'Anak'); }catch(e){ return 'Anak'; }
+  }
+  function childKelas(){
+    try{ return String(appState.childClass || (childProfile && childProfile.className) || ''); }catch(e){ return ''; }
+  }
+
+  function aktif(){
+    try{ return String(appState.activeTab||'')==='module:'+MODUL; }catch(e){ return false; }
+  }
+  function ulang(){ try{ if(typeof render==='function') render(); }catch(e){} }
+
+  function labelSkala(k){ return SKALA[String(k||'').toUpperCase()] || ''; }
+  function fmtTgl(d){
+    try{ if(typeof waliRiwayatFormatTanggal==='function') return waliRiwayatFormatTanggal(d); }catch(e){}
+    return String(d||'');
+  }
+
+  /* ---------------- muat data (BACA SAJA) ---------------- */
+  async function loadCW(nis){
+    if(CW.loading) return;
+    CW.loading=true; CW.loadedNis=nis;
+    try{
+      var api=SB(), rows=[];
+      if(api && nis){
+        /* penyaring anak dikunci di query: hanya baris milik NIS anak ini */
+        var res=await api.select(TABEL, {
+          eq:{ nis:String(nis) },
+          order:'tanggal', ascending:false, limit:400
+        });
+        rows=(res&&res.data)?res.data:[];
+      }
+      CW.rows=rows;
+    }catch(e){
+      CW.rows=[];
+    }
+    CW.loading=false;
+    if(aktif()) ulang();
+  }
+
+  /* daftar periode yang tersedia, terbaru dulu */
+  function daftarPeriode(){
+    var seen={}, out=[];
+    (CW.rows||[]).forEach(function(r){
+      var p=String(r.periode||'').trim();
+      if(p && !seen[p]){ seen[p]=1; out.push(p); }
+    });
+    return out;
+  }
+
+  function periodeAktif(){
+    var d=daftarPeriode();
+    if(CW.periode && d.indexOf(CW.periode)>=0) return CW.periode;
+    return d.length ? d[0] : '';
+  }
+
+  function barisPeriode(p){
+    var out=null;
+    (CW.rows||[]).forEach(function(r){
+      if(String(r.periode||'')===p && !out) out=r;
+    });
+    return out;
+  }
+
+  /* ---- pemilihan per bulan di dalam satu periode ----
+     Satu semester bisa berisi banyak penilaian. Baris dikelompokkan per bulan
+     memakai 7 huruf pertama tanggal (YYYY-MM). Baris tanpa tanggal masuk ''. */
+  function ymBaris(r){ return String((r&&r.tanggal)||'').slice(0,7); }
+
+  function labelBulan(ym){
+    if(!ym) return 'Tanpa tanggal';
+    try{ if(typeof waliLabelBulan==='function') return waliLabelBulan(ym); }catch(e){}
+    var B=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    var bg=B[parseInt(ym.slice(5,7),10)-1];
+    return bg ? (bg+' '+ym.slice(0,4)) : ym;
+  }
+
+  /* daftar bulan dalam satu periode, terbaru dulu (rows sudah urut tanggal desc) */
+  function daftarBulan(p){
+    var seen={}, out=[];
+    (CW.rows||[]).forEach(function(r){
+      if(String(r.periode||'')!==p) return;
+      var ym=ymBaris(r);
+      if(!seen.hasOwnProperty(ym)){ seen[ym]=1; out.push(ym); }
+    });
+    return out;
+  }
+
+  function bulanAktif(p){
+    var d=daftarBulan(p);
+    if(CW.bulan && d.indexOf(CW.bulan)>=0) return CW.bulan;
+    return d.length ? d[0] : '';
+  }
+
+  /* baris terbaru pada periode + bulan tertentu */
+  function barisBulan(p, ym){
+    var out=null;
+    (CW.rows||[]).forEach(function(r){
+      if(out) return;
+      if(String(r.periode||'')!==p) return;
+      if(ymBaris(r)!==ym) return;
+      out=r;
+    });
+    return out;
+  }
+
+  /* berapa kali dinilai pada bulan itu */
+  function jumlahBulan(p, ym){
+    var n=0;
+    (CW.rows||[]).forEach(function(r){
+      if(String(r.periode||'')===p && ymBaris(r)===ym) n++;
+    });
+    return n;
+  }
+
+  function adaNilai(r){
+    if(!r) return false;
+    var n=0;
+    SEMUA_ASPEK.forEach(function(a){ if(String(r[a[0]]||'').trim()) n++; });
+    return n>0;
+  }
+
+  /* ---------------- API global ---------------- */
+  window.zwCal={
+    /* ganti periode -> bulan direset supaya tidak menunjuk bulan milik periode lain */
+    setPeriode: function(v){ CW.periode=v||''; CW.bulan=''; ulang(); },
+    setBulan: function(v){ CW.bulan=v||''; ulang(); },
+    muatUlang: function(){ CW.rows=null; CW.loadedNis=null; CW.bulan=''; ulang(); }
+  };
+
+  /* ---------------- gaya ---------------- */
+  /* CSS selalu ikut disertakan di setiap render.
+     JANGAN pasang penjaga getElementById di sini: render() membangun string
+     HTML selagi isi lama masih di DOM, lalu menimpanya lewat innerHTML.
+     Kalau CSS dilewati karena dikira "sudah ada", elemen style lama justru
+     ikut terhapus dan tampilan jadi polos sesaat. */
+  function styleTag(){
+    return '<style id="zwcal-style">'
+      /* Warna & radius memakai token :root aplikasi (--text, --muted, --line, dst).
+         Nilai setelah koma adalah cadangan, dipakai kalau token tidak tersedia. */
+      + '.zwcal-lap{background:var(--surface,#fff);border:1px solid rgba(228,231,236,.86);border-radius:var(--radius-sm,14px);padding:13px 14px;box-shadow:var(--shadow-sm,0 5px 15px rgba(31,41,55,.07))}'
+      + '.zwcal-lap h4{font-size:12.5px;font-weight:900;color:var(--text,#101828);margin:0 0 3px;letter-spacing:-.02em}'
+      + '.zwcal-id{font-size:11.5px;color:var(--muted,#6b7280);line-height:1.5;margin-bottom:9px;padding-bottom:8px;border-bottom:1px solid var(--line,#e4e7ec)}'
+      + '.zwcal-id b{color:var(--text,#101828);font-weight:700}'
+      + '.zwcal-sec{font-size:11px;font-weight:900;color:var(--indigo,#2D3561);margin:9px 0 2px;display:flex;align-items:center;gap:5px;letter-spacing:.02em}'
+      + '.zwcal-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--line,#e4e7ec)}'
+      + '.zwcal-row:last-of-type{border-bottom:none}'
+      + '.zwcal-row .nm{flex:1;min-width:0}'
+      + '.zwcal-row .nm b{display:block;font-size:12.5px;color:var(--text,#101828);font-weight:800;letter-spacing:-.02em;line-height:1.3}'
+      + '.zwcal-row .nm span{display:block;font-size:11px;color:var(--soft,#6b7280);line-height:1.3;margin-top:1px}'
+      + '.zwcal-grp{max-width:460px}'
+      + '.zwcal-pick{display:flex;gap:10px;flex-wrap:wrap;max-width:460px}'
+      + '.zwcal-pick>div{flex:1 1 190px;min-width:0}'
+      + '.zwcal-pick .zwcal-sel{max-width:none;margin-bottom:8px}'
+      + '.zwcal-pick .zwcal-sel[disabled]{background:var(--surface-2,#f8fafc);color:var(--muted,#6b7280);cursor:default;opacity:1}'
+      + '.zwcal-pil{flex:none;font-size:10.5px;font-weight:800;border-radius:999px;padding:3px 9px;white-space:nowrap;line-height:1.3}'
+      + '.zwcal-pil.bb{background:var(--red-soft,#fef3f2);color:var(--red,#f04438)}'
+      + '.zwcal-pil.mb{background:var(--orange-soft,#fffaeb);color:var(--orange,#f79009)}'
+      + '.zwcal-pil.bsh{background:var(--blue-soft,#eff8ff);color:var(--blue,#2e90fa)}'
+      + '.zwcal-pil.bsb{background:var(--green-soft,#ecfdf3);color:var(--green,#12b76a)}'
+      + '.zwcal-pil.kosong{background:var(--surface-2,#f8fafc);color:var(--soft,#6b7280)}'
+      + '.zwcal-ket{font-size:11px;color:var(--muted,#6b7280);line-height:1.4;margin-top:4px}'
+      + '.zwcal-cat{margin-top:9px;max-width:460px;background:var(--surface-2,#f8fafc);border-left:3px solid var(--indigo,#2D3561);border-radius:0 9px 9px 0;padding:8px 11px}'
+      + '.zwcal-cat .lb{font-size:10.5px;font-weight:900;color:var(--indigo,#2D3561);margin-bottom:2px}'
+      + '.zwcal-cat .tx{font-size:12px;color:var(--text,#101828);line-height:1.45;font-style:italic}'
+      + '.zwcal-sel{width:100%;max-width:460px;box-sizing:border-box;border:1px solid var(--line,#e4e7ec);border-radius:9px;padding:8px 11px;font-size:13px;background:var(--surface,#fff);color:var(--text,#101828);font-family:inherit;margin-bottom:9px}'
+      + '.zwcal-lbl{font-size:10.5px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;color:var(--soft,#6b7280);margin-bottom:4px;display:block}'
+      + '.zwcal-ro{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;color:var(--muted,#6b7280);background:var(--surface-2,#f8fafc);border-radius:999px;padding:4px 10px}'
+      + '.zwcal-leg{display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line,#e4e7ec);max-width:460px}'
+      + '.zwcal-leg:last-child{border-bottom:none;padding-bottom:0}'
+      + '.zwcal-leg .kd{flex:none;width:40px;text-align:center;font-size:10.5px;font-weight:900;border-radius:7px;padding:4px 0;line-height:1.3}'
+      + '.zwcal-leg .tx{flex:1;min-width:0}'
+      + '.zwcal-leg .tx b{display:block;font-size:12px;color:var(--text,#101828);font-weight:800;letter-spacing:-.02em;line-height:1.3}'
+      + '.zwcal-leg .tx span{display:block;font-size:11px;color:var(--muted,#6b7280);line-height:1.35;margin-top:1px}'
+      + '.zwcal-leg .tg{display:inline-block;font-size:9.5px;font-weight:800;color:var(--blue,#2e90fa);background:var(--blue-soft,#eff8ff);border-radius:999px;padding:1px 6px;margin-top:2px}'
+      + '</style>';
+  }
+
+  /* ---------------- potongan UI ---------------- */
+  function pilHtml(kode){
+    var k=String(kode||'').trim().toUpperCase();
+    if(!k) return '<span class="zwcal-pil kosong">Belum dinilai</span>';
+    return '<span class="zwcal-pil '+k.toLowerCase()+'">'+esc(k)+'</span>';
+  }
+
+  function laporanHtml(r){
+    var h='<article class="zwcal-lap">';
+    h+='<h4>LAPORAN PERKEMBANGAN SISWA</h4>';
+    h+='<div class="zwcal-id">Nama: <b>'+esc(r.nama_siswa||childNama())+'</b><br>'
+      + 'Kelas: <b>'+esc(r.kelas||childKelas()||'-')+'</b> &nbsp;&middot;&nbsp; Periode: <b>'+esc(r.periode||'-')+'</b>'
+      + (r.tanggal?('<br>Diperbarui: '+esc(fmtTgl(String(r.tanggal).slice(0,10)))):'')
+      + (r.guru?('<br>Guru: '+esc(r.guru)):'')
+      + '</div>';
+
+    /* satu aspek = SATU baris utuh: nama + keterangan di kiri, lencana di kanan.
+       Jangan dipecah dua elemen, nanti garis pemisah jatuh di tengah pasangannya. */
+    function barisAspek(a){
+      var k=String(r[a[0]]||'').toUpperCase();
+      return '<div class="zwcal-row">'
+        + '<span class="nm"><b>'+esc(a[1])+'</b><span>'+esc(k?labelSkala(k):'Belum dinilai guru')+'</span></span>'
+        + pilHtml(k)
+        + '</div>';
+    }
+
+    h+='<div class="zwcal-grp">';
+    h+='<div class="zwcal-sec">&#128214; LITERASI</div>';
+    ASPEK_LITERASI.forEach(function(a){ h+=barisAspek(a); });
+
+    h+='<div class="zwcal-sec">&#128290; NUMERASI</div>';
+    ASPEK_NUMERASI.forEach(function(a){ h+=barisAspek(a); });
+    h+='</div>';
+
+    if(String(r.catatan||'').trim()){
+      h+='<div class="zwcal-cat"><div class="lb">&#128221; Catatan Guru</div><div class="tx">\u201C'+esc(r.catatan)+'\u201D</div></div>';
+    }
+    h+='</article>';
+    return h;
+  }
+
+  /* keterangan skala lengkap: kode + kepanjangan + arti */
+  var LEGENDA=[
+    ['BB','Belum Berkembang','Anak belum menunjukkan kemampuan ini, masih perlu bimbingan penuh.',''],
+    ['MB','Mulai Berkembang','Sudah mulai bisa, namun masih sering dibantu.',''],
+    ['BSH','Berkembang Sesuai Harapan','Sudah mampu mandiri sesuai target usianya.','Target yang diharapkan'],
+    ['BSB','Berkembang Sangat Baik','Melampaui target, sudah konsisten tanpa dibantu.','']
+  ];
+
+  function legendHtml(){
+    var h='<section class="section">';
+    if(typeof sectionHead==='function'){
+      try{ h+=sectionHead('Keterangan skala penilaian','4 tingkat'); }catch(e){}
+    }
+    h+='<article class="input-panel">';
+    LEGENDA.forEach(function(x){
+      h+='<div class="zwcal-leg">'
+        + '<span class="kd zwcal-pil '+x[0].toLowerCase()+'">'+x[0]+'</span>'
+        + '<span class="tx"><b>'+esc(x[1])+'</b><span>'+esc(x[2])+'</span>'
+        + (x[3]?('<span class="tg">&#9733; '+esc(x[3])+'</span>'):'')
+        + '</span></div>';
+    });
+    h+='<p class="zwcal-ket" style="margin:10px 0 0;padding-top:10px;border-top:1px solid #f1f5f9">Urutan tingkat: <b>BB</b> &rarr; <b>MB</b> &rarr; <b>BSH</b> &rarr; <b>BSB</b>. Skala ini dipakai untuk keempat aspek: membaca, menulis, menyimak &amp; berbicara, serta berhitung.</p>';
+    h+='</article></section>';
+    return h;
+  }
+
+  /* riwayat memakai komponen wali yang sudah ada */
+  function riwayatHtml(){
+    if(typeof renderWaliModuleRiwayat!=='function') return '';
+    var list=(CW.rows||[]).map(function(r){
+      var ring=[];
+      SEMUA_ASPEK.forEach(function(a){
+        var k=String(r[a[0]]||'').toUpperCase();
+        if(k) ring.push(a[1].replace('Menyimak & Berbicara','Simak')+' '+k);
+      });
+      var salin={};
+      Object.keys(r).forEach(function(k){ salin[k]=r[k]; });
+      salin.judul=(r.periode||'Penilaian');
+      salin.keterangan=ring.join(' \u00b7 ')+(r.catatan?(' \u2014 '+r.catatan):'');
+      return salin;
+    });
+    try{ return renderWaliModuleRiwayat(list, 'Calistung', 'wali:'+MODUL); }
+    catch(e){ return ''; }
+  }
+
+  /* ---------------- renderer modul ---------------- */
+  window.renderCalistungWaliModule = function(detail){
+    detail=detail||{};
+    var nis=childNis();
+
+    var intro='';
+    try{
+      intro=(typeof moduleIntro==='function')
+        ? moduleIntro(detail, (typeof moduleParentTab==='function')?moduleParentTab(MODUL):'academic')
+        : '';
+    }catch(e){ intro=''; }
+
+    /* muat sekali per anak (mengikuti pola loadedNis blok Tahfidz) */
+    if(nis && CW.loadedNis!==nis && !CW.loading){ loadCW(nis); }
+
+    var h=intro+styleTag();
+
+    if(!nis){
+      h+='<section class="section"><article class="db-ready-card">'
+        + '<span class="status-pill blue">Belum terhubung</span>'
+        + '<h3 class="card-title">Data anak belum termuat</h3>'
+        + '<p class="card-meta">Laporan calistung akan tampil setelah akun wali tersambung ke data siswa.</p>'
+        + '</article></section>';
+      return h;
+    }
+
+    if(CW.rows===null || CW.loading){
+      h+='<section class="section"><article class="db-ready-card">'
+        + '<span class="status-pill blue">Memuat</span>'
+        + '<h3 class="card-title">Memuat laporan calistung\u2026</h3>'
+        + '<p class="card-meta">Mengambil data perkembangan '+esc(childNama())+' dari sekolah.</p>'
+        + '</article></section>';
+      return h;
+    }
+
+    var periodeList=daftarPeriode();
+
+    if(!periodeList.length){
+      h+='<section class="section"><article class="db-ready-card">'
+        + '<span class="status-pill blue">Belum ada data</span>'
+        + '<h3 class="card-title">Belum ada penilaian calistung</h3>'
+        + '<p class="card-meta">Laporan literasi &amp; numerasi '+esc(childNama())+' akan tampil di sini setelah guru mengisinya.</p>'
+        + '</article></section>';
+      h+=legendHtml();
+      /* panel Riwayat tetap tampil walau kosong, sama seperti modul wali lain */
+      h+=riwayatHtml();
+      h+='<div style="height:100px"></div>';
+      return h;
+    }
+
+    var p=periodeAktif();
+    var bulanList=daftarBulan(p);
+    var ym=bulanAktif(p);
+    var baris=barisBulan(p, ym) || barisPeriode(p);
+
+    /* penanda baca-saja */
+    h+='<section class="section">'
+      + '<article class="db-ready-card">'
+      + '<span class="status-pill green">'+periodeList.length+' periode</span>'
+      + '<h3 class="card-title">'+esc(childNama())+'</h3>'
+      + '<p class="card-meta">'+esc(childKelas()||'-')+' &middot; NIS '+esc(nis)+'</p>'
+      + '<div class="field-chip-row" style="margin-top:8px"><span class="zwcal-ro">&#128274; Hanya baca &middot; diisi oleh guru</span></div>'
+      + '</article></section>';
+
+    /* Pemilih periode & bulan SELALU ditampilkan selama ada data.
+       Jangan disembunyikan saat pilihannya cuma satu: wali jadi mengira
+       fitur pilih bulan tidak ada. Cukup dikunci kalau memang tak ada pilihan lain. */
+    if(periodeList.length){
+      h+='<section class="section"><article class="input-panel">';
+      h+='<div class="zwcal-pick">';
+
+      h+='<div><label class="zwcal-lbl">Periode</label>'
+        + '<select class="zwcal-sel" onchange="window.zwCal.setPeriode(this.value)"'
+        + (periodeList.length<2?' disabled':'') + '>';
+      periodeList.forEach(function(x){
+        h+='<option value="'+esc(x)+'"'+(x===p?' selected':'')+'>'+esc(x)+'</option>';
+      });
+      h+='</select></div>';
+
+      h+='<div><label class="zwcal-lbl">Bulan</label>'
+        + '<select class="zwcal-sel" onchange="window.zwCal.setBulan(this.value)"'
+        + (bulanList.length<2?' disabled':'') + '>';
+      if(!bulanList.length){
+        h+='<option>Belum ada</option>';
+      } else {
+        bulanList.forEach(function(x){
+          var n=jumlahBulan(p,x);
+          h+='<option value="'+esc(x)+'"'+(x===ym?' selected':'')+'>'
+            + esc(labelBulan(x)) + (n>1?(' \u00b7 '+n+' penilaian'):'')
+            + '</option>';
+        });
+      }
+      h+='</select></div>';
+
+      h+='</div>';
+      h+='<p class="zwcal-ket" style="margin:0">'
+        + (bulanList.length>1
+            ? 'Menampilkan penilaian terbaru pada bulan yang dipilih.'
+            : 'Baru ada penilaian di <b>'+esc(labelBulan(ym))+'</b>. Pilihan bulan akan bertambah setelah guru mengisi di bulan berikutnya.')
+        + ' Seluruh riwayat tetap ada di panel bawah.</p>';
+      h+='</article></section>';
+    }
+
+    h+='<section class="section">';
+    if(typeof sectionHead==='function'){
+      var meta = adaNilai(baris) ? (ym ? labelBulan(ym) : p) : 'Belum dinilai';
+      try{ h+=sectionHead('Laporan perkembangan', esc(meta)); }catch(e){}
+    }
+    h+=laporanHtml(baris||{ periode:p });
+    h+='</section>';
+
+    /* keterangan skala lengkap */
+    h+=legendHtml();
+
+    h+=riwayatHtml();
+    h+='<div style="height:100px"></div>';
+    return h;
+  };
+
+  /* detail modul (dibaca renderModule) */
+  if(typeof moduleDetails!=='undefined' && moduleDetails){
+    moduleDetails[MODUL]={
+      eyebrow:'Akademik',
+      title:'Calistung',
+      subtitle:'Laporan perkembangan literasi & numerasi anak: membaca, menulis, menyimak & berbicara, serta berhitung.',
+      stats:[],
+      focus:[]
+    };
+  }
+
+  console.log('[Zymata Wali] Modul Calistung (baca saja) aktif');   /* [CALISTUNG WALI] */
 })();
