@@ -27,16 +27,109 @@
     return window.__ZYMATA_MOBILE_SUPA__;
   }
 
+  // [EGRESS CACHE HP] Penghemat kuota untuk aplikasi guru & wali.
+  //  (a) Gabung permintaan kembar: bila beberapa modul meminta tabel yang sama
+  //      pada saat bersamaan (sering terjadi saat login, karena semua modul
+  //      dimuat sekaligus), hanya SATU yang benar-benar dikirim ke server.
+  //  (b) Cache BERTINGKAT (dulu 60 detik rata untuk semua tabel):
+  //      - master/pengaturan yang nyaris tak pernah berubah : 10 menit
+  //      - data induk yang sesekali diedit admin            : 3 menit
+  //      - sisanya (absensi, nilai, mutabaah, dll)          : 60 detik
+  // Cache dibuang otomatis setiap kali ada tulis (insert/upsert).
+  // Butuh paling segar sekarang? Jalankan: zmClearCache()  (atau zmClearCache('siswa'))
+  function _zmCache(){
+    if(!window.__zmSelCache){
+      window.__zmSelCache = (function(){
+        var TTL = 60000, box = {};
+        var TTL_LAMA = 600000;   // 10 menit
+        var TTL_SEDANG = 180000; // 3 menit
+        var TTL_TABEL = {
+          'pengaturan_sekolah': TTL_LAMA,
+          'pengaturan_sistem':  TTL_LAMA,
+          'pengaturan_gaji':    TTL_LAMA,
+          'pengaturan_spp':     TTL_LAMA,
+          'master_kelas':       TTL_LAMA,
+          'master_mapel':       TTL_LAMA,
+          'jadwal_pelajaran':   TTL_LAMA,
+          'guru_mengajar':      TTL_LAMA,
+          'profiles': TTL_SEDANG,
+          'guru':     TTL_SEDANG,
+          'pegawai':  TTL_SEDANG,
+          'siswa':    TTL_SEDANG
+        };
+        var ttlFor = function(table){
+          var t = TTL_TABEL[table];
+          return (typeof t === 'number' && t > 0) ? t : TTL;
+        };
+        return {
+          ttlFor: ttlFor,
+          get: function(key){
+            var e = box[key];
+            if(!e) return null;
+            if(e.pending) return e.p;
+            if(Date.now() - e.t > ttlFor(e.table)){ delete box[key]; return null; }
+            return Promise.resolve({ data: (e.rows||[]).map(function(r){
+              return (r && typeof r === 'object' && !Array.isArray(r)) ? Object.assign({}, r) : r;
+            }), error: null });
+          },
+          put: function(table, key, promise){
+            box[key] = { pending:true, p:promise, table:table, t:Date.now() };
+            promise.then(function(res){
+              if(res && !res.error && Array.isArray(res.data)) box[key] = { pending:false, rows:res.data, table:table, t:Date.now() };
+              else delete box[key];
+            }, function(){ delete box[key]; });
+          },
+          drop: function(table){ for(var k in box){ if(box[k] && box[k].table === table) delete box[k]; } },
+          dropAll: function(){ box = {}; }
+        };
+      })();
+      try { window.zmClearCache = function(t){ if(t) window.__zmSelCache.drop(t); else window.__zmSelCache.dropAll(); }; } catch(e){}
+    }
+    return window.__zmSelCache;
+  }
+
   async function select(table, options){
-    const client = getClient();
     options = options || {};
-    let q = client.from(table).select(options.select || '*');
-    if(options.eq) Object.keys(options.eq).forEach((key) => q = q.eq(key, options.eq[key]));
-    if(options.or) q = q.or(options.or);
-    if(options.order) q = q.order(options.order, { ascending: options.ascending !== false });
-    if(options.limit) q = q.limit(options.limit);
-    const res = await q;
-    return res;
+    var _zk = null;
+    try { _zk = table + '|' + JSON.stringify(options); } catch(eK){ _zk = null; }
+    if(_zk){
+      var _hit = _zmCache().get(_zk);
+      if(_hit) return await _hit;
+    }
+    var _run = (async function(){
+      const client = getClient();
+      // [EGRESS KOLOM HP] Dukung DUA nama opsi: `select` (konvensi lama file ini)
+      // dan `columns` (konvensi web admin). Dulu hanya `select` yang dibaca, sehingga
+      // pemanggil yang menulis `columns:'id,nis,nama,kelas'` DIABAIKAN dan tetap
+      // menarik SEMUA kolom. Sekarang keduanya bekerja.
+      var _cols = options.select || options.columns || '*';
+      var _healed = false;
+      var _isColErr = function(err){
+        if(!err) return false;
+        if(String(err.code || '') === '42703') return true;
+        return /does not exist|could not find the .* column|unknown column/i.test(String(err.message || err));
+      };
+      var _buildQ = function(){
+        let q = client.from(table).select(_cols);
+        if(options.eq) Object.keys(options.eq).forEach((key) => q = q.eq(key, options.eq[key]));
+        if(options.or) q = q.or(options.or);
+        if(options.gte) Object.keys(options.gte).forEach((key) => q = q.gte(key, options.gte[key]));
+        if(options.lte) Object.keys(options.lte).forEach((key) => q = q.lte(key, options.lte[key]));
+        if(options.order) q = q.order(options.order, { ascending: options.ascending !== false });
+        if(options.limit) q = q.limit(options.limit);
+        return q;
+      };
+      var res = await _buildQ();
+      // Jaring aman: kolom pilihan ditolak -> ulangi SEKALI dengan '*' (perilaku lama).
+      if(res && res.error && !_healed && _cols !== '*' && _isColErr(res.error)){
+        console.warn('[ZymataMobile.select ' + table + '] kolom pilihan ditolak (' + String((res.error && res.error.message) || res.error) + ') -> ulangi dengan semua kolom.');
+        _cols = '*'; _healed = true;
+        res = await _buildQ();
+      }
+      return res;
+    })();
+    if(_zk) _zmCache().put(table, _zk, _run);
+    return await _run;
   }
 
   async function first(table, options){
@@ -177,6 +270,84 @@
     return (ctx && Array.isArray(ctx.children)) ? ctx.children : [];
   }
 
+  // [EGRESS KOLOM WALI] Kolom tabel `siswa` yang benar-benar dipakai aplikasi wali
+  // (identitas anak, kelas, profil anak, dan pencocokan nomor HP login).
+  // Tabel punya 43 kolom; sisanya (nik, no_kk, sekolah_asal, jalur_masuk, payload,
+  // tahun_masuk, dst) tidak pernah ditampilkan di aplikasi wali.
+  // Terukur: 3 baris `select=*` = 2.452 B vs 6 kolom = 94 B (~26x lebih hemat).
+  // Kolom `foto`/`foto_url` sudah berisi URL (bukan base64), jadi ringan.
+  // CATATAN: daftar ini sudah diuji kolom-per-kolom ke server. Yang TIDAK ADA di tabel
+  // dan karena itu TIDAK disertakan: no_hp, hp_wali, wali_kelas, nama_wali, wali_murid,
+  // kontak_darurat, telepon, guru_wali, nama_guru. Kode membacanya sebagai cadangan,
+  // tapi nilainya memang sudah undefined sebelum perubahan ini.
+  // `wali_kelas` diisi terpisah dari tabel `guru` (lihat di bawah).
+  var _KOL_SISWA_WALI = 'id,nis,nisn,nama,kelas,hp,' +
+    'nama_ayah,ayah,nama_ibu,ibu,wali,tempat_lahir,ttl,alamat,foto,foto_url';
+
+  // [EGRESS KOLOM PENGUMUMAN & EKSKUL] Tabel `pengumuman` (21 kolom) dan `ekskul`
+  // (19 kolom) ditarik TANPA filter oleh guru maupun wali, jadi tiap login ikut
+  // membayar semua kolom. Daftar di bawah = kolom yang benar-benar dibaca UI.
+  // Semua nama kolom sudah diuji satu per satu ke REST (HTTP 200).
+  //
+  // pengumuman — dipakai bersama guru & wali:
+  //   judul/isi/tanggal/created_at/updated_at -> judul, isi, dan waktu kartu
+  //   status/kategori                         -> label kanan kartu
+  //   target/target_type/target_label         -> penyaring role (_waliAnnTargetType
+  //                                              di wali-shell, _annTargetType di guru-shell)
+  //   id                                      -> kunci "sudah dibaca" (waliItemKey)
+  //
+  // Kolom `payload` SENGAJA TIDAK ditarik utuh. Isinya salinan penuh baris
+  // (judul + isi + semua meta), jadi menariknya = membayar `isi` DUA KALI, dan
+  // `isi` adalah kolom paling gemuk di tabel ini. Kedua fungsi penyaring role
+  // hanya memakai 3 field dari payload (target_type/target_label/target) sebagai
+  // cadangan bila kolom target_* kosong. Jadi ketiga field itu diambil langsung
+  // di server lewat operator JSON `payload->>x`, lalu `payload` disusun ulang di
+  // klien oleh _rapikanPengumuman() di bawah. Bentuk baris yang dilihat UI tetap
+  // sama, tapi yang lewat jaringan hanya 3 nilai pendek.
+  // DIBUANG SEPENUHNYA: client_key, penulis, lampiran, kode, prioritas,
+  //   tanggal_selesai, tanggalSelesai, tipe, target_value (nol pembaca di HP).
+  var _KOL_PENGUMUMAN = 'id,judul,isi,tanggal,created_at,updated_at,status,kategori,' +
+    'target,target_type,target_label,' +
+    '_pl_target_type:payload->>target_type,' +
+    '_pl_target_label:payload->>target_label,' +
+    '_pl_target:payload->>target';
+
+  // Susun ulang `payload` tiruan dari tiga field JSON yang diekstrak server, supaya
+  // _waliAnnTargetType (wali-shell.js) & _annTargetType (guru-shell.js) tetap
+  // menemukan cadangan target di tempat yang sama seperti sebelumnya.
+  // Kalau daftar kolom di atas ditolak, `select` sudah otomatis mengulang dengan
+  // '*' (lihat _healCols) -> baris membawa payload asli, dan fungsi ini
+  // membiarkannya apa adanya.
+  function _rapikanPengumuman(rows){
+    if(!Array.isArray(rows)) return [];
+    for(var i = 0; i < rows.length; i++){
+      var r = rows[i];
+      if(!r || typeof r !== 'object') continue;
+      if(!('_pl_target_type' in r) && !('_pl_target_label' in r) && !('_pl_target' in r)) continue;
+      if(r.payload == null){
+        var tt = r._pl_target_type, tl = r._pl_target_label, tg = r._pl_target;
+        if(tt != null || tl != null || tg != null){
+          r.payload = { target_type: tt || '', target_label: tl || '', target: tg || '' };
+        }
+      }
+      delete r._pl_target_type; delete r._pl_target_label; delete r._pl_target;
+    }
+    return rows;
+  }
+
+  // ekskul — WALI: hanya tabel ringkas Nama/Pembina/Jadwal/Tempat/Status
+  // (wali-shell.js perkCatSimple 'Ekstrakurikuler'). Tidak ada pengurutan tanggal
+  // maupun kunci baca di jalur itu, jadi 5 kolom cukup.
+  var _KOL_EKSKUL_WALI = 'nama,pembina,jadwal,tempat,status';
+
+  // ekskul — GURU: masuk lewat renderSupabaseGuruDataModule -> normalizeItem +
+  // guruRowDate + pengaman kelas agIsTaughtClass, jadi butuh judul/keterangan,
+  // tanggal, dan kolom kelas. Kolom `pembina/jadwal/tempat` TIDAK dirender di
+  // jalur guru, `pdf_*`/`rombel`/`snapshot_kelas` memang tidak ada di tabel ini.
+  // DIBUANG: payload, client_key, siswa_id, tahun_ajaran, pembina, jadwal, tempat.
+  var _KOL_EKSKUL_GURU = 'id,nama,nama_siswa,keterangan,catatan,kelas,kelas_id,' +
+    'semester,status,tanggal,created_at,updated_at';
+
   async function loadWaliContext(session){
     session = session || readSession();
     if(!session) return null;
@@ -187,11 +358,11 @@
     const hpLogin = digits(rawLoginUser);
     var children = [];
     if(hpLogin) {
-      var rAll = await select('siswa', { eq: { hp: hpLogin }, order: 'nama', limit: 30 }).catch(() => null);
+      var rAll = await select('siswa', { eq: { hp: hpLogin }, select: _KOL_SISWA_WALI, order: 'nama', limit: 30 }).catch(() => null);
       if(rAll && !rAll.error && Array.isArray(rAll.data)) children = rAll.data;
       // Kalau tidak ketemu yang angkanya saja, coba format aslinya
       if(!children.length){
-        var rAll2 = await select('siswa', { eq: { hp: clean(rawLoginUser) }, order: 'nama', limit: 30 }).catch(() => null);
+        var rAll2 = await select('siswa', { eq: { hp: clean(rawLoginUser) }, select: _KOL_SISWA_WALI, order: 'nama', limit: 30 }).catch(() => null);
         if(rAll2 && !rAll2.error && Array.isArray(rAll2.data)) children = rAll2.data;
       }
     }
@@ -201,8 +372,8 @@
     }
 
     // Jika tidak ketemu via HP, baru pakai fallback dari profil (siswa_id / nis lama)
-    if(!siswa && session.siswa_id) siswa = await first('siswa', { eq: { id: session.siswa_id } }).catch(() => null);
-    if(!siswa && session.nis_siswa) siswa = await first('siswa', { eq: { nis: session.nis_siswa } }).catch(() => null);
+    if(!siswa && session.siswa_id) siswa = await first('siswa', { eq: { id: session.siswa_id }, select: _KOL_SISWA_WALI }).catch(() => null);
+    if(!siswa && session.nis_siswa) siswa = await first('siswa', { eq: { nis: session.nis_siswa }, select: _KOL_SISWA_WALI }).catch(() => null);
 
     let relation = null;
     if(!siswa) {
@@ -210,14 +381,15 @@
       if(!relRes.error && Array.isArray(relRes.data)) {
         relation = relRes.data.find((r) => clean(r.user_id) === clean(session.id) || clean(r.wali_id) === clean(session.id) || clean(r.profile_id) === clean(session.id) || clean(r.username) === clean(session.username)) || null;
         if(relation) {
-          if(relation.siswa_id) siswa = await first('siswa', { eq: { id: relation.siswa_id } }).catch(() => null);
-          if(!siswa && relation.nis_siswa) siswa = await first('siswa', { eq: { nis: relation.nis_siswa } }).catch(() => null);
+          if(relation.siswa_id) siswa = await first('siswa', { eq: { id: relation.siswa_id }, select: _KOL_SISWA_WALI }).catch(() => null);
+          if(!siswa && relation.nis_siswa) siswa = await first('siswa', { eq: { nis: relation.nis_siswa }, select: _KOL_SISWA_WALI }).catch(() => null);
         }
       }
     }
     if(siswa && siswa.kelas && !siswa.wali_kelas){
       try {
-        const guruRes = await first('guru',{ eq:{ wali_kelas: siswa.kelas } }).catch(()=>null);
+        // Hanya butuh nama wali kelas, bukan 50 kolom tabel guru.
+        const guruRes = await first('guru',{ eq:{ wali_kelas: siswa.kelas }, select:'nama,wali_kelas' }).catch(()=>null);
         if(guruRes && (guruRes.nama||guruRes.nama_guru||guruRes.name))
           siswa.wali_kelas = guruRes.nama||guruRes.nama_guru||guruRes.name;
       } catch(_){}
@@ -968,12 +1140,12 @@
       membaca_quran: mobile.membaca_quran.concat(await tryFilteredList('membaca_quran', allKelasFilters, 80, { noFallback: true })),
       ibadah: mobile.ibadah.concat(await tryFilteredList('ibadah', allKelasFilters, 80, { noFallback: true })),
       surat: mobile.surat.concat(await tryFilteredList('surat', allKelasFilters, 80, { noFallback: true })),
-      pengumuman: mobile.pengumuman.concat(await safeList('pengumuman', { order: 'created_at', ascending: false, limit: 30 })),
+      pengumuman: mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 }))),
       keuangan: mobile.keuangan.concat(await safeList('keuangan', { order: 'tanggal', ascending: false, limit: 80 })),
       tabungan: mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', allKelasFilters, 80, { noFallback: true })),
       karakter: mobile.karakter.concat(await tryFilteredList('karakter', allKelasFilters, 80, { noFallback: true })),
       prestasi: mobile.prestasi.concat(await tryFilteredList('prestasi', allKelasFilters, 80, { noFallback: true })),
-      ekskul: mobile.ekskul.concat(await safeList('ekskul', { limit: 50 })),
+      ekskul: mobile.ekskul.concat(await safeList('ekskul', { select: _KOL_EKSKUL_GURU, limit: 50 })),
       pelanggaran: mobile.pelanggaran.concat(await tryFilteredList('pelanggaran_siswa', pelanggaranFilters, 80, { noFallback: true })),
       kalender: mobile.kalender.concat(await safeList('kalender_events', { order: 'tahun', ascending: false, limit: 80 })),
       mutabaahRumah: mobile.mutabaahRumah.concat(await tryFilteredList('mutabaah_rumah', allKelasFilters, 80, { noFallback: true })),
@@ -1075,14 +1247,15 @@
       keuangan: filterMine(mobile.keuangan.concat((await tryFilteredList('spp_pembayaran', filters, 30, strict)).concat(await tryFilteredList('tagihan_spp', filters, 30, strict)).concat(await tryFilteredList('keuangan', filters, 30, strict)))),
       tabungan: filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, strict))),
       tabunganUmum: filterMine(await tryFilteredList('tabungan_umum', filters, 30, strict)),
-      ekskul: await safeList('ekskul', { limit: 50 }),
-      pengumuman: mobile.pengumuman.concat(await safeList('pengumuman', { order: 'created_at', ascending: false, limit: 30 }))
+      ekskul: await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }),
+      pengumuman: mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 })))
     };
   }
 
   // Tulis langsung ke tabel web (dipakai mis. absensi guru yang bukan modul CRUD generik).
   async function upsert(table, body, onConflict){
     try {
+      try { if(window.__zmSelCache) window.__zmSelCache.drop(table); } catch(eC){} // [EGRESS CACHE HP]
       const client = getClient();
       // Merge manual: tidak bergantung pada unique index di DB (yang sering belum dibuat).
       // Khusus absensi guru: 1 guru hanya boleh punya 1 presensi per tanggal, meskipun sesi diganti.
@@ -1113,6 +1286,7 @@
   }
   async function insert(table, body){
     try {
+      try { if(window.__zmSelCache) window.__zmSelCache.drop(table); } catch(eC){} // [EGRESS CACHE HP]
       const client = getClient();
       const res = await client.from(table).insert(body).select();
       return res;
