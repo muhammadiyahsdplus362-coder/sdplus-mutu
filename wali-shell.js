@@ -19,8 +19,14 @@ const appState = {
   childClass: '',
   unreadAnnouncements: 0,
   unreadNotes: 0,
+  // [BADGE MODUL] jumlah item baru per modul untuk titik merah di beranda.
+  unreadModules: { nilai: 0, mutabaah: 0, perkembangan: 0, calistung: 0 },
   seenAnnouncements: [],
   seenNotes: [],
+  // [BADGE MODUL] kunci item yang sudah dibaca per modul.
+  seenModules: {},
+  // [BADGE MODUL] baris calistung ringkas (id/row_uid) untuk hitung badge.
+  waliCalistungRows: [],
   showAnnouncements: false,
   notificationSound: true,
   notificationHaptic: true,
@@ -328,6 +334,9 @@ function loadState() {
     if (Array.isArray(saved.seenNotes)) {
       appState.seenNotes = saved.seenNotes;
     }
+    if (saved.seenModules && typeof saved.seenModules === 'object') {
+      appState.seenModules = saved.seenModules;
+    }
   } catch (error) {
     console.warn('Failed to load wali shell state', error);
   }
@@ -344,7 +353,12 @@ function saveState() {
     noteAlerts: appState.noteAlerts,
     compactMode: appState.compactMode,
     seenAnnouncements: (appState.seenAnnouncements || []).slice(-300),
-    seenNotes: (appState.seenNotes || []).slice(-300)
+    seenNotes: (appState.seenNotes || []).slice(-300),
+    seenModules: (function(){
+      var out = {}; var sm = appState.seenModules || {};
+      Object.keys(sm).forEach(function(k){ out[k] = Array.isArray(sm[k]) ? sm[k].slice(-300) : []; });
+      return out;
+    })()
   }));
 }
 
@@ -373,7 +387,8 @@ function saveWaliDataCache() {
       waliTitle: appState.waliTitle,
       childProfile: childProfile,
       supabaseModules: appState.supabaseModules,
-      announcements: announcements
+      announcements: announcements,
+      waliCalistungRows: appState.waliCalistungRows
     }));
   } catch (_) {}
 }
@@ -397,8 +412,10 @@ function loadWaliDataCache() {
       Object.keys(c.childProfile).forEach(function(k){ if (c.childProfile[k] != null && c.childProfile[k] !== '') childProfile[k] = c.childProfile[k]; });
     }
     if (Array.isArray(c.announcements)) { announcements.splice(0, announcements.length); c.announcements.forEach(function(a){ announcements.push(a); }); }
+    if (Array.isArray(c.waliCalistungRows)) appState.waliCalistungRows = c.waliCalistungRows;
     try { computeWaliRecap(); } catch (_e) {}
     try { syncWaliFinanceState(); } catch (_e) {}
+    try { recomputeWaliModuleBadges(); } catch (_e) {}
     return true;
   } catch (_) { return false; }
 }
@@ -443,6 +460,54 @@ function markWaliSeen(kind) {
       appState.seenNotes = Array.from(new Set((appState.seenNotes || []).concat(keysC)));
       appState.unreadNotes = 0;
     }
+    saveState();
+  } catch (_) {}
+}
+
+// [BADGE MODUL] Daftar baris "sumber" untuk tiap modul beranda yang punya badge.
+// Semua data ini sudah ada di appState.supabaseModules setelah hydrate (kecuali
+// calistung yang diisi terpisah ke appState.waliCalistungRows).
+function waliModuleRows(modKey) {
+  var sm = appState.supabaseModules || {};
+  if (modKey === 'nilai') return Array.isArray(sm.nilai) ? sm.nilai : [];
+  if (modKey === 'mutabaah') return [].concat(
+    Array.isArray(sm.mutabaahRumah) ? sm.mutabaahRumah : [],
+    Array.isArray(sm.mutabaahQuran) ? sm.mutabaahQuran : []
+  );
+  if (modKey === 'perkembangan') return [].concat(
+    Array.isArray(sm.pelanggaran) ? sm.pelanggaran : [],
+    Array.isArray(sm.karakter) ? sm.karakter : [],
+    Array.isArray(sm.prestasi) ? sm.prestasi : [],
+    Array.isArray(sm.ibadah) ? sm.ibadah : []
+  );
+  if (modKey === 'calistung') return Array.isArray(appState.waliCalistungRows) ? appState.waliCalistungRows : [];
+  return [];
+}
+
+// [BADGE MODUL] Hitung ulang jumlah item baru (belum dibaca) untuk tiap modul.
+function recomputeWaliModuleBadges() {
+  try {
+    appState.unreadModules = appState.unreadModules || {};
+    appState.seenModules = appState.seenModules || {};
+    ['nilai','mutabaah','perkembangan','calistung'].forEach(function(mod){
+      var seen = Array.isArray(appState.seenModules[mod]) ? appState.seenModules[mod] : [];
+      var rows = waliModuleRows(mod);
+      var n = 0;
+      rows.forEach(function(r){ if (seen.indexOf(waliItemKey(r)) === -1) n++; });
+      appState.unreadModules[mod] = n;
+    });
+  } catch (_) {}
+}
+
+// [BADGE MODUL] Tandai semua item modul sebagai sudah dibaca (badge hilang).
+function markWaliModuleSeen(mod) {
+  try {
+    if (!mod) return;
+    appState.seenModules = appState.seenModules || {};
+    var keys = waliModuleRows(mod).map(waliItemKey);
+    appState.seenModules[mod] = Array.from(new Set((appState.seenModules[mod] || []).concat(keys)));
+    appState.unreadModules = appState.unreadModules || {};
+    appState.unreadModules[mod] = 0;
     saveState();
   } catch (_) {}
 }
@@ -743,6 +808,33 @@ function waliBarisIstirahatTimeline(jam){
     + '<div class="lux-tl-body"><span class="lux-tl-title">Istirahat</span><span class="lux-tl-meta">' + (jam || 'Waktu rehat') + '</span></div>'
     + '<span class="lux-tl-pill gold">Rehat</span></div>';
 }
+/* [ISTIRAHAT DARI JEDA WAKTU] Baris istirahat TIDAK ada di database; yang ada hanya
+   jam pelajaran. Istirahat = jeda waktu antara jam selesai satu mapel dan jam mulai
+   mapel berikutnya. Dulu posisinya dihitung dari indeks tetap JAM_LABELS sehingga
+   sering salah tempat (mapel setelah istirahat malah tampil di atas garis istirahat).
+   Sekarang istirahat disisipkan tepat di antara dua mapel yang punya jeda waktu. */
+function _waliMenit(t){
+  var m = String(t == null ? '' : t).trim().replace(/\./g, ':').match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+function _waliNormJam(t){
+  var s = String(t == null ? '' : t).trim().replace(/\./g, ':');
+  var m = s.match(/^(\d{1,2}):(\d{2})/);
+  return m ? (m[1].padStart(2, '0') + ':' + m[2]) : s;
+}
+// Kembalikan label jam istirahat "HH:MM-HH:MM" bila ADA jeda antara mapel prev & cur,
+// atau '' bila tidak ada jeda (jam nyambung) / data tidak lengkap.
+function waliIstirahatAntar(prev, cur, labels){
+  var pj = waliJamJadwal(prev, parseInt(prev.jam_index), labels);
+  var cj = waliJamJadwal(cur, parseInt(cur.jam_index), labels);
+  var pEnd = (String(pj).split('-')[1] || '').trim();
+  var cStart = (String(cj).split('-')[0] || '').trim();
+  var pe = _waliMenit(pEnd), cs = _waliMenit(cStart);
+  if (pe == null || cs == null) return '';
+  if (cs > pe) return _waliNormJam(pEnd) + '-' + _waliNormJam(cStart);
+  return '';
+}
 
 function renderJadwalHariIniCard() {
   var kelasNow = String(childProfile.className || appState.childClass || '').replace(/^kelas\s+/i, '').trim();
@@ -766,15 +858,17 @@ function renderJadwalHariIniCard() {
   if (!list.length) {
     return head + '<div class="lux-timeline"><div class="lux-tl-item"><span class="lux-tl-dot blue"></span><div class="lux-tl-body"><span class="lux-tl-title">' + (rows.length ? 'Tidak ada jadwal hari ini' : 'Jadwal belum tersedia') + '</span><span class="lux-tl-meta">' + (rows.length ? ('Kelas ' + (kelasNow || '-')) : 'Sekolah belum mengisi jadwal kelas ini') + '</span></div></div></div>';
   }
-  // [JADWAL ISTIRAHAT PISAH] Istirahat jadi baris sendiri, bukan label jam mapel.
-  var _slotIst = waliSlotIstirahat(JAM_LABELS);
-  var _istTampil = {};
+  // [JADWAL ISTIRAHAT PISAH] Istirahat = jeda waktu antar mapel, disisipkan di antara
+  // dua kartu yang punya selisih jam (bukan dari indeks tetap yang bisa salah posisi).
+  var _prevRow = null;
   var items = list.map(function(r){
     var ji = parseInt(r.jam_index);
     var pemisah = '';
-    _slotIst.forEach(function(i){
-      if (!_istTampil[i] && !isNaN(ji) && ji >= i) { _istTampil[i] = 1; pemisah += waliBarisIstirahatTimeline(waliJamIstirahat(JAM_LABELS, i)); }
-    });
+    if (_prevRow) {
+      var _jamIst = waliIstirahatAntar(_prevRow, r, JAM_LABELS);
+      if (_jamIst) pemisah = waliBarisIstirahatTimeline(_jamIst);
+    }
+    _prevRow = r;
     var jam = waliJamJadwal(r, ji, JAM_LABELS);
     var mapel = r.mapel || r.mata_pelajaran || '-';
     var jamStart = (String(jam).split('-')[0] || jam);
@@ -793,20 +887,21 @@ function renderHome() {
   const finStt = appState.financeStatus;
   const qa = [
     { r:'module:absensi-anak', t:'Absensi', g:'g-aqua', ic:'<path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M11 15l1 1l2 -2"/>' },
-    { r:'module:nilai-anak', t:'Nilai', g:'g-violet', ic:'<path d="M4 19l16 0"/><path d="M4 15l4 -6l4 2l4 -5l4 4"/>' },
-    { r:'module:catatan-anak', t:'Catatan', g:'g-pink', badge: appState.unreadNotes>0?appState.unreadNotes:0, ic:'<path d="M8 9h8"/><path d="M8 13h6"/><path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3h-5l-5 3v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3z"/>' },
+    { r:'module:nilai-anak', t:'Nilai', g:'g-violet', dot: (appState.unreadModules && appState.unreadModules.nilai>0), ic:'<path d="M4 19l16 0"/><path d="M4 15l4 -6l4 2l4 -5l4 4"/>' },
+    { r:'module:catatan-anak', t:'Catatan', g:'g-pink', dot: (appState.unreadNotes>0), ic:'<path d="M8 9h8"/><path d="M8 13h6"/><path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3h-5l-5 3v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3z"/>' },
     { r:'module:surat-wali', t:'Kirim Surat', g:'g-amber', ic:'<path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/><path d="M3 7l9 6l9 -6"/>' },
-    { r:'mutabaah', t:'Mutabaah', g:'g-emerald', ic:'<path d="M5 12l-2 0l9 -9l9 9l-2 0"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7"/><path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6"/>' },
-    { r:'module:perkembangan-anak', t:'Pelanggaran', g:'g-pink', ic:'<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' },
+    { r:'mutabaah', t:'Mutabaah', g:'g-emerald', dot: (appState.unreadModules && appState.unreadModules.mutabaah>0), ic:'<path d="M5 12l-2 0l9 -9l9 9l-2 0"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7"/><path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6"/>' },
+    { r:'module:perkembangan-anak', t:'Pelanggaran', g:'g-pink', dot: (appState.unreadModules && appState.unreadModules.perkembangan>0), ic:'<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' },
     /* Slot ini dulu Keuangan. Keuangan tetap bisa dibuka lewat tab bawah dan
        kartu saldo di beranda, jadi slotnya dipakai Calistung agar tidak dobel. */
-    { r:'module:calistung-anak', t:'Calistung', g:'g-sun', ic:'<path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6l0 13"/><path d="M12 6l0 13"/><path d="M21 6l0 13"/>' },
+    { r:'module:calistung-anak', t:'Calistung', g:'g-sun', dot: (appState.unreadModules && appState.unreadModules.calistung>0), ic:'<path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6l0 13"/><path d="M12 6l0 13"/><path d="M21 6l0 13"/>' },
     { r:'__more__', t:'Lainnya', g:'g-slate', ic:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>' }
   ];
   const qaHtml = qa.map(function(q){
     const route = (q.r === '__more__' || q.a) ? '' : ` data-module-route="${q.r}"`;
     const more = q.r === '__more__' ? ' data-action="goMore"' : (q.a ? ` data-action="${q.a}"` : '');
-    const badge = q.badge ? `<span class="lux-q-badge">${q.badge}</span>` : '';
+    // [BADGE MODUL] Titik merah bila ada item baru; badge angka lama hanya utk Catatan.
+    const badge = q.badge ? `<span class="lux-q-badge">${q.badge}</span>` : (q.dot ? `<span class="lux-q-dot"></span>` : '');
     return `<button type="button" class="lux-q"${route}${more}>
       <span class="lux-q-ic ${q.g}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${q.ic}</svg>${badge}</span>
       <span class="lux-q-t">${q.t}</span>
@@ -1685,15 +1780,16 @@ function renderJadwalAnak(detail) {
   var daysHtml = HARI.map(function(nama, hi){
     var list = (byHari[hi] || []).slice().sort(function(a, b){ return (parseInt(a.jam_index) || 0) - (parseInt(b.jam_index) || 0); });
     var isToday = hi === todayHari;
-    // [JADWAL ISTIRAHAT PISAH] Baris Istirahat ditampilkan tersendiri per hari.
-    var _slotIst = waliSlotIstirahat(JAM_LABELS);
-    var _istTampil = {};
+    // [JADWAL ISTIRAHAT PISAH] Istirahat = jeda waktu antar mapel (bukan indeks tetap).
+    var _prevR = null;
     var items = list.length ? list.map(function(r){
       var ji = parseInt(r.jam_index);
       var pemisah = '';
-      _slotIst.forEach(function(i){
-        if (!_istTampil[i] && !isNaN(ji) && ji >= i) { _istTampil[i] = 1; pemisah += waliBarisIstirahatHtml(waliJamIstirahat(JAM_LABELS, i)); }
-      });
+      if (_prevR) {
+        var _jamIst = waliIstirahatAntar(_prevR, r, JAM_LABELS);
+        if (_jamIst) pemisah = waliBarisIstirahatHtml(_jamIst);
+      }
+      _prevR = r;
       var jam = waliJamJadwal(r, ji, JAM_LABELS);
       var mapel = r.mapel || r.mata_pelajaran || '-';
       return pemisah + scheduleCard({ time: (String(jam).split('-')[0] || jam), title: mapel, meta: r.guru ? ('Guru: ' + r.guru) : '', status: 'Mapel', tone: 'blue' });
@@ -2560,6 +2656,11 @@ function navigate(target) {
     appState.activeTab = target;
     // Hapus badge "belum dibaca" begitu modul terkait dibuka
     if (target === 'module:catatan-anak') { markWaliSeen('catatan'); }
+    // [BADGE MODUL] Titik merah hilang begitu modul dibuka.
+    if (target === 'module:nilai-anak') { markWaliModuleSeen('nilai'); }
+    else if (target === 'mutabaah' || target === 'module:mutabaah-rumah' || target === 'module:mutabaah-tahfidz') { markWaliModuleSeen('mutabaah'); }
+    else if (target === 'module:perkembangan-anak') { markWaliModuleSeen('perkembangan'); }
+    else if (target === 'module:calistung-anak') { markWaliModuleSeen('calistung'); }
     render();
     animateWaliContent();
   }
@@ -3313,6 +3414,19 @@ async function hydrateWaliFromSupabase() {
         });
       });
     } catch(_) {}
+    // [BADGE MODUL] Muat baris calistung ringkas (hanya kolom kunci) untuk hitung
+    // titik merah, lalu hitung ulang semua badge modul beranda.
+    try {
+      var _nisBadge = String(appState.childNis || (childProfile && childProfile.nis) || '').trim();
+      if (_nisBadge && _nisBadge !== '-' && window.ZymataMobileSupabase && typeof window.ZymataMobileSupabase.select === 'function') {
+        var _resCal = await window.ZymataMobileSupabase.select('calistung', {
+          eq: { nis: _nisBadge }, select: 'id,row_uid,tanggal,updated_at', order: 'tanggal', ascending: false, limit: 200
+        }).catch(function(){ return null; });
+        var _calRows = (_resCal && Array.isArray(_resCal.data)) ? _resCal.data : (Array.isArray(_resCal) ? _resCal : []);
+        appState.waliCalistungRows = _calRows;
+      }
+    } catch(_) {}
+    try { recomputeWaliModuleBadges(); } catch(_) {}
     syncWaliFinanceState();
     appState._waliLastHydrateTs = Date.now();
     saveState();
@@ -4156,6 +4270,14 @@ animateWaliContent();
       CW.rows=[];
     }
     CW.loading=false;
+    // [BADGE MODUL] Sinkronkan baris calistung ke appState + tandai sudah dibaca,
+    // karena user sedang membuka modul ini (titik merah harus hilang & tetap hilang).
+    try {
+      if (Array.isArray(CW.rows)) {
+        appState.waliCalistungRows = CW.rows.map(function(r){ return { id:r.id, row_uid:r.row_uid, tanggal:r.tanggal, updated_at:r.updated_at }; });
+        if (typeof markWaliModuleSeen === 'function') markWaliModuleSeen('calistung');
+      }
+    } catch(_) {}
     if(aktif()) ulang();
   }
 
