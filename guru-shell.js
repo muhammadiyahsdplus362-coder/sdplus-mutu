@@ -360,7 +360,11 @@ function saveDataCache() {
       lastSyncLabel: appState.lastSyncLabel,
       supabaseModules: appState.supabaseModules,
       students: students,
-      siswaPerKelas: SISWA_PER_KELAS
+      siswaPerKelas: SISWA_PER_KELAS,
+      // [JADWAL TAHAN RELOAD] Simpan jadwal mingguan supaya "Jadwal hari ini" di
+      // dashboard langsung tampil saat app dibuka, tanpa menunggu hydrate selesai
+      // (dulu kosong sampai user pindah modul lalu kembali).
+      jadwalMingguan: JADWAL_MINGGUAN
     }));
   } catch (_) {}
 }
@@ -399,6 +403,21 @@ function loadDataCache() {
       Object.keys(c.siswaPerKelas).forEach(function(k){ if (Array.isArray(c.siswaPerKelas[k])) SISWA_PER_KELAS[k] = c.siswaPerKelas[k].slice(); });
       if (Array.isArray(KELAS_LIST)) { KELAS_LIST.length = 0; Object.keys(SISWA_PER_KELAS).sort().forEach(function(k){ KELAS_LIST.push(k); }); }
     }
+    /* [JADWAL TAHAN RELOAD] Pulihkan jadwal mingguan dari cache supaya "Jadwal hari
+       ini" di dashboard langsung terisi saat app dibuka (sebelum hydrate selesai). */
+    try {
+      if (c.jadwalMingguan && typeof c.jadwalMingguan === 'object') {
+        Object.keys(JADWAL_MINGGUAN).forEach(function(k){ JADWAL_MINGGUAN[k].splice(0, JADWAL_MINGGUAN[k].length); });
+        Object.keys(c.jadwalMingguan).forEach(function(k){
+          if (Array.isArray(c.jadwalMingguan[k]) && JADWAL_MINGGUAN[k]) {
+            c.jadwalMingguan[k].forEach(function(item){ JADWAL_MINGGUAN[k].push(item); });
+          }
+        });
+        // Sinkronkan array `schedules` (jadwal hari ini) yang dipakai dashboard.
+        var _today = getTodaySchedules();
+        schedules.splice(0, schedules.length, ..._today);
+      }
+    } catch (_) {}
     // Pulihkan judul tab dari cache (hindari teks empty-state berkedip)
     if (appState.teacherClass && appState.teacherClass !== 'Kelas belum terhubung') {
       tabMeta.class.eyebrow = 'Kelas ' + appState.teacherClass;
@@ -911,7 +930,7 @@ function renderHome() {
       <div class="dash-sched-list">
         ${todaySched.map((s,i) => `
           <div class="dsl-row ${i===0?'is-first':''}">
-            <span class="dsl-time">${s.time}</span>
+            <span class="dsl-time">${s.timeLabel || s.time}</span>
             <div class="dsl-body">
               <span class="dsl-title">${s.title}</span>
               <span class="dsl-meta">${s.meta}</span>
@@ -1145,11 +1164,13 @@ function renderClass() {
   // Jadwal hari ini khusus kelas terpilih (meta diawali "Kelas <selKelas>")
   var todayJadwal = (typeof getTodaySchedules === 'function' ? getTodaySchedules() : []) || [];
   var jadwalKelas = todayJadwal.filter(function(s){ return String(s.meta || '').indexOf('Kelas ' + selKelas) === 0; });
-  // Strip chip pemilih kelas (hanya tampil bila guru mengajar >1 kelas)
+  // Strip pemilih kelas — dropdown (seperti pemilih kelas di Chat), hanya tampil bila guru mengajar >1 kelas
   var kelasStripHtml = '';
   if (kelasList.length > 1) {
-    kelasStripHtml = '<section class="section section--tight"><div class="kelas-pick-strip">'
-      + kelasList.map(function(k){ return '<button type="button" class="kelas-pick-chip' + (k === selKelas ? ' is-active' : '') + '" data-kelas-pick="' + k + '">' + k + '</button>'; }).join('')
+    kelasStripHtml = '<section class="section section--tight"><div class="kelas-pick-dropdown-wrap">'
+      + '<select class="field-select kelas-pick-select" data-kelas-pick-select aria-label="Pilih kelas">'
+      + kelasList.map(function(k){ return '<option value="' + k + '"' + (k === selKelas ? ' selected' : '') + '>Kelas ' + k + '</option>'; }).join('')
+      + '</select>'
       + '</div></section>';
   }
   return `
@@ -1245,7 +1266,7 @@ function renderSchedule() {
           return `
           <article class="jadwal-sesi-card ${state}">
             <div class="jadwal-sesi-time">
-              <strong>${sesi.time}</strong>
+              <strong>${sesi.timeLabel || sesi.time}</strong>
               ${state === 'is-now' ? '<span class="jsc-live-dot"></span>' : ''}
               <span class="status-pill ${sesi.tone}">${sesi.status}</span>
             </div>
@@ -4230,7 +4251,7 @@ function studentCard(student) {
 function scheduleCard(item) {
   return `
     <article class="schedule-card">
-      <div class="schedule-time">${item.time}</div>
+      <div class="schedule-time">${item.timeLabel || item.time}</div>
       <div class="student-info">
         <h3 class="schedule-title">${item.title}</h3>
         <p class="schedule-meta">${item.meta}</p>
@@ -5643,6 +5664,20 @@ function bindActions() {
   });
 
   document.addEventListener('change', (event) => {
+    // Pemilih kelas (dropdown) di tab Kelas — ganti kelas terpilih lalu render ulang.
+    const kelasPickSel = event.target.closest('[data-kelas-pick-select]');
+    if (kelasPickSel) {
+      const k = kelasPickSel.value || '';
+      if (k && k !== appState.selectedKelas) {
+        appState.selectedKelas = k;
+        if (tabMeta && tabMeta.class) {
+          tabMeta.class.title = 'Kelas ' + k;
+          tabMeta.class.eyebrow = 'Kelas ' + k;
+        }
+        render();
+      }
+      return;
+    }
     // Metode (multi-pilih, form modul generik): toggle input manual saat checkbox "Lainnya" dicentang.
     const metCheckEl = event.target.closest('[data-metode-check]');
     if (metCheckEl) {
@@ -6405,23 +6440,44 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
         if (d !== 0) return d;
         return String(a.kelas||'').localeCompare(String(b.kelas||''));
       });
+      var dayEntries = [];
       sorted.forEach(function(r) {
         var ji = parseInt(r.jam_index);
         // FIX: utamakan jam_label asli dari database (jam per-hari), jangan pakai daftar jam lama.
         var rawLabel = (r.jam_label != null && String(r.jam_label).trim()) ? String(r.jam_label).trim() : ((ji >= 0 && ji < JAM_LABELS.length) ? JAM_LABELS[ji] : ('Jam '+(ji+1)));
         var mapel = r.mapel || '-';
         if (mapel === '-' || /istirahat/i.test(mapel) || /istirahat/i.test(rawLabel)) return;
-        // Waktu mulai untuk logika status butuh format HH:MM, jadi titik diubah jadi titik dua.
-        var startPart = (String(rawLabel).split('-')[0] || rawLabel).trim().replace(/\./g, ':');
+        // Waktu mulai/akhir untuk logika status butuh format HH:MM, jadi titik diubah jadi titik dua.
+        var labelParts = String(rawLabel).split('-');
+        var startPart = (labelParts[0] || rawLabel).trim().replace(/\./g, ':');
+        var endPart = (labelParts[1] || '').trim().replace(/\./g, ':');
         var entry = {
           time: startPart || rawLabel,
+          endTime: endPart || '',
+          // Default: tampil apa adanya (jam mulai saja), SAMA seperti sebelumnya.
+          // Label rentang HANYA dipasang saat sesi benar-benar digabung di bawah.
+          timeLabel: startPart || rawLabel,
           title: mapel,
+          kelas: r.kelas || '-',
           meta: 'Kelas ' + (r.kelas || '-') + (r.guru ? ' · ' + r.guru : ''),
           status: 'Mapel',
           tone: 'blue'
         };
+        dayEntries.push(entry);
+      });
+      /* [GABUNG SESI BERURUTAN] Satu mapel kadang dipecah jadi beberapa slot jam di database
+       * (mis. MATEMATIKA 09:45-10:30 lalu 10:30-11:15). Kalau mapel + kelas SAMA dan waktunya
+       * NYAMBUNG (jam berikutnya mulai tepat saat jam sebelumnya berakhir), gabung jadi satu
+       * kartu dengan rentang waktu penuh. Kalau ada jeda / beda mapel, TIDAK digabung. */
+      dayEntries.forEach(function(e) {
+        var last = JADWAL_MINGGUAN[dayIdx] && JADWAL_MINGGUAN[dayIdx][JADWAL_MINGGUAN[dayIdx].length - 1];
+        if (last && last.title === e.title && last.kelas === e.kelas && last.endTime && last.endTime === e.time) {
+          last.endTime = e.endTime;
+          last.timeLabel = (last.time && last.endTime) ? (last.time + '–' + last.endTime) : last.time;
+          return;
+        }
         if (!JADWAL_MINGGUAN[dayIdx]) JADWAL_MINGGUAN[dayIdx] = [];
-        JADWAL_MINGGUAN[dayIdx].push(entry);
+        JADWAL_MINGGUAN[dayIdx].push(e);
       });
     });
     var todaySchedule = getTodaySchedules();
@@ -6562,9 +6618,15 @@ async function hydrateGuruFromSupabase() {
     }
     saveDataCache();
     saveState();
-    if (!window.__qrScannerOpen) render(); // skip render saat kamera terbuka
   } catch (error) {
     console.warn('[MobileGuru] gagal load Supabase:', error && error.message ? error.message : error);
+  } finally {
+    /* [TAMPIL SETELAH SEGAR] Render dipindah ke finally supaya layar SELALU
+     * dicat ulang setelah data selesai disegarkan — walau ada langkah di atas
+     * yang melempar error. Sebelumnya render ada di dalam try, jadi bila ada
+     * exception setelah data masuk state, layar tidak ter-update sampai user
+     * pindah modul lalu kembali (render dipicu navigasi). */
+    if (!window.__qrScannerOpen) { try { render(); } catch(_){} }
   }
 }
 
@@ -6577,7 +6639,12 @@ appState.showAnnouncements = false;
 bindNativeBack();
 saveState();
 render();
-hydrateGuruFromSupabase();
+// [PILL SAAT REFRESH] Tunda hydrate pertama 1 tick supaya pembungkus indikator
+// "Menyegarkan data…" (zymata-sync-pill-v1, dipasang di bawah file) sudah aktif.
+// Sebelumnya panggilan cold-start ini memakai fungsi asli yang BELUM dibungkus,
+// sehingga saat browser di-refresh tidak ada indikator "menyiapkan data" seperti
+// di aplikasi wali. Deferral 0ms tidak menambah waktu tunggu yang terasa.
+setTimeout(function(){ try { hydrateGuruFromSupabase(); } catch(_){ } }, 0);
 animateContent();
 
 // ===== Auto-refresh data saat app dibuka kembali =====
