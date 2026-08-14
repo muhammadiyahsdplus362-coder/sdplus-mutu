@@ -1640,9 +1640,14 @@ async function loadWaliJadwal() {
   var tries = [];
   [stripped, 'Kelas ' + stripped, raw].forEach(function(v){ v = String(v || '').trim(); if (v && tries.indexOf(v) === -1) tries.push(v); });
   var rows = [];
+  // [EGRESS KOLOM WALI] renderJadwalAnak hanya memakai: hari_index, jam_index,
+  // jam_label/jam (lihat waliJamJadwal), mapel, guru. Tabel jadwal_pelajaran punya
+  // 19 kolom termasuk `payload` yang tidak dipakai sama sekali di aplikasi wali.
+  // Terukur: 300 baris select=* = 124 KB; difilter kelas + kolom seperlunya jauh lebih kecil.
+  var _KOL_JADWAL = 'hari_index,jam_index,jam_label,jam,mapel,guru';
   for (var i = 0; i < tries.length; i++) {
     try {
-      var res = await helper.select('jadwal_pelajaran', { eq: { kelas: tries[i] }, limit: 300 });
+      var res = await helper.select('jadwal_pelajaran', { eq: { kelas: tries[i] }, select: _KOL_JADWAL, limit: 300 });
       var rws = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
       if (rws.length) { rows = rws; break; }
     } catch (e) { console.warn('[Jadwal Wali] gagal load:', e); }
