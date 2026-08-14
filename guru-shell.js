@@ -1597,9 +1597,19 @@ async function loadTabunganData(kelas){
       var all=[];
       // EGRESS: ambil kelas guru ini dulu. Dulu seluruh sekolah (5000 baris)
       // selalu diunduh lebih dahulu, padahal yang dipakai hanya satu kelas.
-      try{ var res=await api.select('tabungan_siswa',{ eq:{ kelas:kelas }, limit:50000 }); if(res&&!res.error&&Array.isArray(res.data)) all=res.data; }catch(e1){}
+      // [EGRESS KOLOM HP] Kolom yang dipakai halaman Tabungan guru:
+      //  - saldo/rekap    : debit, kredit, nominal, jenis, saldo
+      //  - pencocokan     : kelas, nis, siswa_id, nama_siswa
+      //  - riwayat & tgl  : id, tanggal, created_at, updated_at, keterangan
+      //  - normalizeItem  : status, mapel, semester, catatan (dipakai merangkai baris riwayat)
+      // Tabel punya 32 kolom; yang DILEWATI: payload, client_key, row_uid, petugas, metode,
+      // guru_id, guru_nama, guru_nip, kelas_id, kelas_normalized, mapel_id, mapel_normalized,
+      // siswa_nis, tahun_ajaran. Catatan: kolom `nama` TIDAK ADA di tabel ini (sudah
+      // undefined sebelum perubahan) - sudah diuji ke server, memintanya membuat HTTP 400.
+      var _KOL_TAB = 'id,kelas,nis,siswa_id,nama_siswa,tanggal,created_at,updated_at,jenis,nominal,debit,kredit,saldo,keterangan,status,mapel,semester,catatan';
+      try{ var res=await api.select('tabungan_siswa',{ eq:{ kelas:kelas }, select:_KOL_TAB, limit:20000 }); if(res&&!res.error&&Array.isArray(res.data)) all=res.data; }catch(e1){}
       // Jaring pengaman: bila format nama kelas tidak cocok, baru unduh semua.
-      if(!all.length){ try{ var resAll=await api.select('tabungan_siswa',{ limit:50000 }); if(resAll&&!resAll.error&&Array.isArray(resAll.data)) all=resAll.data; }catch(e2){} }
+      if(!all.length){ try{ var resAll=await api.select('tabungan_siswa',{ select:_KOL_TAB, limit:20000 }); if(resAll&&!resAll.error&&Array.isArray(resAll.data)) all=resAll.data; }catch(e2){} }
 
       var murid=(typeof getSiswaByKelas==='function')?(getSiswaByKelas(kelas)||[]):[];
       var byNis={}, bySid={}, byNama={};
@@ -1818,10 +1828,10 @@ window.zTab = {
     showToast('Menyimpan '+entries.length+' data\u2026','info','&#128190;');
     try{
     var sisMap={};
-    try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, limit:50000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||row.siswa_id||''), nama:row.nama||row.nama_siswa||'' }; }); } }catch(e){}
+    try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, select:'id,siswa_id,nis,nama,nama_siswa', limit:2000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||row.siswa_id||''), nama:row.nama||row.nama_siswa||'' }; }); } }catch(e){}
     var saldoByNis={}, saldoBySid={}, sigCount={};
     var _tabSig=function(sid,nis,nama,tgl,jn,nom,db,kr,ket,mtd){ return ['default',String(sid||nis||nama||'').toLowerCase().trim(),String(tgl||'').slice(0,10),String(jn||'').toLowerCase().trim(),Number(nom)||0,Number(db)||0,Number(kr)||0,String(ket||'').toLowerCase().trim(),String(mtd||'').toLowerCase().trim()].join('|'); };
-    try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, limit:50000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; var _sg=_tabSig(r.siswa_id,r.nis,r.nama_siswa,r.tanggal,r.jenis,r.nominal,r.debit,r.kredit,r.keterangan,r.metode); sigCount[_sg]=(sigCount[_sg]||0)+1; }); } }catch(e){}
+    try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, select:'siswa_id,nis,nama_siswa,tanggal,jenis,nominal,debit,kredit,keterangan,metode', limit:20000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; var _sg=_tabSig(r.siswa_id,r.nis,r.nama_siswa,r.tanggal,r.jenis,r.nominal,r.debit,r.kredit,r.keterangan,r.metode); sigCount[_sg]=(sigCount[_sg]||0)+1; }); } }catch(e){}
     var saved=0, failed=0, skipped=[], savedNis=[];
     for(var i=0;i<entries.length;i++){
       var e=entries[i]; var info=sisMap[e.nis]||{}; var siswaId=info.id||''; var namaSiswa=e.nama||info.nama||'';
@@ -5297,11 +5307,12 @@ function bindActions() {
         var saldoBerjalan = 0;
         var existing = [];
         if (siswaId) {
-          var rEx = await _S.select('tabungan_siswa', { eq: { siswa_id: siswaId }, limit: 50000 });
+          // [EGRESS KOLOM HP] hanya kolom untuk hitung saldo (debit/kredit/nominal/jenis).
+          var rEx = await _S.select('tabungan_siswa', { eq: { siswa_id: siswaId }, select:'debit,kredit,nominal,jenis', limit: 5000 });
           if (rEx && !rEx.error && Array.isArray(rEx.data)) existing = rEx.data;
         }
         if (!existing.length && selNis) {
-          var rEx2 = await _S.select('tabungan_siswa', { eq: { nis: selNis }, limit: 50000 });
+          var rEx2 = await _S.select('tabungan_siswa', { eq: { nis: selNis }, select:'debit,kredit,nominal,jenis', limit: 5000 });
           if (rEx2 && !rEx2.error && Array.isArray(rEx2.data)) existing = rEx2.data;
         }
         existing.forEach(function(r){
@@ -6479,14 +6490,19 @@ async function hydrateGuruFromSupabase() {
     tabMeta.profile.title = 'Pengaturan guru';
 
     // ===== PARALEL: jalankan semua permintaan Supabase bersamaan agar load pertama jauh lebih cepat =====
+    // [EGRESS KOLOM HP] rebuildSiswaFromRows + kartu siswa hanya memakai kolom di bawah.
+    // Tabel `siswa` punya 43 kolom (alamat, ayah, ibu, foto, nik, no_kk, dst) yang tidak
+    // dipakai sama sekali di aplikasi guru. Nama alias seperti kelas_id/rombel/nama_siswa/
+    // siswa_id/no_induk MEMANG tidak ada sebagai kolom (sudah undefined sebelum ini).
+    const _KOL_SISWA = 'id,nis,nisn,nama,kelas';
     const kelasUntukSiswa = (kelasList && kelasList.length) ? kelasList : (kelasUtama ? [kelasUtama] : []);
     const siswaQuery = kelasUntukSiswa.length
-      ? { or: kelasUntukSiswa.map(function(k){ return 'kelas.eq.' + k; }).join(','), limit: 500 }
-      : { limit: 500 };
+      ? { or: kelasUntukSiswa.map(function(k){ return 'kelas.eq.' + k; }).join(','), select: _KOL_SISWA, limit: 500 }
+      : { select: _KOL_SISWA, limit: 500 };
     ctx.kelasList = kelasList.slice();
     const _S = window.ZymataMobileSupabase;
     const [resUtama, siswaAll, , , modulesData] = await Promise.all([
-      kelasUtama ? _S.select('siswa', { eq: { kelas: kelasUtama }, limit: 200 }).catch(function(){ return null; }) : Promise.resolve(null),
+      kelasUtama ? _S.select('siswa', { eq: { kelas: kelasUtama }, select: _KOL_SISWA, limit: 200 }).catch(function(){ return null; }) : Promise.resolve(null),
       _S.select('siswa', siswaQuery).catch(function(){ return null; }),
       rebuildJadwalFromSupabase((appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList : kelasUtama, appState.teacherName).catch(function(){ return null; }),
       loadMessagesFromSupabase(kelasUtama).catch(function(){ return null; }),
@@ -6508,7 +6524,7 @@ async function hydrateGuruFromSupabase() {
     // Fallback: kalau roster kosong (mis. format kelas guru beda dgn tabel siswa), muat semua siswa tanpa filter kelas
     if (agStudentCount() === 0) {
       try {
-        var _allSiswa = await _S.select('siswa', { limit: 1000 });
+        var _allSiswa = await _S.select('siswa', { select: _KOL_SISWA, limit: 1000 });
         if (_allSiswa && !_allSiswa.error && Array.isArray(_allSiswa.data)) rebuildSiswaFromRows(_allSiswa.data);
       } catch (_eAll) {}
     }
@@ -6757,9 +6773,11 @@ animateContent();
     if(ST.rosterLoading) return; ST.rosterLoading=true;
     try{
       var api=SB();
-      if(api){ var res=await api.select('siswa',{ columns:'id,nis,nama,kelas', limit:50000 });
+      if(api){ var res=await api.select('siswa',{ columns:'id,nis,nisn,nama,kelas', limit:2000 });
         // Jaring pengaman: bila salah satu nama kolom tidak ada, ulangi cara lama.
-        if(res&&res.error){ try{ res=await api.select('siswa',{ limit:50000 }); }catch(_e){} }
+        // (Catatan: sejak supabase-mobile.js mendukung `columns`, opsi di atas benar-benar
+        //  dipakai. Dulu namanya diabaikan sehingga tetap menarik SEMUA kolom.)
+        if(res&&res.error){ try{ res=await api.select('siswa',{ limit:2000 }); }catch(_e){} }
         if(res&&!res.error&&Array.isArray(res.data)){ ST.roster=res.data.map(function(row){ return { id:String(row.id||row.siswa_id||''), nis:String(row.nis||row.nisn||''), name:String(row.nama||row.nama_siswa||row.name||'Siswa'), kelas:String(row.kelas||row.kelas_id||row.rombel||row.kelas_nama||'').trim() }; }); } else if(ST.roster===null){ ST.roster=[]; } }
       else if(ST.roster===null){ ST.roster=[]; }
     }catch(e){ if(ST.roster===null) ST.roster=[]; }
