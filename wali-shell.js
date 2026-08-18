@@ -3452,6 +3452,9 @@ saveState();
 ensureWaliFixStyles();
 render();
 hydrateWaliFromSupabase();
+// [SESI TUNGGAL] Cek apakah HP ini masih perangkat aktif. Bila akun sudah login
+// di HP lain, fungsi ini akan logout + arahkan ke pemilih peran.
+try { if(window.ZymataMobileSupabase && window.ZymataMobileSupabase.checkActiveSession) window.ZymataMobileSupabase.checkActiveSession(); } catch(_){}
 animateWaliContent();
 
 // ===== Auto-refresh data saat app dibuka kembali =====
@@ -3461,6 +3464,8 @@ animateWaliContent();
 (function setupWaliAutoRefresh(){
   var _busy = false, _last = Date.now();
   function refreshNow(){
+    // [SESI TUNGGAL] Cek lebih dulu sebelum throttle, agar tetap jalan tiap resume.
+    try { if(window.ZymataMobileSupabase && window.ZymataMobileSupabase.checkActiveSession) window.ZymataMobileSupabase.checkActiveSession(); } catch(_){}
     if(_busy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
     // Hemat beban server: lewati refresh berat bila data baru saja disegarkan (< 90 detik).
@@ -4281,12 +4286,23 @@ animateWaliContent();
     if(aktif()) ulang();
   }
 
-  /* daftar periode yang tersedia, terbaru dulu */
+  /* daftar periode yang tersedia, terbaru dulu.
+     [CALISTUNG RIWAYAT] Baris dengan periode kosong TIDAK dibuang: kalau dibuang,
+     baris itu tidak akan pernah muncul di kartu laporan (hanya di panel riwayat)
+     dan wali mengira datanya hilang. Baris seperti itu dikelompokkan ke label
+     khusus TANPA_PERIODE. */
+  var TANPA_PERIODE='\u2014 Tanpa periode';
+
+  function periodeBaris(r){
+    var p=String((r&&r.periode)||'').trim();
+    return p || TANPA_PERIODE;
+  }
+
   function daftarPeriode(){
     var seen={}, out=[];
     (CW.rows||[]).forEach(function(r){
-      var p=String(r.periode||'').trim();
-      if(p && !seen[p]){ seen[p]=1; out.push(p); }
+      var p=periodeBaris(r);
+      if(!seen[p]){ seen[p]=1; out.push(p); }
     });
     return out;
   }
@@ -4300,7 +4316,7 @@ animateWaliContent();
   function barisPeriode(p){
     var out=null;
     (CW.rows||[]).forEach(function(r){
-      if(String(r.periode||'')===p && !out) out=r;
+      if(periodeBaris(r)===p && !out) out=r;
     });
     return out;
   }
@@ -4322,7 +4338,7 @@ animateWaliContent();
   function daftarBulan(p){
     var seen={}, out=[];
     (CW.rows||[]).forEach(function(r){
-      if(String(r.periode||'')!==p) return;
+      if(periodeBaris(r)!==p) return;
       var ym=ymBaris(r);
       if(!seen.hasOwnProperty(ym)){ seen[ym]=1; out.push(ym); }
     });
@@ -4335,25 +4351,23 @@ animateWaliContent();
     return d.length ? d[0] : '';
   }
 
-  /* baris terbaru pada periode + bulan tertentu */
-  function barisBulan(p, ym){
-    var out=null;
+  /* [CALISTUNG RIWAYAT] SEMUA baris pada periode + bulan tertentu, terbaru dulu.
+     Guru bisa menilai beberapa kali dalam satu bulan; wali harus melihat
+     semuanya, bukan hanya yang terbaru. */
+  function barisBulanSemua(p, ym){
+    var out=[];
     (CW.rows||[]).forEach(function(r){
-      if(out) return;
-      if(String(r.periode||'')!==p) return;
+      if(periodeBaris(r)!==p) return;
       if(ymBaris(r)!==ym) return;
-      out=r;
+      out.push(r);
     });
+    out.sort(function(a,b){ return String(b.tanggal||'').localeCompare(String(a.tanggal||'')); });
     return out;
   }
 
   /* berapa kali dinilai pada bulan itu */
   function jumlahBulan(p, ym){
-    var n=0;
-    (CW.rows||[]).forEach(function(r){
-      if(String(r.periode||'')===p && ymBaris(r)===ym) n++;
-    });
-    return n;
+    return barisBulanSemua(p, ym).length;
   }
 
   function adaNilai(r){
@@ -4385,6 +4399,9 @@ animateWaliContent();
       + '.zwcal-lap h4{font-size:12.5px;font-weight:900;color:var(--text,#101828);margin:0 0 3px;letter-spacing:-.02em}'
       + '.zwcal-id{font-size:11.5px;color:var(--muted,#6b7280);line-height:1.5;margin-bottom:9px;padding-bottom:8px;border-bottom:1px solid var(--line,#e4e7ec)}'
       + '.zwcal-id b{color:var(--text,#101828);font-weight:700}'
+      /* [CALISTUNG RIWAYAT] penanda urutan penilaian dalam satu bulan */
+      + '.zwcal-urut{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.03em;color:var(--indigo,#2D3561);background:var(--surface-2,#f8fafc);border-radius:999px;padding:2px 8px;margin-bottom:6px}'
+      + '.zwcal-gap{height:10px}'
       + '.zwcal-sec{font-size:11px;font-weight:900;color:var(--indigo,#2D3561);margin:9px 0 2px;display:flex;align-items:center;gap:5px;letter-spacing:.02em}'
       + '.zwcal-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--line,#e4e7ec)}'
       + '.zwcal-row:last-of-type{border-bottom:none}'
@@ -4426,12 +4443,17 @@ animateWaliContent();
     return '<span class="zwcal-pil '+k.toLowerCase()+'">'+esc(k)+'</span>';
   }
 
-  function laporanHtml(r){
+  function laporanHtml(r, urut, dari){
     var h='<article class="zwcal-lap">';
     h+='<h4>LAPORAN PERKEMBANGAN SISWA</h4>';
+    /* [CALISTUNG RIWAYAT] Kalau satu bulan berisi beberapa penilaian, tiap kartu
+       diberi nomor urut supaya wali tahu ini bukan data ganda. */
+    if(dari>1){
+      h+='<div class="zwcal-urut">Penilaian '+urut+' dari '+dari+' di bulan ini</div>';
+    }
     h+='<div class="zwcal-id">Nama: <b>'+esc(r.nama_siswa||childNama())+'</b><br>'
       + 'Kelas: <b>'+esc(r.kelas||childKelas()||'-')+'</b> &nbsp;&middot;&nbsp; Periode: <b>'+esc(r.periode||'-')+'</b>'
-      + (r.tanggal?('<br>Diperbarui: '+esc(fmtTgl(String(r.tanggal).slice(0,10)))):'')
+      + (r.tanggal?('<br>Dinilai: '+esc(fmtTgl(String(r.tanggal).slice(0,10)))):'')
       + (r.guru?('<br>Guru: '+esc(r.guru)):'')
       + '</div>';
 
@@ -4558,7 +4580,13 @@ animateWaliContent();
     var p=periodeAktif();
     var bulanList=daftarBulan(p);
     var ym=bulanAktif(p);
-    var baris=barisBulan(p, ym) || barisPeriode(p);
+    /* [CALISTUNG RIWAYAT] semua penilaian pada bulan terpilih, terbaru dulu */
+    var barisList=barisBulanSemua(p, ym);
+    if(!barisList.length){
+      var satu=barisPeriode(p);
+      barisList = satu ? [satu] : [];
+    }
+    var baris=barisList.length ? barisList[0] : null;
 
     /* penanda baca-saja */
     h+='<section class="section">'
@@ -4601,19 +4629,30 @@ animateWaliContent();
 
       h+='</div>';
       h+='<p class="zwcal-ket" style="margin:0">'
-        + (bulanList.length>1
-            ? 'Menampilkan penilaian terbaru pada bulan yang dipilih.'
-            : 'Baru ada penilaian di <b>'+esc(labelBulan(ym))+'</b>. Pilihan bulan akan bertambah setelah guru mengisi di bulan berikutnya.')
+        + (barisList.length>1
+            ? 'Menampilkan <b>'+barisList.length+' penilaian</b> pada bulan yang dipilih, terbaru di atas.'
+            : (bulanList.length>1
+                ? 'Menampilkan penilaian pada bulan yang dipilih.'
+                : 'Baru ada penilaian di <b>'+esc(labelBulan(ym))+'</b>. Pilihan bulan akan bertambah setelah guru mengisi di bulan berikutnya.'))
         + ' Seluruh riwayat tetap ada di panel bawah.</p>';
       h+='</article></section>';
     }
 
     h+='<section class="section">';
     if(typeof sectionHead==='function'){
-      var meta = adaNilai(baris) ? (ym ? labelBulan(ym) : p) : 'Belum dinilai';
+      var meta;
+      if(!barisList.length || !adaNilai(baris)) meta='Belum dinilai';
+      else meta=(ym?labelBulan(ym):p) + (barisList.length>1?(' \u00b7 '+barisList.length+' penilaian'):'');
       try{ h+=sectionHead('Laporan perkembangan', esc(meta)); }catch(e){}
     }
-    h+=laporanHtml(baris||{ periode:p });
+    if(!barisList.length){
+      h+=laporanHtml({ periode:p }, 1, 1);
+    } else {
+      barisList.forEach(function(r, i){
+        if(i) h+='<div class="zwcal-gap"></div>';
+        h+=laporanHtml(r, i+1, barisList.length);
+      });
+    }
     h+='</section>';
 
     /* keterangan skala lengkap */
