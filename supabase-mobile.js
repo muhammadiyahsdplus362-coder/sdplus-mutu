@@ -218,6 +218,8 @@
         if(String(profile.status || 'Aktif').toLowerCase() === 'nonaktif') throw new Error('Akun Anda dinonaktifkan.');
         try { localStorage.setItem(cachedEmailKey(username), email); } catch(_) {}
         const user = saveSession(Object.assign({}, profile, { id: profile.id || res.data.user.id, email }));
+        // Daftarkan HP ini sebagai satu-satunya perangkat aktif untuk akun ini.
+        try { await registerActiveSession(user.id); } catch(_) {}
         return { user, profile, authUser: res.data.user };
       }
       if(res.error) {
@@ -234,6 +236,79 @@
   async function signOut(){
     clearSession();
     try { await getClient().auth.signOut(); } catch(_) {}
+  }
+
+  // ===== SESI TUNGGAL PER PENGGUNA (single active session) =====
+  // Aturan: 1 akun = 1 HP aktif. Login baru di HP lain akan menimpa baris
+  // di tabel `user_sessions`, sehingga HP lama mendeteksi dirinya bukan lagi
+  // perangkat aktif dan otomatis logout saat app dibuka/aktif kembali.
+  var DEVICE_ID_KEY = 'zymata_device_id';
+  var _sessionKickInFlight = false;
+
+  function getDeviceId(){
+    try {
+      var id = localStorage.getItem(DEVICE_ID_KEY);
+      if(!id){
+        if(window.crypto && typeof window.crypto.randomUUID === 'function'){
+          id = window.crypto.randomUUID();
+        } else {
+          id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+        }
+        localStorage.setItem(DEVICE_ID_KEY, id);
+      }
+      return id;
+    } catch(_) {
+      // Storage tak tersedia: pakai id sementara agar tidak menendang diri sendiri.
+      if(!window.__zymataTmpDeviceId){
+        window.__zymataTmpDeviceId = 'tmp-' + Math.random().toString(36).slice(2, 12);
+      }
+      return window.__zymataTmpDeviceId;
+    }
+  }
+
+  // Daftarkan HP ini sebagai perangkat aktif untuk user (dipanggil saat login).
+  async function registerActiveSession(userId){
+    if(!userId) return;
+    try {
+      const client = getClient();
+      const now = new Date().toISOString();
+      await client.from('user_sessions').upsert({
+        user_id: userId,
+        device_id: getDeviceId(),
+        device_label: String((navigator && navigator.userAgent) || '').slice(0, 160),
+        login_at: now,
+        updated_at: now
+      }, { onConflict: 'user_id' });
+    } catch(_) { /* jangan gagalkan login hanya karena pencatatan sesi gagal */ }
+  }
+
+  // Cek apakah HP ini masih perangkat aktif. Bila sudah digantikan HP lain,
+  // logout + arahkan ke pemilih peran. FAIL-OPEN: kalau error/offline, biarkan.
+  async function checkActiveSession(){
+    if(_sessionKickInFlight) return true;
+    const session = readSession();
+    if(!session || !session.id) return true;
+    try {
+      const client = getClient();
+      const res = await client.from('user_sessions')
+        .select('device_id')
+        .eq('user_id', session.id)
+        .maybeSingle();
+      if(res && res.error) return true; // fail-open (mis. RLS/jaringan)
+      const row = res && res.data;
+      if(!row || !row.device_id) return true; // belum ada catatan sesi -> jangan tendang
+      if(row.device_id === getDeviceId()) return true; // masih perangkat aktif
+      // Perangkat ini sudah digantikan HP lain.
+      _sessionKickInFlight = true;
+      try { await signOut(); } catch(_) {}
+      try {
+        alert('Akun Anda baru saja login di perangkat lain. Sesi di HP ini diakhiri.');
+      } catch(_) {}
+      try { window.location.href = 'index.html?choose=1'; } catch(_) {}
+      return false;
+    } catch(_) {
+      return true; // fail-open
+    }
   }
 
   async function loadGuruContext(session){
@@ -1416,6 +1491,7 @@
     moduleTable, createSpecificOrFallback,
     loadAppModuleRows, createAppModuleRow, updateAppModuleRow, deleteAppModuleRow,
     signIn, signOut, readSession, saveSession, clearSession,
+    getDeviceId, registerActiveSession, checkActiveSession,
     routeForRole, roleKey, loadGuruContext, loadWaliContext, loadGuruModuleData, loadWaliModuleData,
     MODULE_FORM_SCHEMA, saveDeviceToken,
     uploadPdfFile, storage,
