@@ -112,10 +112,26 @@
       var _buildQ = function(){
         let q = client.from(table).select(_cols);
         if(options.eq) Object.keys(options.eq).forEach((key) => q = q.eq(key, options.eq[key]));
+        // [EGRESS GABUNG KELAS] Dukung `in:{ kolom:[nilai,...] }` supaya satu query
+        // bisa menggantikan N query yang hanya berbeda nilai pada kolom yang sama.
+        // Dipakai tryFilteredList() untuk menggabung filter per-kelas milik guru.
+        if(options.in) Object.keys(options.in).forEach((key) => {
+          var _v = options.in[key];
+          if(Array.isArray(_v) && _v.length) q = q.in(key, _v);
+        });
         if(options.or) q = q.or(options.or);
         if(options.gte) Object.keys(options.gte).forEach((key) => q = q.gte(key, options.gte[key]));
         if(options.lte) Object.keys(options.lte).forEach((key) => q = q.lte(key, options.lte[key]));
-        if(options.order) q = q.order(options.order, { ascending: options.ascending !== false });
+        /* [EGRESS URUT GURU] `nullsFirst` opsional. Penting untuk pengurutan MENURUN:
+           Postgres menaruh NULL di DEPAN pada ORDER BY ... DESC, jadi baris yang
+           kolom tanggalnya kosong bisa memakan seluruh kuota `limit` dan menyingkirkan
+           data nyata. Dengan nullsFirst:false, baris kosong pindah ke belakang.
+           Pemanggil yang tidak menyetel opsi ini sama sekali tidak berubah. */
+        if(options.order){
+          var _ordOpt = { ascending: options.ascending !== false };
+          if(options.nullsFirst !== undefined) _ordOpt.nullsFirst = !!options.nullsFirst;
+          q = q.order(options.order, _ordOpt);
+        }
         if(options.limit) q = q.limit(options.limit);
         return q;
       };
@@ -423,6 +439,238 @@
   var _KOL_EKSKUL_GURU = 'id,nama,nama_siswa,keterangan,catatan,kelas,kelas_id,' +
     'semester,status,tanggal,created_at,updated_at';
 
+  /* ==================================================================
+   * [EGRESS KOLOM GURU] Daftar kolom per tabel untuk loadGuruModuleData.
+   *
+   * MASALAH: hydrate guru menembak SATU query per kelas per tabel dengan
+   * `select *`. Guru dengan 17 kelas (MOH ZAHRI ANSHARI) terukur
+   * 1,89 MB per hydrate, 294 request. Karena tagihan Supabase dihitung
+   * per BYTE, biang keroknya bukan jumlah request melainkan kolom yang
+   * ikut terkirim padahal tak pernah dibaca layar.
+   *
+   * Yang paling boros dan DIBUANG di semua tabel:
+   *   payload      -> salinan penuh baris; menariknya = bayar isi DUA KALI
+   *   created_at   -> 14,4% byte absensi_siswa. Tidak dipakai: absensiRowDate()
+   *                   & guruRowDate() memang membacanya sebagai cadangan, tapi
+   *                   sudah diperiksa ke server: 0 dari 11.103 baris absensi_siswa
+   *                   (dan 0 dari semua tabel lain) yang kolom `tanggal`-nya kosong,
+   *                   jadi cadangan itu tak pernah terpakai.
+   *   updated_at   -> 13,6% byte absensi_siswa, nol pembaca di app guru
+   *   client_key   -> 6,9%, hanya dipakai saat MENULIS
+   *   metadata     -> terisi di 503/503 baris jurnal_kelas, nol pembaca
+   *   tahun_ajaran, dicatat_oleh, petugas, kelas_normalized, mapel_normalized,
+   *   mapel_id, kelas_id, guru_id, jadwal_* , guru_utama_*, guru_pengganti_*,
+   *   alasan_pengganti, pdf_name/pdf_path/pdf_size/pdf_type/pdf_data/pdf_local_only
+   *   -> tidak ada satu pun pembacanya di guru-shell.js (sudah di-grep).
+   *
+   * Semua daftar di bawah SUDAH DIUJI ke REST bersama `order=tanggal.desc`
+   * dan balasannya HTTP 200. Ini penting: bila satu nama kolom saja salah,
+   * select() akan mengulang dengan '*' (lihat _healCols) sehingga penghematan
+   * batal DAN biayanya jadi dua kali.
+   * ================================================================== */
+
+  // absensi_siswa (16 kolom -> 9). Dibaca: getTodayAbsensiMap, agAbsensiKey,
+  // agResolveAbsensiSiswa (siswa_id/nis/id/nisn), renderRiwayatAbsenBody.
+  // Terukur: 671 KB -> 293 KB untuk 17 kelas.
+  var _KOL_G_ABSENSI = 'id,kelas,tanggal,siswa_id,status,nis,nama,nama_siswa,keterangan';
+
+  // jurnal_kelas (39 kolom -> 15). Dibaca: normalizeItem + guruPdfLinks.
+  // Terukur: 386 KB -> 142 KB.
+  var _KOL_G_JURNAL_KELAS = 'id,tanggal,kelas,mapel,semester,jam_ke,materi,kegiatan,' +
+    'catatan,status,guru,guru_nama,metode,pdf_files,pdf_url';
+
+  // jurnal_guru (42 kolom -> 20). Ditarik per-identitas guru, bukan per kelas.
+  var _KOL_G_JURNAL_GURU = 'id,tanggal,kelas,mapel,semester,jam_ke,materi,kegiatan,' +
+    'catatan,status,guru,guru_nama,nip,guru_nip,metode,tindak_lanjut,' +
+    'jumlah_hadir,jumlah_siswa,pdf_files,pdf_url';
+
+  // jurnal_siswa (37 kolom -> 14) — modul Catatan Siswa.
+  var _KOL_G_JURNAL_SISWA = 'id,tanggal,kelas,kategori,catatan,tindak_lanjut,siswa_id,' +
+    'siswa_nis,nis,siswa_nama,nama_siswa,mapel,guru_nama,status_visibilitas';
+
+  // mutabaah_rumah (53 kolom -> 26). Semua kolom di sini benar-benar dirender
+  // renderMutabaahRumahPenilaian(). Terukur: 97 KB -> 36 KB.
+  // Catatan: kolom `nama` TIDAK ADA di tabel ini (sudah diuji, memintanya = HTTP 400).
+  var _KOL_G_MUTABAAH_RUMAH = 'id,tanggal,kelas,siswa_id,nis,nama_siswa,belajar,kendala,' +
+    'akhlak,shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,' +
+    'shalat_count,konfirmasi_wali,nama_wali,status_review,tilawah_rumah,murojaah_rumah,' +
+    'catatan_wali,ziyadah_sekolah,status_setoran,catatan_guru,status,catatan';
+
+  // surat (42 kolom -> 15) — modul Surat/Izin.
+  var _KOL_G_SURAT = 'id,tanggal,nomor,perihal,jenis,pihak,status,isi,siswa_id,' +
+    'nama_siswa,kelas,catatan,nama_wali,tgl_mulai,tgl_selesai';
+
+  // Tabel perkembangan: semuanya lewat normalizeItem, jadi kolom yang diambil
+  // = tepat yang dibaca detailDefs di normalizeItem + kunci kelas/siswa.
+  var _KOL_G_KARAKTER = 'id,tanggal,kelas,siswa_id,nis,nama,nama_siswa,semester,' +
+    'disiplin,sopan,jujur,kerja_keras,tanggung_jawab,aspek,nilai,catatan';
+  var _KOL_G_PRESTASI = 'id,tanggal,kelas,siswa_id,nis,nama,nama_siswa,semester,lomba,' +
+    'jenis,tingkat,peringkat,tahun,prestasi,penyelenggara,status,catatan,keterangan';
+  // ibadah: kolom `status` TIDAK ADA di tabel ini (sudah diuji -> HTTP 400).
+  var _KOL_G_IBADAH = 'id,tanggal,kelas,siswa_id,nis,nama,nama_siswa,semester,bulan,' +
+    'tahun,shalat,sunnah,puasa,sedekah,tilawah,catatan,keterangan';
+  var _KOL_G_PELANGGARAN = 'id,tanggal,kelas,snapshot_kelas,siswa_id,nis,nama,nama_siswa,' +
+    'snapshot_nama,snapshot_nis,kode,pelanggaran,poin,jenis,kategori,tindak_lanjut,' +
+    'status,catatan,keterangan';
+
+  // keuangan (34 kolom -> 16). Terukur: 39 KB -> 13 KB.
+  var _KOL_G_KEUANGAN = 'id,tanggal,keterangan,kategori,jenis,nominal,petugas,siswa_id,' +
+    'nis,nama_siswa,kelas,status,catatan,spp_bulan,spp_tahun,metode_bayar';
+
+  // kalender_events (15 kolom -> 10).
+  var _KOL_G_KALENDER = 'id,hari,bulan,tahun,nama,kategori,tanggal,kat,mulai,selesai';
+
+  // absensi_guru (16 kolom -> 10). Dibaca: syncTeacherAttendanceFromTodayRow +
+  // renderTeacherAttendanceRiwayat. Kolom lat/lng/payload tidak dibaca.
+  var _KOL_G_ABSENSI_GURU = 'id,tanggal,sesi,nip,status,jam_masuk,jam_pulang,keterangan,nama,ket';
+
+  /* ==================== [EGRESS WALI] kolom & identitas jalur wali ====================
+     Dua masalah berbeda diselesaikan di sini.
+
+     (a) JUMLAH REQUEST. loadWaliModuleData mencoba 6 varian identitas anak
+         (siswa_id=nis, siswa_id=id, id_siswa, nis, siswa_nis, snapshot_nis) SATU PER SATU
+         untuk setiap tabel. 12 dari 18 tabel menghabiskan 6 query yang SEMUANYA HTTP 400
+         karena kolomnya memang tidak ada di tabel itu. Karena tiap respons membawa
+         ~955 B header tetap, 74% egress hydrate wali adalah header, bukan data.
+         Solusi: _ORID = daftar kolom identitas yang BENAR-BENAR ADA per tabel
+         (sumber: OpenAPI spec PostgREST, otoritatif walau tabelnya sedang kosong),
+         lalu satu query `or=(...)`.
+
+     (b) UKURAN KOLOM. Daftar _KOL_W_* di bawah = irisan antara kolom yang benar-benar
+         dibaca UI wali (termasuk normalizeItem, waliItemKey, belongsToChild,
+         waliRowMilikAnak) dengan kolom yang benar-benar ada di tabel.
+         Yang dibuang di semua tabel: `payload` (salinan penuh baris = bayar isi dua kali),
+         `updated_at`, `client_key`, dan kolom milik guru/jadwal (guru_nip, kelas_id,
+         mapel_normalized, jadwal_*, dst) yang nol pembaca di app wali.
+
+     PENTING — kolom yang WAJIB selalu ikut, jangan dihapus dari daftar mana pun:
+       id                                          -> waliItemKey (kunci badge "sudah dibaca")
+       siswa_id, id_siswa, nis, siswa_nis, snapshot_nis, nama_siswa, nama, kelas
+                                                   -> belongsToChild (saringan privasi)
+       tanggal/tgl/waktu/created_at                -> pengurutan riwayat & filter bulan
+     Semua daftar sudah diuji ke REST satu per satu (HTTP 200). Kalau satu nama salah,
+     select() mengulang dengan '*' -> hemat batal DAN biaya jadi dua kali. */
+
+  // Kolom identitas anak yang ADA di tiap tabel. Dipakai membangun or=(...).
+  // Yang TIDAK terdaftar berarti kolomnya tidak ada -> dulu selalu HTTP 400.
+  var _ORID = {
+    absensi_siswa:        ['siswa_id','nis'],
+    nilai_siswa:          ['siswa_id','nis'],
+    ulangan_harian_nilai: ['siswa_id','nis'],
+    ujian_semester_nilai: ['siswa_id','nis'],
+    jurnal_siswa:         ['siswa_id','nis','siswa_nis'],
+    ibadah:               ['siswa_id','id_siswa','nis'],
+    mutabaah_rumah:       ['siswa_id','nis','siswa_nis'],
+    karakter:             ['siswa_id','id_siswa','nis'],
+    prestasi:             ['siswa_id','id_siswa','nis','siswa_nis'],
+    pelanggaran_siswa:    ['siswa_id','nis','snapshot_nis'],
+    surat:                ['siswa_id','siswa_nis'],   // TIDAK punya kolom `nis`
+    spp_pembayaran:       ['siswa_id','nis','siswa_nis'],
+    tagihan_spp:          ['siswa_id','nis'],
+    keuangan:             ['siswa_id','nis','siswa_nis'],
+    tabungan_siswa:       ['siswa_id','nis','siswa_nis'],
+    tabungan_umum:        ['siswa_id','nis']
+  };
+  /* Kolom identitas bertipe bigint/integer (bukan text). Diuji ke server:
+     ibadah/karakter/prestasi/hafalan.siswa_id = bigint, pelanggaran_siswa.siswa_id = integer.
+     Memberi nilai non-numerik ke kolom ini membuat SELURUH or= gagal HTTP 400 (22P02),
+     bukan cuma cabang itu — beda dari jalur lama yang tiap filter query terpisah.
+     Jadi cabang untuk kolom ini hanya dipasang bila nilainya angka murni.
+     (Diperiksa ke data produksi: 401 siswa, 0 nis dan 0 id yang non-angka. Ini
+     penjagaan untuk data masa depan, bukan kondisi yang ada sekarang.) */
+  var _ORID_NUM = {
+    'ibadah::siswa_id': true, 'karakter::siswa_id': true, 'prestasi::siswa_id': true,
+    'pelanggaran_siswa::siswa_id': true
+  };
+
+  // Kutip nilai gaya PostgREST supaya koma / tanda kurung / titik pada nama anak
+  // tidak dibaca sebagai pemisah cabang or=. Sudah diuji: nama dengan , ( ) . ' "
+  // semuanya HTTP 200.
+  function _orQ(v){ return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
+
+  // Susun ekspresi or=(...) untuk satu tabel. Balikan '' berarti "jangan pakai or,
+  // tetap jalur lama" (mis. tabel tidak terdaftar atau identitas anak tidak diketahui).
+  // Pasangan kolom->nilai di bawah SENGAJA dibuat sama persis dengan `filters` jalur lama:
+  //   siswa_id     <- NIS dan id internal   (kolom ini di banyak tabel berisi NIS)
+  //   id_siswa     <- HANYA id internal
+  //   nis / siswa_nis / snapshot_nis <- HANYA NIS
+  // Jangan diperluas: menambah cabang berarti menarik himpunan mentah yang lebih besar
+  // dari yang pernah diuji, dan itu jalur data anak orang lain.
+  function _orWali(table, nis, siswaId, namaSiswa, kelas, pakaiNama){
+    var kols = _ORID[table];
+    if(!kols) return '';
+    var pakai = {
+      siswa_id:     [nis, (siswaId && String(siswaId) !== String(nis)) ? siswaId : null],
+      id_siswa:     [siswaId],
+      nis:          [nis],
+      nis_siswa:    [nis],
+      siswa_nis:    [nis],
+      snapshot_nis: [nis]
+    };
+    var cab = [];
+    kols.forEach(function(c){
+      var numOnly = _ORID_NUM[table + '::' + c] === true;
+      (pakai[c] || []).forEach(function(v){
+        if(!v) return;
+        if(numOnly && !/^\d+$/.test(String(v))) return;
+        var e = c + '.eq.' + _orQ(v);
+        if(cab.indexOf(e) === -1) cab.push(e);
+      });
+    });
+    if(!cab.length) return '';
+    // Cabang nama+kelas: hanya untuk tabel nilai (meniru nilaiFilters jalur lama).
+    if(pakaiNama && namaSiswa && kelas) cab.push('and(nama_siswa.eq.' + _orQ(namaSiswa) + ',kelas.eq.' + _orQ(kelas) + ')');
+    return cab.join(',');
+  }
+
+  // ---- daftar kolom per tabel (jalur wali) ----
+  // absensi_siswa 16 -> 10. Dibuang: updated_at, client_key, payload, tahun_ajaran,
+  // dicatat_oleh, petugas (nol pembaca di app wali).
+  var _KOL_W_ABSENSI = 'id,kelas,tanggal,siswa_id,status,created_at,nis,nama,keterangan,nama_siswa';
+  // nilai_siswa 19 -> 15. Tabel ini TIDAK punya kolom `tanggal` (hanya created_at).
+  var _KOL_W_NILAI = 'id,siswa_id,kelas,mapel,semester,nilai_tugas,nilai_ujian,catatan,' +
+    'created_at,nis,nama,nilai_akhir,nama_siswa,nilai,jenis';
+  var _KOL_W_UH = 'id,kelas,mapel,tanggal,semester,kkm,siswa_id,nis,nama_siswa,nilai,' +
+    'status,catatan,created_at,judul';
+  var _KOL_W_US = 'id,kelas,mapel,jenis,tanggal,semester,kkm,siswa_id,nis,nama_siswa,' +
+    'nilai_akhir,status,catatan,created_at';
+  // jurnal_siswa 37 -> 14. Dibuang semua kolom guru/jadwal/terkirim/ditarik.
+  var _KOL_W_JURNAL_SISWA = 'id,tanggal,siswa_id,siswa_nis,siswa_nama,kelas,kategori,catatan,' +
+    'tindak_lanjut,status_visibilitas,created_at,nis,nama_siswa,mapel';
+  var _KOL_W_IBADAH = 'id,siswa_id,nama_siswa,kelas,bulan,tahun,shalat,sunnah,puasa,sedekah,' +
+    'created_at,id_siswa,nis,nama,tanggal,catatan,semester,keterangan';
+  // mutabaah_rumah 53 -> 34. Tabel paling gemuk di jalur wali; semua kolom yang
+  // tersisa benar-benar dirender kartu Mutabaah + riwayatnya.
+  var _KOL_W_MUTABAAH_RUMAH = 'id,siswa_id,nis,nama_siswa,kelas,tanggal,belajar,kendala,' +
+    'shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,shalat_count,' +
+    'akhlak,catatan_akhlak,konfirmasi_wali,nama_wali,waktu_submit,status_review,created_at,' +
+    'siswa_nis,mapel,tahun_ajaran,semester,status,catatan,waktu_submit_wali,tilawah_rumah,' +
+    'murojaah_rumah,catatan_wali,ziyadah_sekolah,status_setoran,catatan_guru';
+  var _KOL_W_KARAKTER = 'id,siswa_id,nama_siswa,kelas,semester,disiplin,sopan,jujur,' +
+    'kerja_keras,tanggung_jawab,created_at,id_siswa,nis,nama,tanggal,nilai,catatan';
+  var _KOL_W_PRESTASI = 'id,siswa_id,nama_siswa,kelas,lomba,jenis,tingkat,peringkat,tahun,' +
+    'created_at,siswa_nis,mapel,semester,tanggal,status,catatan,penyelenggara,keterangan,' +
+    'id_siswa,nis,nama,prestasi';
+  var _KOL_W_PELANGGARAN = 'id,siswa_id,tanggal,kode,pelanggaran,poin,catatan,status,created_at,' +
+    'snapshot_nis,snapshot_nama,snapshot_kelas,nis,nama,nama_siswa,kelas,jenis,tindak_lanjut,' +
+    'kategori,keterangan';
+  // surat 42 -> 19. Dibuang target_*/lampiran_url/nisn/hp_wali (nol pembaca di app wali).
+  var _KOL_W_SURAT = 'id,nomor,perihal,jenis,pihak,tanggal,status,created_at,isi,siswa_id,' +
+    'siswa_nis,nama_siswa,kelas,mapel,semester,catatan,nama_wali,tgl_mulai,tgl_selesai';
+  // Tabel keuangan: kolom pemilik-anak (nis/siswa_nis/nama_siswa) WAJIB ada karena
+  // waliRowMilikAnak() menyaringnya lagi di wali-shell.js:715-727.
+  var _KOL_W_SPP_BAYAR = 'id,siswa_id,siswa_nis,nama_siswa,kelas,mapel,tahun_ajaran,semester,' +
+    'tanggal,status,catatan,created_at,bulan,tahun,nominal,tanggal_bayar,metode,keterangan,nis';
+  var _KOL_W_TAGIHAN = 'id,siswa_id,nis,nama_siswa,kelas,bulan,tahun,nominal,status,created_at,' +
+    'tanggal_lunas,tanggal_bayar';
+  var _KOL_W_KEUANGAN = 'id,tanggal,keterangan,kategori,jenis,nominal,created_at,siswa_id,' +
+    'siswa_nis,nama_siswa,kelas,mapel,tahun_ajaran,semester,status,catatan,spp_bulan,' +
+    'spp_tahun,metode_bayar,nis';
+  var _KOL_W_TABUNGAN = 'id,siswa_id,siswa_nis,nama_siswa,kelas,mapel,tahun_ajaran,semester,' +
+    'tanggal,status,catatan,created_at,jenis,debit,kredit,saldo,keterangan,petugas,metode,nis,nominal';
+  var _KOL_W_TABUNGAN_UMUM = 'id,siswa_id,nis,nama_siswa,kelas,nama_wali,jenis,nominal,debit,' +
+    'kredit,saldo,keterangan,tanggal,petugas,metode,created_at';
+
   async function loadWaliContext(session){
     session = session || readSession();
     if(!session) return null;
@@ -524,8 +772,74 @@
     opts = opts || {};
     const collected = [];
     const seen = {};
+    const _lim = limit || 50;
+    /* [EGRESS KOLOM GURU] Dua opsi tambahan, dua-duanya opsional supaya pemanggil lama
+       tidak berubah perilaku sama sekali:
+         opts.select : daftar kolom yang benar-benar dibaca UI. Tanpa ini seluruh kolom
+                       (termasuk `payload` yang menyalin isi baris, dan created_at/
+                       updated_at yang tak pernah dipakai) ikut lewat jaringan.
+                       Kalau daftarnya ditolak server, select() sudah otomatis mengulang
+                       dengan '*' (lihat _healCols), jadi paling buruk = perilaku lama.
+         opts.order  : kolom pengurutan. Ini BUKAN kosmetik: `limit` tanpa ORDER BY
+                       membuat server bebas memilih baris mana yang dikembalikan, jadi
+                       dua pembacaan berurutan bisa memberi isi berbeda (terukur:
+                       105 baris berganti antar dua pemanggilan absensi_siswa).
+                       Dengan urutan tanggal menurun, yang terambil selalu yang TERBARU
+                       — dan itu justru yang dipakai layar riwayat. */
+    const _mkOpt = function(eq){
+      const o = { eq: eq, limit: _lim };
+      if(opts.select) o.select = opts.select;
+      if(opts.order){
+        o.order = opts.order;
+        o.ascending = (opts.ascending === true);
+        if(opts.nullsFirst !== undefined) o.nullsFirst = opts.nullsFirst;
+      }
+      return o;
+    };
+    /* [EGRESS GABUNG WALI] `opts.or`: satu query menggantikan N query yang hanya berbeda
+       kolom identitas anak. Alasannya BUKAN jumlah byte isi, tapi HEADER: tiap respons
+       REST membawa ~955 B header TETAP berapa pun isinya (terukur: respons 0 baris =
+       966 B header + 2 B isi). Pada hydrate wali tiap tabel hanya mengembalikan 0-2
+       baris tapi ditembak 6x, sehingga 74% egress-nya adalah header + preflight OPTIONS.
+       Ini KEBALIKAN dari kasus guru, di mana satu tabel bisa 671 KB isi sehingga
+       pembatasan kolom yang menentukan.
+
+       Aturan keselamatan (jalur ini menyangkut privasi data anak):
+        1. Kalau or= gagal karena APA PUN (kolom tidak ada, tipe bigint menolak nilai
+           non-numerik, sintaks), kita MUNDUR ke loop per-filter lama. Jadi paling buruk
+           = perilaku lama, bukan modul kosong.
+        2. Pemanggil TETAP wajib menyaring hasilnya dengan belongsToChild(). or= menarik
+           himpunan mentah yang lebih besar, dan hanya saringan itu yang menentukan
+           baris mana yang boleh dilihat wali. Sudah diuji pada 12 anak nyata x 18 tabel:
+           hasil setelah belongsToChild IDENTIK dengan jalur lama, 0 baris hilang.
+        3. `strict` tidak lagi berarti "berhenti di filter pertama" untuk jalur or=,
+           karena satu query sudah mencakup semua kemungkinan sekaligus. */
+    if(opts.or){
+      const _oOpt = _mkOpt(null);
+      _oOpt.or = opts.or;
+      let _orGagal = false;
+      const _res = await select(table, _oOpt).catch(function(e){ return { error: e }; });
+      if(_res && _res.error){
+        _orGagal = true;
+        __noteErrorMissingCol(table, _oOpt, _res.error);
+        console.warn('[ZymataMobile.tryFilteredList ' + table + '] or= ditolak (' +
+          String((_res.error && _res.error.message) || _res.error) + ') -> mundur ke jalur per-filter.');
+      } else if(Array.isArray(_res.data)){
+        for(const r of _res.data){
+          const k = r && (r.id || JSON.stringify(r));
+          if(!seen[k]){ seen[k] = true; collected.push(r); }
+        }
+      }
+      if(!_orGagal){
+        // Sukses (termasuk sukses dengan 0 baris): jangan tembak filter satu-satu lagi.
+        if(collected.length) return collected;
+        if(opts.strict || opts.noFallback) return [];
+        return await safeList(table, _mkOpt(null));
+      }
+      // gagal -> lanjut ke loop per-filter di bawah (perilaku lama)
+    }
     for(const eq of filters){
-      const rows = await safeList(table, { eq, limit: limit || 50 });
+      const rows = await safeList(table, _mkOpt(eq));
       for(const r of rows){
         const k = r && (r.id || JSON.stringify(r));
         if(!seen[k]){ seen[k] = true; collected.push(r); }
@@ -539,7 +853,7 @@
     // Modul berbasis kelas (guru): JANGAN fallback ambil semua -> cegah kelas lain bocor ke riwayat.
     if(opts.noFallback) return [];
     // Default fallback: ambil data terbaru (untuk guru/role lain yang dilindungi RLS).
-    return await safeList(table, { limit: limit || 50 });
+    return await safeList(table, _mkOpt(null));
   }
 
   function normalizeItem(row, fallbackTitle){
@@ -1201,30 +1515,56 @@
       mutabaahRumah: appRowsToItems(await loadAppModuleRows(appPrefix + 'mutabaah-rumah')),
       mutabaahQuran: appRowsToItems(await loadAppModuleRows(appPrefix + 'mutabaah-quran'))
     };
+    /* [EGRESS KOLOM GURU] Opsi bersama untuk semua pembacaan per-kelas.
+       `order:'tanggal'` + `nullsFirst:false` bukan kosmetik: `limit` TANPA ORDER BY
+       membuat server bebas memilih baris mana yang dikembalikan (terukur: 105 baris
+       berganti antar dua pemanggilan absensi_siswa yang identik). Dengan urutan
+       tanggal MENURUN, yang terambil selalu yang terbaru — persis yang dipakai
+       layar riwayat. nullsFirst:false wajib disertakan karena Postgres menaruh NULL
+       di depan pada urutan DESC, yang bisa memakan seluruh kuota limit. */
+    const _urutTgl = { noFallback: true, order: 'tanggal', ascending: false, nullsFirst: false };
+    const _pk = function(select){ return Object.assign({ select: select }, _urutTgl); };
     return {
-      presensiGuru: nip ? await tryFilteredList('absensi_guru', [{ nip }], 90, { strict: true }) : [],
-      absensi: mobile.absensi.concat(await tryFilteredList('absensi_siswa', allKelasFilters, 120, { noFallback: true })),
-      nilai: mobile.nilai
-        .concat((await tryFilteredList('nilai_siswa', allKelasFilters, 120, { noFallback: true })).map(function(r){ return Object.assign({}, r, {__tipe:'nilai'}); }))
-        .concat((await tryFilteredList('ulangan_harian_nilai', allKelasFilters, 120, { noFallback: true })).map(function(r){ return Object.assign({}, r, {__tipe:'ulangan-harian'}); }))
-        .concat((await tryFilteredList('ujian_semester_nilai', allKelasFilters, 120, { noFallback: true })).map(function(r){ return Object.assign({}, r, {__tipe:'ujian-semester'}); })),
-      jurnal: mobile.jurnal.concat(await tryFilteredList('jurnal_guru', commonGuruFilters, 50, { noFallback: true })),
-      jurnalKelas: mobile.jurnalKelas.concat(await tryFilteredList('jurnal_kelas', allKelasFilters, 80, { noFallback: true })),
-      catatan: mobile.catatan.concat(await tryFilteredList('jurnal_siswa', allKelasFilters, 80, { noFallback: true })),
-      hafalan: mobile.hafalan.concat(await tryFilteredList('hafalan', allKelasFilters, 80, { noFallback: true })),
-      membaca_quran: mobile.membaca_quran.concat(await tryFilteredList('membaca_quran', allKelasFilters, 80, { noFallback: true })),
-      ibadah: mobile.ibadah.concat(await tryFilteredList('ibadah', allKelasFilters, 80, { noFallback: true })),
-      surat: mobile.surat.concat(await tryFilteredList('surat', allKelasFilters, 80, { noFallback: true })),
+      presensiGuru: nip ? await tryFilteredList('absensi_guru', [{ nip }], 90, { strict: true, select: _KOL_G_ABSENSI_GURU, order: 'tanggal', ascending: false, nullsFirst: false }) : [],
+      absensi: mobile.absensi.concat(await tryFilteredList('absensi_siswa', allKelasFilters, 120, _pk(_KOL_G_ABSENSI))),
+      /* [EGRESS MODUL MATI] `nilai` TIDAK PERNAH dibaca dari sini. guru-shell.js:1999
+         mengembalikan renderScoreModule(detail) sebelum baris 2001 yang memakai
+         supabaseModules[dataKey], dan renderScoreModule mengambil angkanya dari
+         appState.nilaiNhStore (lokal), bukan dari Supabase. Terukur 39 KB + 51 request
+         (3 tabel x 17 kelas) terbuang tiap hydrate. Kuncinya tetap ada supaya bentuk
+         objek yang dikembalikan tidak berubah bagi pemanggil lain. */
+      nilai: mobile.nilai,
+      jurnal: mobile.jurnal.concat(await tryFilteredList('jurnal_guru', commonGuruFilters, 50, _pk(_KOL_G_JURNAL_GURU))),
+      jurnalKelas: mobile.jurnalKelas.concat(await tryFilteredList('jurnal_kelas', allKelasFilters, 80, _pk(_KOL_G_JURNAL_KELAS))),
+      catatan: mobile.catatan.concat(await tryFilteredList('jurnal_siswa', allKelasFilters, 80, _pk(_KOL_G_JURNAL_SISWA))),
+      /* [EGRESS MODUL MATI] `hafalan` & `membaca_quran` tidak punya entri di
+         guruModuleDataKey() (guru-shell.js:1889-1911) dan tidak ada route
+         `module:hafalan` / `module:membaca-quran` di menu guru, jadi hasilnya
+         tidak pernah sampai ke layar. Setoran hafalan di app guru memakai modul
+         Mutaba'ah Tahfidz yang membaca tabel mutabaah_tahfidz_riwayat sendiri. */
+      hafalan: mobile.hafalan,
+      membaca_quran: mobile.membaca_quran,
+      ibadah: mobile.ibadah.concat(await tryFilteredList('ibadah', allKelasFilters, 80, _pk(_KOL_G_IBADAH))),
+      surat: mobile.surat.concat(await tryFilteredList('surat', allKelasFilters, 80, _pk(_KOL_G_SURAT))),
       pengumuman: mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 }))),
-      keuangan: mobile.keuangan.concat(await safeList('keuangan', { order: 'tanggal', ascending: false, limit: 80 })),
-      tabungan: mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', allKelasFilters, 80, { noFallback: true })),
-      karakter: mobile.karakter.concat(await tryFilteredList('karakter', allKelasFilters, 80, { noFallback: true })),
-      prestasi: mobile.prestasi.concat(await tryFilteredList('prestasi', allKelasFilters, 80, { noFallback: true })),
+      keuangan: mobile.keuangan.concat(await safeList('keuangan', { select: _KOL_G_KEUANGAN, order: 'tanggal', ascending: false, nullsFirst: false, limit: 80 })),
+      /* [EGRESS MODUL MATI] `tabungan` adalah pemborosan TERBESAR di hydrate guru:
+         641 KB dari 1,89 MB (34%) untuk 17 kelas, dan NOL pembaca. guru-shell.js:1996
+         mengembalikan renderTabunganInputGuruModule() sebelum baris 2001, sedangkan
+         halaman Tabungan memakai loader sendiri (loadTabunganData, guru-shell.js:1611)
+         yang menarik satu kelas saja dengan 18 kolom terpilih. */
+      tabungan: mobile.tabungan,
+      karakter: mobile.karakter.concat(await tryFilteredList('karakter', allKelasFilters, 80, _pk(_KOL_G_KARAKTER))),
+      prestasi: mobile.prestasi.concat(await tryFilteredList('prestasi', allKelasFilters, 80, _pk(_KOL_G_PRESTASI))),
       ekskul: mobile.ekskul.concat(await safeList('ekskul', { select: _KOL_EKSKUL_GURU, limit: 50 })),
-      pelanggaran: mobile.pelanggaran.concat(await tryFilteredList('pelanggaran_siswa', pelanggaranFilters, 80, { noFallback: true })),
-      kalender: mobile.kalender.concat(await safeList('kalender_events', { order: 'tahun', ascending: false, limit: 80 })),
-      mutabaahRumah: mobile.mutabaahRumah.concat(await tryFilteredList('mutabaah_rumah', allKelasFilters, 80, { noFallback: true })),
-      mutabaahQuran: mobile.mutabaahQuran.concat(await tryFilteredList('mutabaah_quran', allKelasFilters, 80, { noFallback: true }))
+      pelanggaran: mobile.pelanggaran.concat(await tryFilteredList('pelanggaran_siswa', pelanggaranFilters, 80, _pk(_KOL_G_PELANGGARAN))),
+      kalender: mobile.kalender.concat(await safeList('kalender_events', { select: _KOL_G_KALENDER, order: 'tahun', ascending: false, nullsFirst: false, limit: 80 })),
+      mutabaahRumah: mobile.mutabaahRumah.concat(await tryFilteredList('mutabaah_rumah', allKelasFilters, 80, _pk(_KOL_G_MUTABAAH_RUMAH))),
+      /* [EGRESS TABEL HANTU] Tabel `mutabaah_quran` TIDAK ADA di database (dicek ke
+         REST: HTTP 404 PGRST205 "Could not find the table"). Sebelumnya tetap
+         ditembak 17x per hydrate dan selalu gagal. `mutabaahQuran` juga tidak ada
+         di guruModuleDataKey(), jadi tidak ada yang menunggu hasilnya. */
+      mutabaahQuran: mobile.mutabaahQuran
     };
   }
 
@@ -1301,27 +1641,68 @@
       tabungan: appRowsToItems(await loadAppModuleRows(appPrefix + 'tabungan')),
       pengumuman: appRowsToItems(await loadAppModuleRows(appPrefix + 'pengumuman-wali'))
     };
-    const strict = { strict: true };
     const filterMine = function(arr){ return (arr||[]).filter(belongsToChild); };
+    /* [EGRESS WALI] Penyusun opsi bersama. Tiga hal sekaligus:
+         select : batasi kolom (lihat _KOL_W_* di atas).
+         or     : gabungkan 6 varian identitas jadi SATU query. Kalau tabel tidak
+                  terdaftar di _ORID atau identitas anak tak diketahui, `or` bernilai ''
+                  sehingga tryFilteredList otomatis memakai jalur per-filter lama.
+         order  : `limit` TANPA ORDER BY membuat server bebas memilih baris mana yang
+                  dikembalikan (terukur di jalur guru: 105 baris berganti antar dua
+                  pemanggilan identik, dan absensi hari ini 0/399 terambil). Diurut
+                  MENURUN supaya yang terambil selalu yang terbaru.
+                  nullsFirst:false wajib karena Postgres menaruh NULL di depan pada DESC.
+       `strict:true` tetap dipasang: itu yang menjamin TIDAK ada fallback "ambil semua
+       baris tabel" bila anak ini belum punya data — jaring anti-kebocoran jalur wali.
+       Hasil setiap pemanggilan tetap disaring filterMine/belongsToChild. */
+    const _urutW = function(kolTgl){ return { order: kolTgl, ascending: false, nullsFirst: false }; };
+    const _w = function(table, select, kolTgl, pakaiNama){
+      const o = Object.assign({ strict: true, select: select }, _urutW(kolTgl || 'tanggal'));
+      const or = _orWali(table, nis, siswaId, namaSiswa, kelas, pakaiNama === true);
+      if(or) o.or = or;
+      return o;
+    };
     return {
-      absensi: filterMine(mobile.absensi.concat(await tryFilteredList('absensi_siswa', filters, 80, strict))),
+      absensi: filterMine(mobile.absensi.concat(await tryFilteredList('absensi_siswa', filters, 80, _w('absensi_siswa', _KOL_W_ABSENSI)))),
       nilai: filterMine(mobile.nilai
-        .concat(await tryFilteredList('nilai_siswa', nilaiFilters, 80, strict))
-        .concat(await tryFilteredList('ulangan_harian_nilai', nilaiFilters, 80, strict))
-        .concat(await tryFilteredList('ujian_semester_nilai', nilaiFilters, 80, strict))),
-      catatan: filterMine(mobile.catatan.concat(await tryFilteredList('jurnal_siswa', filters, 50, strict))),
-      hafalan: filterMine(mobile.hafalan.concat(await tryFilteredList('hafalan', filters, 50, strict))),
-      ibadah: filterMine(mobile.ibadah.concat(await tryFilteredList('ibadah', filters, 50, strict))),
-      membaca_quran: filterMine(mobile.membaca_quran.concat(await tryFilteredList('membaca_quran', filters, 50, strict))),
-      mutabaahRumah: filterMine((mobile.mutabaahRumah||[]).concat(await tryFilteredList('mutabaah_rumah', filters, 50, strict))),
-      mutabaahQuran: filterMine((mobile.mutabaahQuran||[]).concat(await tryFilteredList('mutabaah_quran', filters, 50, strict))),
-      karakter: filterMine(await tryFilteredList('karakter', filters, 50, strict)),
-      prestasi: filterMine(await tryFilteredList('prestasi', filters, 50, strict)),
-      pelanggaran: filterMine(await tryFilteredList('pelanggaran_siswa', filters, 50, strict)),
-      surat: filterMine(mobile.surat.concat(await tryFilteredList('surat', filters, 50, strict))),
-      keuangan: filterMine(mobile.keuangan.concat((await tryFilteredList('spp_pembayaran', filters, 30, strict)).concat(await tryFilteredList('tagihan_spp', filters, 30, strict)).concat(await tryFilteredList('keuangan', filters, 30, strict)))),
-      tabungan: filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, strict))),
-      tabunganUmum: filterMine(await tryFilteredList('tabungan_umum', filters, 30, strict)),
+        // nilai_siswa TIDAK punya kolom `tanggal` (sudah diperiksa ke server) -> urut created_at.
+        .concat(await tryFilteredList('nilai_siswa', nilaiFilters, 80, _w('nilai_siswa', _KOL_W_NILAI, 'created_at', true)))
+        .concat(await tryFilteredList('ulangan_harian_nilai', nilaiFilters, 80, _w('ulangan_harian_nilai', _KOL_W_UH, 'tanggal', true)))
+        .concat(await tryFilteredList('ujian_semester_nilai', nilaiFilters, 80, _w('ujian_semester_nilai', _KOL_W_US, 'tanggal', true)))),
+      catatan: filterMine(mobile.catatan.concat(await tryFilteredList('jurnal_siswa', filters, 50, _w('jurnal_siswa', _KOL_W_JURNAL_SISWA)))),
+      /* [EGRESS MODUL MATI] `hafalan` ditarik 50 baris tiap hydrate, tapi hasilnya buntu:
+         wali-shell.js:3265-3272 hanya mengisi appState.hafalanSurah/hafalanProgress/
+         hafalanTanzil/hafalanHalaman, dan keempat field itu TIDAK dibaca renderer mana pun
+         (dicek di wali-shell.js + wali-shell.html: hanya penulisan di baris 57-60,
+         3189-3192, 3269-3277 — nol pembacaan). Komentar di wali-shell.js:3263 menyebut
+         renderAcademic/renderChild sebagai pembaca, tapi kedua fungsi itu tidak
+         menyentuhnya. Kunci tetap ada (array kosong) supaya bentuk objek tidak berubah. */
+      hafalan: mobile.hafalan,
+      ibadah: filterMine(mobile.ibadah.concat(await tryFilteredList('ibadah', filters, 50, _w('ibadah', _KOL_W_IBADAH)))),
+      /* [EGRESS MODUL MATI] `membaca_quran`: NOL pembaca di app wali. wali-shell.js:2020
+         menetapkan `membacaRows = []` (array kosong literal), sehingga `sorotanMembaca`
+         (baris 2031) dihitung lalu dibuang tanpa pernah dirender. Tidak ada `sm.membaca_quran`
+         di mana pun, dan 'membaca_quran' bukan dataKey mana pun di waliModuleDataKey(). */
+      membaca_quran: mobile.membaca_quran,
+      mutabaahRumah: filterMine((mobile.mutabaahRumah||[]).concat(await tryFilteredList('mutabaah_rumah', filters, 50, _w('mutabaah_rumah', _KOL_W_MUTABAAH_RUMAH)))),
+      /* [EGRESS TABEL HANTU] Tabel `mutabaah_quran` TIDAK ADA di database (REST balas
+         HTTP 404 PGRST205 "Could not find the table"). Dari log edge 24 jam: 10.229
+         request/hari dari app wali ke tabel ini, SEMUANYA 404, plus preflight OPTIONS-nya.
+         Satu-satunya pembaca `sm.mutabaahQuran` adalah waliModuleRows('mutabaah')
+         di wali-shell.js:475 yang cuma menghitung badge — dan karena tabelnya tidak ada,
+         nilainya memang selalu kosong bahkan sebelum perubahan ini. renderMutabaah()
+         (wali-shell.js:1240) juga sudah menetapkan quranRows = [] sendiri. */
+      mutabaahQuran: mobile.mutabaahQuran,
+      karakter: filterMine(await tryFilteredList('karakter', filters, 50, _w('karakter', _KOL_W_KARAKTER))),
+      prestasi: filterMine(await tryFilteredList('prestasi', filters, 50, _w('prestasi', _KOL_W_PRESTASI))),
+      pelanggaran: filterMine(await tryFilteredList('pelanggaran_siswa', filters, 50, _w('pelanggaran_siswa', _KOL_W_PELANGGARAN))),
+      surat: filterMine(mobile.surat.concat(await tryFilteredList('surat', filters, 50, _w('surat', _KOL_W_SURAT)))),
+      keuangan: filterMine(mobile.keuangan.concat((await tryFilteredList('spp_pembayaran', filters, 30, _w('spp_pembayaran', _KOL_W_SPP_BAYAR)))
+        // tagihan_spp juga tidak punya kolom `tanggal`.
+        .concat(await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at')))
+        .concat(await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))))),
+      tabungan: filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, _w('tabungan_siswa', _KOL_W_TABUNGAN)))),
+      tabunganUmum: filterMine(await tryFilteredList('tabungan_umum', filters, 30, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))),
       ekskul: await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }),
       pengumuman: mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 })))
     };
