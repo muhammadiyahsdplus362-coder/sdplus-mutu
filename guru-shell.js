@@ -6602,7 +6602,16 @@ async function hydrateGuruFromSupabase() {
           var _pdfTbls = ['jurnal_guru', 'jurnal_kelas'];
           for (var _pti = 0; _pti < _pdfTbls.length; _pti++) {
             try {
-              var _pres = await _cliH.from(_pdfTbls[_pti]).select('id,pdf_files').order('created_at', { ascending: false }).limit(800);
+              /* [EGRESS PDF] Dulu 800 baris x 2 tabel diunduh utuh tiap hydrate
+                 (44 KB) padahal yang berguna hanya baris yang pdf_files-nya TERISI:
+                 diukur ke server 11 dari 171 di jurnal_guru dan 0 dari 503 di
+                 jurnal_kelas. Filter not-null memindahkan penyaringan ke server,
+                 jadi yang lewat jaringan hanya baris yang benar-benar punya PDF
+                 (44 KB -> 2 KB). Hasil akhirnya identik: baris tanpa pdf_files
+                 tidak pernah masuk _pdfMap karena sudah disaring `if (r.pdf_files)`. */
+              var _pres = await _cliH.from(_pdfTbls[_pti]).select('id,pdf_files')
+                .not('pdf_files', 'is', null)
+                .order('created_at', { ascending: false }).limit(800);
               if (_pres && !_pres.error && Array.isArray(_pres.data)) {
                 _pres.data.forEach(function(r){ if (r && r.id != null && r.pdf_files) _pdfMap[String(r.id)] = r.pdf_files; });
               }
@@ -6663,7 +6672,16 @@ animateContent();
     // [TAHAN SEGAR 10 MENIT] jangan render saat user sedang mengisi form (kolom bisa hilang)
     if(window.__zGuruEditTs && (Date.now() - window.__zGuruEditTs < 600000)) return;
     if(_busy) return;
-    if(Date.now() - _last < 3000) return; // throttle 3 detik
+    /* [EGRESS THROTTLE] Dulu 3 detik: praktis SETIAP buka-tutup app memicu
+       penyegaran penuh. Terukur 0,64 MB rata-rata (1,85 MB untuk guru 17 kelas)
+       per penyegaran, jadi guru yang bolak-balik app membakar egress tanpa data
+       yang benar-benar berubah. Sekarang 60 detik, disejajarkan dengan app wali
+       (wali-shell.js: 90 detik).
+       Pengecekan [SESI TUNGGAL] di atas sengaja tetap DI LUAR throttle ini,
+       supaya logout paksa dari perangkat lain tetap terdeteksi setiap resume.
+       Butuh data segar saat itu juga? Tarik-untuk-menyegarkan / window.zGuruRefresh
+       tetap tersedia, dan simpan/hapus data sendiri selalu memuat ulang. */
+    if(Date.now() - _last < 60000) return; // throttle 60 detik
     _busy = true; _last = Date.now();
     Promise.resolve(hydrateGuruFromSupabase())
       .catch(function(){})
