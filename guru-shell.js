@@ -10202,3 +10202,176 @@ animateContent();
 
     if(CL.buka[nis]){
       h+='<textarea class="clg-note" rows="3" data-cal-note="'+esc(nis)+'" placeholder="Ananda sudah lancar membaca kalimat sederhana...">'+esc(catatanSiswa(nis))+'</textarea>';
+    }
+
+    /* [CALISTUNG RIWAYAT] Penilaian tanggal lain pada periode yang sama.
+       Ditampilkan supaya guru tahu isian ini menambah riwayat, bukan menimpa. */
+    var lain=barisPeriodeSiswa(nis).filter(function(r){
+      return String(r.tanggal||'').slice(0,10)!==tanggalAktif();
+    });
+    if(lain.length){
+      h+='<div class="clg-riw">Penilaian lain di periode ini: '
+        + lain.slice(0,6).map(function(r){
+            var t=String(r.tanggal||'').slice(0,10);
+            return '<button type="button" class="clg-riwt" onclick="zCal.bukaTanggal(\''+esc(t)+'\')">'+esc(fmtTglSingkat(t))+'</button>';
+          }).join('')
+        + (lain.length>6?('<span class="clg-riwn">+'+(lain.length-6)+' lagi</span>'):'')
+        + '</div>';
+    }
+
+    h+='</div>';
+    return h;
+  }
+
+  function laporanHtml(r){
+    var h='<div class="clg-box"><div class="clg-lap">';
+    h+='<h4>LAPORAN PERKEMBANGAN SISWA</h4>';
+    h+='<div class="id">Nama: <b style="color:#e8ebf2">'+esc(r.nama_siswa||'-')+'</b><br>Kelas: <b style="color:#e8ebf2">'+esc(r.kelas||'-')+'</b> &nbsp; Periode: <b style="color:#e8ebf2">'+esc(r.periode||'-')+'</b></div>';
+
+    h+='<div class="sec">&#128214; LITERASI</div>';
+    ASPEK_LITERASI.forEach(function(a){
+      var k=String(r[a[0]]||'').toUpperCase();
+      h+='<div class="ln"><span>'+esc(a[1])+'</span><span class="clg-pil '+(k?k.toLowerCase():'')+'" style="background:none;border:none;padding:0">'+(k?(k+' ('+esc(labelSkala(k))+')'):'-')+'</span></div>';
+    });
+
+    h+='<div class="sec">&#128290; NUMERASI</div>';
+    ASPEK_NUMERASI.forEach(function(a){
+      var k=String(r[a[0]]||'').toUpperCase();
+      h+='<div class="ln"><span>'+esc(a[1])+'</span><span class="clg-pil '+(k?k.toLowerCase():'')+'" style="background:none;border:none;padding:0">'+(k?(k+' ('+esc(labelSkala(k))+')'):'-')+'</span></div>';
+    });
+
+    if(r.catatan){
+      h+='<div class="sec">&#128221; Catatan Guru</div><div class="cat">\u201C'+esc(r.catatan)+'\u201D</div>';
+    }
+    h+='</div>';
+    h+='<div style="display:flex;gap:8px">';
+    h+='<button type="button" class="clg-btn clg-b2" style="flex:1" onclick="zCal.salinLaporan()">Salin Laporan</button>';
+    h+='<button type="button" class="clg-btn clg-b2" onclick="zCal.hapus(\''+esc(r.row_uid)+'\')">Hapus</button>';
+    h+='<button type="button" class="clg-btn clg-b2" onclick="zCal.tutupLaporan()">Tutup</button>';
+    h+='</div></div>';
+    return h;
+  }
+
+  /* ---------------- renderer modul ---------------- */
+  window.renderCalistungGuruModule = function(detail){
+    detail=detail||{};
+
+    if(!CL.kelas) CL.kelas=kelasDefault();
+    if(!CL.periode) CL.periode=periodeDefault();
+    if(!CL.tanggal) CL.tanggal=hariIni();
+
+    /* header memakai moduleIntro bawaan supaya sama dengan modul lain */
+    var head;
+    try{
+      head = (typeof moduleIntro==='function')
+        ? moduleIntro({ eyebrow:detail.eyebrow||'Perkembangan', title:detail.title||'Calistung', subtitle:detail.subtitle||'', stats:detail.stats||[] })
+        : '';
+    }catch(e){ head=''; }
+    if(!head){
+      head='<div class="clg-head"><button type="button" class="back-chip" data-action="menu">&#8249; Kembali</button>'
+        + '<div class="clg-title" style="margin-top:8px">'+esc(detail.title||'Calistung')+'</div></div>';
+    }
+
+    if(CL.rows===null){
+      if(!CL.loading) loadCL();
+      return styleTag()+head+'<section class="section"><div class="clg-wrap"><div class="clg-kosong">Memuat data calistung...</div></div></section>';
+    }
+
+    var h=styleTag()+head+'<section class="section"><div class="clg-wrap">';
+
+    /* --- pengatur: kelas + periode + tanggal --- */
+    h+='<div class="clg-box">';
+    h+='<label class="clg-lbl">Kelas</label><select class="clg-inp" onchange="zCal.setKelas(this.value)">'+opsiKelas(CL.kelas)+'</select>';
+    h+='<div class="clg-row2">';
+    h+='<div><label class="clg-lbl">Periode</label><input class="clg-inp" data-cal-periode value="'+esc(CL.periode)+'" placeholder="Semester 1 2026" onchange="zCal.gantiPeriode(this.value)"/></div>';
+    h+='<div><label class="clg-lbl">Tanggal</label><input class="clg-inp" type="date" data-cal-tanggal value="'+esc(CL.tanggal)+'" onchange="zCal.setTanggal(this.value)"/></div>';
+    h+='</div>';
+    h+='<div class="clg-ket">BB Belum Berkembang &middot; MB Mulai Berkembang &middot; BSH Berkembang Sesuai Harapan &middot; BSB Berkembang Sangat Baik</div>';
+    /* [CALISTUNG RIWAYAT] Tegaskan bahwa tanggal = slot penilaian tersendiri. */
+    h+='<div class="clg-ket" style="margin-top:6px">Penilaian disimpan per <b>tanggal</b>. Mengisi di tanggal baru menambah riwayat, tidak menimpa penilaian sebelumnya.</div>';
+    h+='</div>';
+
+    if(CL.laporan) h+=laporanHtml(CL.laporan);
+
+    /* --- daftar siswa: langsung isi --- */
+    if(!CL.kelas){
+      h+='<div class="clg-kosong">Pilih kelas dahulu untuk menampilkan daftar siswa.</div>';
+      h+='</div></section>'+riwayatHtml(detail);
+      return h;
+    }
+
+    var siswa=daftarSiswa(CL.kelas);
+    if(!siswa.length){
+      h+='<div class="clg-kosong">Belum ada data siswa di kelas <b>'+esc(CL.kelas)+'</b>.<br>Data siswa dimuat dari sumber yang sama dengan modul Absensi Siswa.</div>';
+      h+='<button type="button" class="clg-btn clg-b2" style="width:100%" onclick="zCal.muatUlang()">Muat ulang</button>';
+      h+='</div></section>'+riwayatHtml(detail);
+      return h;
+    }
+
+    /* ringkasan kelas */
+    var sudah=0, belum=0;
+    siswa.forEach(function(s){ if(terisiBerapa(s.nis)) sudah++; else belum++; });
+    h+='<div class="clg-sum">'
+      + '<div class="clg-stat"><b>'+siswa.length+'</b><small>Siswa</small></div>'
+      + '<div class="clg-stat"><b>'+sudah+'</b><small>Sudah Dinilai</small></div>'
+      + '<div class="clg-stat"><b>'+belum+'</b><small>Belum</small></div>'
+      + '</div>';
+
+    h+=siswa.map(kartuSiswa).join('');
+
+    /* --- bar simpan: IKUT POLA ABSENSI SISWA ---
+       Bar tidak ditaruh di dalam konten (sticky di dalam <section> berhenti di
+       batas section itu, sehingga tombol terlihat mengambang di tengah layar).
+       Kita titipkan datanya ke appState._calDock, lalu renderFloating yang
+       menempelkannya di lapisan melayang, persis dok Absensi Siswa. */
+    var nBerubah=0;
+    siswa.forEach(function(s){ if(CL.batch[String(s.nis)]) nBerubah++; });
+    /* [CALISTUNG RIWAYAT] Tanggal ikut ditulis di dok simpan: sekarang tanggal
+       menentukan baris tujuan, jadi guru harus bisa memastikannya sebelum simpan. */
+    var meta='Kelas '+esc(CL.kelas)+' \u00b7 '+esc(CL.periode)+' \u00b7 '+esc(fmtTglSingkat(tanggalAktif()));
+    appState._calDock = { berubah:nBerubah, meta:meta };
+    if(nBerubah){
+      h+='<button type="button" class="clg-btn clg-b2" style="width:100%;margin-top:8px" onclick="zCal.batalkan()">Batalkan perubahan</button>';
+    }
+
+    /* ruang kosong bawah supaya kartu siswa terakhir tidak tertutup dok */
+    h+='<div class="absen-bottom-spacer"></div>';
+
+    h+='</div></section>';
+
+    /* --- riwayat: komponen bersama yang sudah dipakai modul lain --- */
+    h+=riwayatHtml(detail);
+    return h;
+  };
+
+  /* Riwayat memakai renderModuleRiwayat() bawaan:
+     toggle buka/tutup + filter bulan & tanggal, sama persis dgn modul lain. */
+  function riwayatHtml(detail){
+    if(typeof renderModuleRiwayat!=='function') return '';
+    var list=(CL.rows||[]).filter(function(r){ return !CL.kelas || String(r.kelas||'')===CL.kelas; });
+    /* beri ringkasan yang enak dibaca di kartu riwayat bawaan */
+    list=list.map(function(r){
+      var ring=[];
+      SEMUA_ASPEK.forEach(function(a){
+        var k=String(r[a[0]]||'').toUpperCase();
+        if(k) ring.push(a[2]+' '+k);
+      });
+      var salin={};
+      Object.keys(r).forEach(function(k){ salin[k]=r[k]; });
+      salin.judul=r.nama_siswa||'-';
+      salin.keterangan=ring.join(' \u00b7 ')+(r.catatan?(' \u2014 '+r.catatan):'');
+      return salin;
+    });
+    try{
+      return renderModuleRiwayat(MODUL, list, detail, CRUDKEY);
+    }catch(e){ return ''; }
+  }
+
+  modulePlaceholders['calistung'] = {
+    eyebrow:'Perkembangan',
+    title:'Calistung',
+    subtitle:'Pilih kelas, semua siswa langsung tampil, nilai literasi & numerasi diisi langsung (BB / MB / BSH / BSB).',
+    stats:[], focus:[]
+  };
+  console.log('[Zymata Guru] Modul Calistung v3 aktif');   /* [CALISTUNG GURU] */
+})();
