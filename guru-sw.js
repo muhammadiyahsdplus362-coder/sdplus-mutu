@@ -6,7 +6,7 @@
 //  Selama versi ini berubah, SW baru mengambil file baru, membuang cache lama,
 //  dan pengguna TIDAK perlu hapus cache manual lagi.
 // ============================================================================
-const CACHE_VERSION = 'v20260815-041841';
+const CACHE_VERSION = 'v20260821-045419';
 const CACHE_NAME = `zymata-shell-${CACHE_VERSION}`;
 
 // Semua file inti yang dipakai KEDUA tampilan (Guru & Wali).
