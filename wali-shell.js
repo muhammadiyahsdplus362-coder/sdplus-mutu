@@ -1234,15 +1234,18 @@ function renderAcademic() {
 
 function renderMutabaah() {
   var sm = appState.supabaseModules || {};
-  // Tab Mutabaah HANYA menampilkan data mutabaah asli (mutabaah_rumah & mutabaah_quran).
-  // hafalan & ibadah adalah input admin pada tabel terpisah, jadi tidak diikutkan di sini.
+  /* Tab Mutabaah HANYA menampilkan mutabaah_rumah.
+     Catatan: komentar lama menyebut "mutabaah_rumah & mutabaah_quran", padahal
+     ada `quranRows = []` (array kosong literal) di sini sehingga mutabaah_quran tidak
+     pernah tampil. Variabel itu beserta `quranWeek` sudah dihapus. Tabel
+     `mutabaah_quran` juga TIDAK ADA di database (REST balas 404 PGRST205) dan sudah
+     tidak ditarik lagi saat hydrate.
+     hafalan & ibadah adalah input admin pada tabel terpisah, jadi tidak diikutkan di sini. */
   var rumahRows = Array.isArray(sm.mutabaahRumah)?sm.mutabaahRumah.slice():[];
-  var quranRows = [];
   var _wkAgo = Date.now()-7*24*3600*1000;
   var _inWeek = function(r){ var d=Date.parse(r.tanggal||r.created_at||''); return !isNaN(d) && d>=_wkAgo; };
   var rumahWeek = rumahRows.filter(_inWeek).length;
-  var quranWeek = quranRows.filter(_inWeek).length;
-  var updates = rumahRows.concat(quranRows).slice().sort(function(a,b){ return String(b.tanggal||b.created_at||'').localeCompare(String(a.tanggal||a.created_at||'')); }).slice(0,8).map(function(r){
+  var updates = rumahRows.slice().sort(function(a,b){ return String(b.tanggal||b.created_at||'').localeCompare(String(a.tanggal||a.created_at||'')); }).slice(0,8).map(function(r){
     var title = r.tilawah_rumah || r.murojaah_rumah || r.surat || r.shalat || r.kegiatan || r.keterangan || r.catatan || r.catatan_wali || 'Mutabaah';
     var st = r.status_setoran || r.status_review || r.status || '-';
     return { time: (r.tanggal||r.created_at||'-'), title: String(title), meta: [r.kelas, r.juz?('Juz '+r.juz):''].filter(Boolean).join(' \u00b7 ')||'-', status: String(st), tone: /baik|lunas|tuntas|tercapai|selesai|sudah/i.test(String(st))?'green':'blue' };
@@ -1669,40 +1672,20 @@ function renderWaliMutabaahRumahRiwayat(list){
     + '<div class="riwayat-absen-body" style="padding-top:8px">'+cards+'</div></details></section>';
 }
 
-// renderWaliMutabaahQuranRiwayat dihapus — modul Mutabaah Quran sudah tidak dipakai.
-function renderWaliMutabaahQuranRiwayat(list){
-  var arr = Array.isArray(list) ? list : [];
-  var esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
-  var sumOpen = '<summary class="riwayat-absen-summary" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:800;list-style:none;-webkit-tap-highlight-color:transparent">';
-  var head = '\uD83D\uDCC5 Riwayat';
-  if(!arr.length){
-    return '<section class="section"><details class="riwayat-absen-toggle" style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
-      + sumOpen + '<span class="riwayat-absen-title">'+head+'</span><span class="riwayat-absen-hint" style="font-size:11px;color:#94a3b8;font-weight:700">Lihat detail \u203A</span></summary>'
-      + '<div class="riwayat-absen-body" style="padding-top:10px"><div class="timeline">'
-      + scheduleCard({ time:'Info', title:'Belum ada data', meta:'Data mutabaah quran yang sudah disimpan akan tampil di sini beserta penilaian guru.', status:'Kosong', tone:'blue' })
-      + '</div></div></details></section>';
-  }
-  var sorted = arr.slice().sort(function(a,b){ return String(b.tanggal||b.tgl||'').localeCompare(String(a.tanggal||a.tgl||'')); });
-  var cards = sorted.slice(0,60).map(function(r){
-    var tgl = esc(String(r.tanggal||r.tgl||'').slice(0,10) || '-');
-    var stat = String(r.status_setoran||'').trim();
-    var statPill = stat
-      ? '<span class="status-pill '+(/lancar/i.test(stat)?'green':(/ulang|belum/i.test(stat)?'orange':'blue'))+'">Setoran: '+esc(stat)+'</span>'
-      : '<span class="status-pill blue">Belum dinilai guru</span>';
-    var ziyHtml = String(r.ziyadah_sekolah||'').trim() ? '<p class="card-meta" style="margin:6px 0 0"><b>Ziyadah/Setoran sekolah (guru):</b> '+esc(r.ziyadah_sekolah)+'</p>' : '';
-    var catHtml = String(r.catatan_guru||'').trim() ? '<p class="card-meta" style="margin:4px 0 0"><b>Catatan guru:</b> '+esc(r.catatan_guru)+'</p>' : '';
-    return '<article class="db-ready-card" style="margin-bottom:10px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 class="card-title" style="font-size:14px;margin:0">'+tgl+'</h3>'+statPill+'</div>'
-      + '<p class="card-meta" style="margin:6px 0 0"><b>Tilawah rumah:</b> '+(r.tilawah_rumah?esc(r.tilawah_rumah):'-')+'</p>'
-      + '<p class="card-meta" style="margin:2px 0 0"><b>Murojaah rumah:</b> '+(r.murojaah_rumah?esc(r.murojaah_rumah):'-')+'</p>'
-      + ziyHtml
-      + catHtml
-      + '</article>';
-  }).join('');
-  return '<section class="section"><details class="riwayat-absen-toggle" open style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
-    + sumOpen + '<span class="riwayat-absen-title">'+head+'</span><span class="riwayat-absen-hint" style="font-size:11px;color:#94a3b8;font-weight:700">'+arr.length+' entri \u203A</span></summary>'
-    + '<div class="riwayat-absen-body" style="padding-top:8px">'+cards+'</div></details></section>';
-}
+/* [DIHAPUS] renderWaliMutabaahQuranRiwayat() dihapus di sini.
+   Fungsi itu punya NOL pemanggil (sudah dicari di seluruh hpnative: yang muncul hanya
+   komentar penanda dan definisinya sendiri). Modul Mutabaah Quran memang sudah tidak
+   dipakai, dan tabel `mutabaah_quran` juga TIDAK ADA di database (REST balas 404
+   PGRST205), jadi fungsi ini tidak mungkin punya data untuk dirender.
+
+   Alasan dihapus, bukan dibiarkan: fungsi ini membaca 7 kolom (status_setoran,
+   ziyadah_sekolah, catatan_guru, tilawah_rumah, murojaah_rumah, tanggal, tgl).
+   Selama ia masih ada, audit "kolom apa yang dibaca UI" akan menyimpulkan ketujuh
+   kolom itu wajib dipertahankan — padahal kodenya mati. Itu sudah sempat
+   menyesatkan sekali saat pembatasan kolom jalur wali.
+
+   Versi lengkapnya ada di `wali-shell.js.backup_bersih_komentar_20260821` bila
+   suatu saat modul Mutabaah Quran dihidupkan kembali. */
 
 function renderSupabaseWaliFormModule(detail, rows, moduleId, crudKey) {
   const helper = window.ZymataMobileSupabase;
@@ -2016,8 +1999,12 @@ function renderModule(moduleId) {
   if (moduleId === 'perkembangan-anak') {
     // Ambil data real dari Supabase
     const sm = appState.supabaseModules || {};
-    const hafalanRows = [];
-    const membacaRows = [];
+    /* [DIBERSIHKAN] Dulu di sini ada `hafalanRows = []` dan `membacaRows = []` (array
+       kosong literal) plus `sorotanHafalan`/`sorotanMembaca` yang dihitung dari keduanya.
+       Keempatnya buntu: kartu "Sorotan perkembangan" di bawah hanya menampilkan Ibadah,
+       Karakter, dan Prestasi, jadi kedua sorotan itu dihitung lalu dibuang. Ikut dihapus
+       dari `anySorotan` karena `[].length` selalu 0 — nilainya tidak berubah.
+       Tabel `hafalan` & `membaca_quran` juga sudah tidak ditarik saat hydrate. */
     const ibadahRows = Array.isArray(sm.ibadah) ? sm.ibadah : [];
     const karakterRows = Array.isArray(sm.karakter) ? sm.karakter : [];
     const prestasiRows = Array.isArray(sm.prestasi) ? sm.prestasi : [];
@@ -2027,8 +2014,6 @@ function renderModule(moduleId) {
       const r = arr.slice().sort(function(a,b){ return String(b.tanggal||b.tgl||b.waktu||'').localeCompare(String(a.tanggal||a.tgl||a.waktu||'')); })[0];
       try { return fmtFn(r) || '-'; } catch(_) { return '-'; }
     }
-    const sorotanHafalan = latest(hafalanRows, r => (r.surat || r.title || '') + (r.juz ? ' · Juz ' + r.juz : ''));
-    const sorotanMembaca = latest(membacaRows, r => (r.surat || r.tilawah_rumah || '') + (r.juz ? ' · Juz ' + r.juz : ''));
     const sorotanIbadah = latest(ibadahRows, r => (r.bulan ? r.bulan + ' ' : '') + 'Shalat ' + (r.shalat || 0) + ', Sunnah ' + (r.sunnah || 0) + ', Puasa ' + (r.puasa || 0) + ', Sedekah ' + (r.sedekah || 0) + (r.catatan ? ' (' + r.catatan + ')' : ''));
     const sorotanKarakter = latest(karakterRows, r => { var s = [r.disiplin,r.sopan,r.jujur,r.kerja_keras,r.tanggung_jawab].filter(Boolean); return s.length ? (r.semester ? r.semester + ' - ' : '') + 'Disiplin: ' + s.join(', ') : (r.nilai ? 'Nilai ' + r.nilai : '-'); });
     const sorotanPrestasi = latest(prestasiRows, r => (r.lomba || r.prestasi || '') + (r.peringkat ? ' (Juara ' + r.peringkat + ')' : ''));
@@ -2094,7 +2079,7 @@ function renderModule(moduleId) {
       var visible = allRows.slice(0, limit);
       return '<section class="section" data-perk-section="' + catKey + '">' + sectionHead(title, allRows.length + ' ' + unitLabel) + devTable(cols, visible, rowFn) + perkMoreBtnHtml(catKey, allRows.length - limit) + '</section>';
     };
-    var anySorotan = !!(hafalanRows.length || membacaRows.length || ibadahRows.length || karakterRows.length || prestasiRows.length);
+    var anySorotan = !!(ibadahRows.length || karakterRows.length || prestasiRows.length);
     var anyData = anySorotan || pelanggaranRows.length || ekskulRows.length;
     if (!anyData) {
       return `
@@ -3260,8 +3245,18 @@ function computeWaliRecap(){
   var weekAgo=Date.now()-7*24*3600*1000, recent=0;
   mut.forEach(function(r){ var d=Date.parse(_d(r)); if(!isNaN(d) && d>=weekAgo) recent++; });
   appState.homeMutabaahProgress = Math.min(100, Math.round((recent/7)*100));
-  // Kartu Hafalan di dashboard menu (renderAcademic / renderChild) membaca nilai
-  // precompute ini. Sebelumnya tidak pernah diisi -> selalu "Belum ada data".
+  /* [BUNTU] Keempat field hafalan* di bawah TIDAK DIBACA SIAPA PUN.
+     Komentar lama di sini mengklaim renderAcademic (baris 1194) dan renderChild
+     (baris 1144) membacanya — itu TIDAK BENAR, keduanya tidak menyentuhnya.
+     Sudah dicari di seluruh wali-shell.js + wali-shell.html: appState.hafalanSurah/
+     hafalanProgress/hafalanTanzil/hafalanHalaman hanya DITULIS (baris 57-60,
+     3189-3192, dan blok ini), nol tempat membacanya.
+     Karena itu tabel `hafalan` sudah TIDAK ditarik lagi saat hydrate
+     (lihat supabase-mobile.js, kunci `hafalan` di loadWaliModuleData), sehingga
+     sm.hafalan selalu array kosong dan blok ini selalu masuk cabang else.
+     Blok dibiarkan supaya field appState tetap punya nilai awal yang konsisten
+     bila nanti kartu Hafalan benar-benar dibuat. Kalau memutuskan tidak akan
+     dipakai, hapus juga baris 57-60 dan 3189-3192. */
   var hafArr = Array.isArray(sm.hafalan) ? sm.hafalan : [];
   if(hafArr.length){
     var hafSorted = hafArr.slice().sort(function(a,b){ return String(b.tanggal||b.tgl||b.created_at||'').localeCompare(String(a.tanggal||a.tgl||a.created_at||'')); });
