@@ -670,6 +670,7 @@
     'tanggal,status,catatan,created_at,jenis,debit,kredit,saldo,keterangan,petugas,metode,nis,nominal';
   var _KOL_W_TABUNGAN_UMUM = 'id,siswa_id,nis,nama_siswa,kelas,nama_wali,jenis,nominal,debit,' +
     'kredit,saldo,keterangan,tanggal,petugas,metode,created_at';
+  var _KOL_W_PAYMENTS = 'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at';
 
   async function loadWaliContext(session){
     session = session || readSession();
@@ -1113,7 +1114,8 @@
       {key:'shalat_maghrib',label:'Shalat Maghrib',type:'text',options:['Ya','Tidak']},
       {key:'shalat_isya',label:'Shalat Isya',type:'text',options:['Ya','Tidak']},
       {key:'belajar',label:'Aktivitas belajar',type:'text'},
-      {key:'akhlak',label:'Akhlak',type:'text',options:['Baik','Cukup','Perlu bimbingan']}
+      {key:'akhlak',label:'Akhlak',type:'text',options:['Baik','Cukup','Perlu bimbingan']},
+      {key:'catatan',label:'Keterangan (opsional)',type:'textarea'}
     ]},
     'wali:mutabaah-quran': { title:'Mutabaah Quran', fields:[
       {key:'tanggal',label:'Tanggal',type:'date'},
@@ -1173,7 +1175,7 @@
     pelanggaran_siswa: ['siswa_id','tanggal','kode','pelanggaran','poin','catatan','status','kategori','tindak_lanjut','snapshot_nis','snapshot_nama','snapshot_kelas','kelas'],
     kalender_events: ['hari','bulan','tahun','nama','kategori'],
     mutabaah_quran: ['siswa_id','nis','nama_siswa','kelas','tanggal','tahun_ajaran','tilawah_rumah','murojaah_rumah','catatan_wali','konfirmasi_wali','nama_wali','wali_username','waktu_submit_wali','status_review','ziyadah_sekolah','status_setoran','catatan_guru'],
-    mutabaah_rumah: ['siswa_id','nis','nama_siswa','kelas','tanggal','shalat_subuh','shalat_dzuhur','shalat_ashar','shalat_maghrib','shalat_isya','shalat_count','tilawah_rumah','murojaah_rumah','belajar','akhlak','catatan_akhlak','kendala','catatan_wali','konfirmasi_wali','nama_wali','wali_username','waktu_submit','status_review']
+    mutabaah_rumah: ['siswa_id','nis','nama_siswa','kelas','tanggal','shalat_subuh','shalat_dzuhur','shalat_ashar','shalat_maghrib','shalat_isya','shalat_count','tilawah_rumah','murojaah_rumah','belajar','akhlak','catatan_akhlak','kendala','catatan_wali','konfirmasi_wali','nama_wali','wali_username','waktu_submit','status_review','catatan']
   };
 
   function moduleTable(moduleKey){ return MODULE_TARGET_TABLE[moduleKey] || null; }
@@ -1697,10 +1699,11 @@
       prestasi: filterMine(await tryFilteredList('prestasi', filters, 50, _w('prestasi', _KOL_W_PRESTASI))),
       pelanggaran: filterMine(await tryFilteredList('pelanggaran_siswa', filters, 50, _w('pelanggaran_siswa', _KOL_W_PELANGGARAN))),
       surat: filterMine(mobile.surat.concat(await tryFilteredList('surat', filters, 50, _w('surat', _KOL_W_SURAT)))),
-      keuangan: filterMine(mobile.keuangan.concat((await tryFilteredList('spp_pembayaran', filters, 30, _w('spp_pembayaran', _KOL_W_SPP_BAYAR)))
+      keuangan: filterMine(mobile.keuangan.concat((await tryFilteredList('spp_pembayaran', filters, 30, _w('spp_pembayaran', _KOL_W_SPP_BAYAR))).map(function(r){ return Object.assign({_zymata_source:'spp_pembayaran'},r); })
         // tagihan_spp juga tidak punya kolom `tanggal`.
-        .concat(await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at')))
-        .concat(await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))))),
+        .concat((await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at'))).map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }))
+        .concat((await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))).map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); })))),
+      payments: await safeList('payment_transactions', { select:_KOL_W_PAYMENTS, order:'created_at', ascending:false, limit:50 }),
       tabungan: filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, _w('tabungan_siswa', _KOL_W_TABUNGAN)))),
       tabunganUmum: filterMine(await tryFilteredList('tabungan_umum', filters, 30, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))),
       ekskul: await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }),
