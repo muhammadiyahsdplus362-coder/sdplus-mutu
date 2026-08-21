@@ -3381,6 +3381,12 @@ body {
   border-color: #2D3561;
   box-shadow: 0 4px 12px rgba(45,53,97,.18);
 }
+/* Pemilih kelas versi dropdown (gaya sama seperti pemilih kelas di Chat) */
+.kelas-pick-dropdown-wrap { width: 100%; }
+.kelas-pick-select {
+  margin-top: 0;
+  font-weight: 800;
+}
 .dms-card--kelas { justify-content: space-between; }
 .dms-kelas-grid {
   display: grid;
@@ -3702,10 +3708,193 @@ body {
 .wfi-badge.green  { background: #dcfce7; color: #16a34a; }
 .wfi-badge.orange { background: #ffedd5; color: #ea580c; }
 .wfi-badge.red    { background: #fee2e2; color: #dc2626; }
+.wfi-badge.blue   { background: #e0f2fe; color: #0369a1; }
+.wfi-card.blue    { background: #f0f9ff; border-color: #bae6fd; }
 .wfi-due {
   font-size: 9.5px;
   color: #9ca3af;
   font-weight: 700;
+}
+
+/* Pembayaran SPP / Infaq: tombol QRIS konsisten di semua halaman wali. */
+.wali-shell .spp-payment-section {
+  margin-top: 2px;
+}
+.wali-shell .spp-pay-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.wali-shell .spp-pay-head h3 {
+  margin: 4px 0 2px;
+  color: #172033;
+  font-size: 15px;
+  line-height: 1.35;
+}
+.wali-shell .spp-pay-head p {
+  margin: 0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.wali-shell .spp-pay-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wali-shell .spp-pay-item {
+  background: #fff;
+  border: 1px solid #e7ebf0;
+  border-radius: 16px;
+  padding: 15px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .055);
+}
+.wali-shell .spp-pay-main {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+}
+.wali-shell .spp-pay-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c2410c;
+  background: #fff7ed;
+  border: 1px solid #ffedd5;
+}
+.wali-shell .spp-pay-icon svg {
+  width: 21px;
+  height: 21px;
+}
+.wali-shell .spp-pay-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wali-shell .spp-pay-copy strong {
+  color: #172033;
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.wali-shell .spp-pay-copy span {
+  color: #64748b;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.wali-shell .spp-pay-status {
+  color: #c2410c;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.wali-shell .spp-pay-total {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eef1f5;
+}
+.wali-shell .spp-pay-total span {
+  color: #64748b;
+  font-size: 11px;
+}
+.wali-shell .spp-pay-total b {
+  color: #172033;
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+.wali-shell .payment-primary-button {
+  width: 100%;
+  min-height: 46px;
+  border: 0;
+  border-radius: 11px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #fff;
+  background: #f95e08;
+  box-shadow: 0 8px 18px rgba(249, 94, 8, .22);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: transform .14s ease, opacity .14s ease, box-shadow .14s ease;
+}
+.wali-shell .payment-primary-button svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+}
+.wali-shell .payment-primary-button:active {
+  transform: scale(.985);
+  box-shadow: 0 5px 13px rgba(249, 94, 8, .18);
+}
+.wali-shell .payment-primary-button:disabled {
+  opacity: .62;
+  cursor: wait;
+  transform: none;
+}
+.wali-shell .payment-primary-button.is-locked {
+  color: #64748b;
+  background: #e9edf2;
+  border: 1px solid #d7dde5;
+  box-shadow: none;
+  opacity: 1;
+  cursor: not-allowed;
+}
+.wali-shell .payment-primary-button.is-locked svg {
+  color: #64748b;
+}
+.wali-shell .infaq-panel > .payment-primary-button {
+  margin-top: 14px;
+}
+.wali-shell .payment-security-note {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #64748b;
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.wali-shell .payment-security-note svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  color: #059669;
+}
+@media (max-width: 355px) {
+  .wali-shell .spp-pay-main {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+  .wali-shell .spp-pay-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .wali-shell .spp-pay-status {
+    grid-column: 2;
+    justify-self: start;
+  }
 }
 
 /* Rekap grid */
@@ -4049,6 +4238,8 @@ html, body { height: 100%; }
 .lux-q-t { font-size:12px; font-weight:600; color:#334155; letter-spacing:-0.01em; }
 .lux-q-badge { position:absolute; top:-5px; right:-5px; min-width:21px; height:21px; padding:0 6px; border-radius:11px;
   background:#FB7185; color:#fff; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; border:2px solid #F8FAFC; box-shadow:0 3px 6px rgba(251,113,133,.35); z-index:2; }
+.lux-q-dot { position:absolute; top:-3px; right:-3px; width:13px; height:13px; border-radius:50%;
+  background:#EF4444; border:2px solid #F8FAFC; box-shadow:0 2px 5px rgba(239,68,68,.45); z-index:2; }
 /* pastel tint ~12% per icon */
 .g-aqua   { background:rgba(45,212,191,.12); } .g-aqua svg   { color:#0d9488; }
 .g-violet { background:rgba(139,92,246,.12); } .g-violet svg { color:#7c3aed; }
