@@ -3897,6 +3897,278 @@ body {
   }
 }
 
+/* Wali - dashboard Nilai Anak */
+.wali-shell .wali-nilai-page {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 118px;
+}
+@media (min-width: 720px) {
+  .wali-shell .wali-nilai-page { width: min(100%, 760px); margin-left: auto; margin-right: auto; }
+}
+.wali-shell .wali-nilai-hero {
+  min-height: 156px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px;
+  align-items: center;
+  gap: 18px;
+  padding: 22px;
+  overflow: hidden;
+  color: #fff;
+  background: #243c3a;
+  border-radius: 8px;
+  box-shadow: 0 14px 28px rgba(36, 60, 58, .18);
+}
+.wali-shell .wali-nilai-hero.steady { background: #3e7e78; }
+.wali-shell .wali-nilai-hero.strong { background: #3f6c4b; }
+.wali-shell .wali-nilai-hero.watch { background: #a8502f; }
+.wali-shell .wali-nilai-hero-copy { min-width: 0; }
+.wali-shell .wali-nilai-eyebrow {
+  display: block;
+  margin-bottom: 9px;
+  color: rgba(255,255,255,.72);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.wali-shell .wali-nilai-hero h2 {
+  margin: 0;
+  color: #fff;
+  font-size: 21px;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.wali-shell .wali-nilai-hero p {
+  margin: 7px 0 0;
+  color: rgba(255,255,255,.76);
+  font-size: 11px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.wali-shell .wali-nilai-average {
+  width: 88px;
+  height: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid rgba(255,255,255,.28);
+  border-radius: 50%;
+  background: rgba(255,255,255,.14);
+}
+.wali-shell .wali-nilai-average span { font-size: 9px; font-weight: 700; color: rgba(255,255,255,.72); }
+.wali-shell .wali-nilai-average strong { margin-top: 2px; color: #fff; font-size: 30px; line-height: 1; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-nilai-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 8px;
+}
+.wali-shell .wali-nilai-kpis article {
+  min-width: 0;
+  min-height: 104px;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 12px;
+  border: 1px solid rgba(62,126,120,.13);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(28,27,25,.05);
+}
+.wali-shell .wali-nilai-kpis article.watch { border-color: rgba(209,67,67,.18); background: #fffafa; }
+.wali-shell .wali-nilai-kpis span { color: #777268; font-size: 9.5px; line-height: 1.3; font-weight: 700; }
+.wali-shell .wali-nilai-kpis strong { margin: 7px 0 5px; color: #1c1b19; font-size: 23px; line-height: 1; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-nilai-kpis .watch strong { color: #c33f3f; }
+.wali-shell .wali-nilai-kpis small { margin-top: auto; overflow-wrap: anywhere; color: #9b968d; font-size: 8.5px; line-height: 1.3; font-weight: 600; }
+.wali-shell .wali-nilai-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 9px;
+}
+.wali-shell .wali-nilai-toolbar label { display: grid; gap: 6px; min-width: 0; }
+.wali-shell .wali-nilai-toolbar label > span { color: #777268; font-size: 10px; font-weight: 800; }
+.wali-shell .wali-nilai-toolbar select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  appearance: none;
+  padding: 9px 32px 9px 11px;
+  border: 1px solid #dedbd3;
+  border-radius: 8px;
+  outline: 0;
+  color: #1c1b19;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233e7e78' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center/15px;
+  font: 700 11px/1.2 'Plus Jakarta Sans', sans-serif;
+  text-overflow: ellipsis;
+}
+.wali-shell .wali-nilai-toolbar select:focus { border-color: #3e7e78; box-shadow: 0 0 0 3px rgba(62,126,120,.12); }
+.wali-shell .wali-nilai-section-head { display: flex; align-items: end; justify-content: space-between; margin-top: 2px; }
+.wali-shell .wali-nilai-section-head h2 { margin: 0; color: #1c1b19; font-size: 16px; line-height: 1.25; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-nilai-section-head p { margin: 4px 0 0; color: #8f8a7e; font-size: 10px; font-weight: 600; }
+.wali-shell .wali-nilai-subject { display: grid; gap: 9px; }
+.wali-shell .wali-nilai-subject + .wali-nilai-subject { margin-top: 4px; }
+.wali-shell .wali-nilai-subject-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 2px; }
+.wali-shell .wali-nilai-subject-head div { min-width: 0; }
+.wali-shell .wali-nilai-subject-head h3 { margin: 0; overflow-wrap: anywhere; color: #1c1b19; font-size: 13px; line-height: 1.3; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-nilai-subject-head p { margin: 2px 0 0; color: #9b968d; font-size: 9px; font-weight: 600; }
+.wali-shell .wali-nilai-subject-head > span { flex: none; padding: 5px 8px; border-radius: 999px; color: #3e7e78; background: #dcecea; font-size: 9px; font-weight: 800; }
+.wali-shell .wali-nilai-list { display: grid; gap: 8px; }
+.wali-shell .wali-nilai-row {
+  padding: 15px;
+  border: 1px solid #e8e5df;
+  border-left: 3px solid #3e7e78;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(28,27,25,.045);
+}
+.wali-shell .wali-nilai-row.strong { border-left-color: #4e7a3a; }
+.wali-shell .wali-nilai-row.watch { border-left-color: #d14343; }
+.wali-shell .wali-nilai-row-main { display: grid; grid-template-columns: minmax(0,1fr) 73px; align-items: center; gap: 12px; }
+.wali-shell .wali-nilai-copy { min-width: 0; }
+.wali-shell .wali-nilai-type { display: block; margin-bottom: 5px; color: #3e7e78; font-size: 9px; line-height: 1.3; font-weight: 800; text-transform: uppercase; }
+.wali-shell .wali-nilai-row.watch .wali-nilai-type { color: #b83a3a; }
+.wali-shell .wali-nilai-copy h4 { margin: 0; overflow-wrap: anywhere; color: #1c1b19; font-size: 13px; line-height: 1.35; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-nilai-copy p { margin: 4px 0 0; color: #99938a; font-size: 9px; line-height: 1.35; font-weight: 600; }
+.wali-shell .wali-nilai-score { min-width: 73px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 7px; border-radius: 8px; color: #2f6964; background: #e8f3f1; }
+.wali-shell .wali-nilai-score strong { font-size: 24px; line-height: 1; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-nilai-score span { font-size: 7.5px; line-height: 1.2; font-weight: 800; text-align: center; }
+.wali-shell .wali-nilai-row.strong .wali-nilai-score { color: #426b32; background: #e7f3e0; }
+.wali-shell .wali-nilai-row.watch .wali-nilai-score { color: #bc3d3d; background: #fbe7e5; }
+.wali-shell .wali-nilai-components { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #efede8; }
+.wali-shell .wali-nilai-components span { padding: 5px 8px; border-radius: 6px; color: #716c63; background: #f7f5f1; font-size: 8.5px; font-weight: 650; }
+.wali-shell .wali-nilai-components strong { color: #1c1b19; font-weight: 800; }
+.wali-shell .wali-nilai-note { margin: 10px 0 0; padding: 10px 11px; border-radius: 7px; color: #625d55; background: #fbf8f1; font-size: 9.5px; line-height: 1.5; font-weight: 600; }
+.wali-shell .wali-nilai-note span { display: block; margin-bottom: 3px; color: #1c1b19; font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.wali-shell .wali-nilai-empty { padding: 30px 22px; border: 1px dashed #d8d4ca; border-radius: 8px; background: #fff; text-align: center; }
+.wali-shell .wali-nilai-empty > div { width: 42px; height: 42px; display: grid; place-items: center; margin: 0 auto 12px; border-radius: 50%; color: #3e7e78; background: #e8f3f1; }
+.wali-shell .wali-nilai-empty svg { width: 20px; height: 20px; }
+.wali-shell .wali-nilai-empty h3 { margin: 0; color: #1c1b19; font-size: 14px; font-weight: 800; }
+.wali-shell .wali-nilai-empty p { max-width: 280px; margin: 7px auto 0; color: #8f8a7e; font-size: 10px; line-height: 1.5; }
+@media (max-width: 350px) {
+  .wali-shell .wali-nilai-hero { grid-template-columns: minmax(0,1fr) 76px; padding: 18px; }
+  .wali-shell .wali-nilai-average { width: 74px; height: 74px; }
+  .wali-shell .wali-nilai-average strong { font-size: 25px; }
+  .wali-shell .wali-nilai-kpis article { padding: 12px 9px; }
+  .wali-shell .wali-nilai-toolbar { grid-template-columns: 1fr; }
+}
+
+/* Wali - Catatan Anak */
+.wali-shell .wali-catatan-page {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 118px;
+}
+@media (min-width: 720px) {
+  .wali-shell .wali-catatan-page { width: min(100%, 760px); margin-left: auto; margin-right: auto; }
+}
+.wali-shell .wali-catatan-hero {
+  min-height: 132px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 21px;
+  border-radius: 8px;
+  color: #fff;
+  background: #4d4665;
+  box-shadow: 0 14px 28px rgba(77,70,101,.18);
+}
+.wali-shell .wali-catatan-hero-icon {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 54px;
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(255,255,255,.14);
+}
+.wali-shell .wali-catatan-hero-icon svg { width: 24px; height: 24px; }
+.wali-shell .wali-catatan-hero > div:last-child { min-width: 0; }
+.wali-shell .wali-catatan-hero span { color: rgba(255,255,255,.7); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.wali-shell .wali-catatan-hero h2 { margin: 5px 0 0; overflow-wrap: anywhere; color: #fff; font-size: 20px; line-height: 1.25; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-catatan-hero p { margin: 6px 0 0; color: rgba(255,255,255,.76); font-size: 10.5px; line-height: 1.45; font-weight: 600; }
+.wali-shell .wali-catatan-kpis {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 8px;
+}
+.wali-shell .wali-catatan-kpis article {
+  min-width: 0;
+  min-height: 105px;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 12px;
+  border: 1px solid rgba(77,70,101,.12);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(28,27,25,.045);
+}
+.wali-shell .wali-catatan-kpis article.attention { border-color: rgba(209,67,67,.18); background: #fffafa; }
+.wali-shell .wali-catatan-kpis span { color: #777268; font-size: 9.5px; line-height: 1.3; font-weight: 700; }
+.wali-shell .wali-catatan-kpis strong { margin: 7px 0 5px; color: #1c1b19; font-size: 23px; line-height: 1; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-catatan-kpis strong.date { color: #4d4665; font-size: 17px; line-height: 1.15; white-space: nowrap; }
+.wali-shell .wali-catatan-kpis .attention strong { color: #c33f3f; }
+.wali-shell .wali-catatan-kpis small { margin-top: auto; overflow-wrap: anywhere; color: #9b968d; font-size: 8.5px; line-height: 1.3; font-weight: 600; }
+.wali-shell .wali-catatan-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 9px;
+}
+.wali-shell .wali-catatan-toolbar label { min-width: 0; display: grid; gap: 6px; }
+.wali-shell .wali-catatan-toolbar label > span { color: #777268; font-size: 10px; font-weight: 800; }
+.wali-shell .wali-catatan-toolbar select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  appearance: none;
+  padding: 9px 32px 9px 11px;
+  border: 1px solid #dedbd3;
+  border-radius: 8px;
+  outline: 0;
+  color: #1c1b19;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%234d4665' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center/15px;
+  font: 700 11px/1.2 'Plus Jakarta Sans',sans-serif;
+  text-overflow: ellipsis;
+}
+.wali-shell .wali-catatan-toolbar select:focus { border-color: #4d4665; box-shadow: 0 0 0 3px rgba(77,70,101,.12); }
+.wali-shell .wali-catatan-section-head h2 { margin: 0; color: #1c1b19; font-size: 16px; line-height: 1.25; font-weight: 800; letter-spacing: 0; }
+.wali-shell .wali-catatan-section-head p { margin: 4px 0 0; color: #8f8a7e; font-size: 10px; font-weight: 600; }
+.wali-shell .wali-catatan-list { display: grid; gap: 9px; }
+.wali-shell .wali-catatan-card {
+  padding: 15px;
+  border: 1px solid #e8e5df;
+  border-left: 3px solid #766b91;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(28,27,25,.045);
+}
+.wali-shell .wali-catatan-card.needs-follow-up { border-left-color: #d14343; }
+.wali-shell .wali-catatan-card-head { display: flex; align-items: center; gap: 10px; }
+.wali-shell .wali-catatan-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; border-radius: 50%; color: #5c5274; background: #eeeaf4; }
+.wali-shell .wali-catatan-icon svg { width: 17px; height: 17px; }
+.wali-shell .needs-follow-up .wali-catatan-icon { color: #b93e3e; background: #fbe7e5; }
+.wali-shell .wali-catatan-head-copy { min-width: 0; display: grid; gap: 3px; }
+.wali-shell .wali-catatan-head-copy span { overflow-wrap: anywhere; color: #4d4665; font-size: 10px; line-height: 1.3; font-weight: 800; }
+.wali-shell .wali-catatan-head-copy time { color: #99938a; font-size: 8.5px; line-height: 1.3; font-weight: 600; }
+.wali-shell .wali-catatan-latest { flex: none; margin-left: auto; padding: 5px 8px; border-radius: 999px; color: #4d4665; background: #eeeaf4; font-size: 8px; font-weight: 800; }
+.wali-shell .wali-catatan-subject { display: inline-block; margin: 12px 0 0; padding: 5px 8px; border-radius: 6px; color: #3e7e78; background: #e7f1ef; font-size: 8.5px; line-height: 1.3; font-weight: 800; }
+.wali-shell .wali-catatan-message { margin: 12px 0 0; overflow-wrap: anywhere; color: #292724; font-size: 12px; line-height: 1.65; font-weight: 650; }
+.wali-shell .wali-catatan-follow { margin-top: 12px; padding: 11px 12px; border-radius: 7px; color: #6f4237; background: #fff3ee; }
+.wali-shell .wali-catatan-follow span { display: block; margin-bottom: 4px; color: #bd4931; font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.wali-shell .wali-catatan-follow p { margin: 0; overflow-wrap: anywhere; font-size: 9.5px; line-height: 1.5; font-weight: 650; }
+.wali-shell .wali-catatan-empty { padding: 30px 22px; border: 1px dashed #d8d4ca; border-radius: 8px; background: #fff; text-align: center; }
+.wali-shell .wali-catatan-empty > div { width: 42px; height: 42px; display: grid; place-items: center; margin: 0 auto 12px; border-radius: 50%; color: #4d4665; background: #eeeaf4; }
+.wali-shell .wali-catatan-empty svg { width: 20px; height: 20px; }
+.wali-shell .wali-catatan-empty h3 { margin: 0; color: #1c1b19; font-size: 14px; font-weight: 800; }
+.wali-shell .wali-catatan-empty p { max-width: 280px; margin: 7px auto 0; color: #8f8a7e; font-size: 10px; line-height: 1.5; }
+@media (max-width: 350px) {
+  .wali-shell .wali-catatan-kpis article { padding: 12px 9px; }
+  .wali-shell .wali-catatan-toolbar { grid-template-columns: 1fr; }
+}
+
 /* Rekap grid */
 .wali-recap-grid {
   display: grid;
