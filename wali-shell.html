@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
-  <link rel="stylesheet" href="guru-shell.css" />
+  <link rel="stylesheet" href="guru-shell.css?v=20260821-qris-registration-lock" />
 
 <style id="desktop-mockup">
 @media (min-width: 480px) {
@@ -730,6 +730,15 @@ body.wali-shell .guru-dash-hero .gdh-photo{
   box-shadow:0 8px 18px -6px rgba(0,0,0,.30) !important;
   font-size:20px !important; font-weight:900 !important;
 }
+/* Foto avatar header: render setajam mungkin (best-effort) */
+body.wali-shell .guru-dash-hero .gdh-photo img{
+  width:100% !important; height:100% !important;
+  object-fit:cover !important; object-position:center top !important;
+  image-rendering:-webkit-optimize-contrast !important;
+  filter:contrast(1.07) saturate(1.06) brightness(1.03) !important;
+  transform:translateZ(0) !important;
+  backface-visibility:hidden !important;
+}
 body.wali-shell .guru-dash-hero .gdh-name{ margin:0 !important; }
 body.wali-shell .guru-dash-hero .gdh-chip-row{
   margin-top:16px !important; margin-bottom:0 !important; gap:8px !important;
@@ -788,6 +797,18 @@ body.wali-shell .zchat-attach-menu button:nth-child(1) .zchat-ic{ color:#F95E08 
 body.wali-shell .zchat-attach-menu button:nth-child(2) .zchat-ic{ color:#3E7E78 !important; }
 body.wali-shell .zchat-attach-menu button:nth-child(3) .zchat-ic{ color:#7A5BA6 !important; }
 body.wali-shell .toggle.on{ background:linear-gradient(135deg,#FE8118,#F95E08) !important; box-shadow:0 8px 18px rgba(249,94,8,0.28) !important; }
+
+/* ===== Foto viewer (tap avatar header -> foto besar) ===== */
+#wali-photo-viewer{position:fixed;inset:0;z-index:100060;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s ease;}
+#wali-photo-viewer.wpv-show{opacity:1;}
+#wali-photo-viewer.wpv-hide{opacity:0;}
+#wali-photo-viewer .wpv-backdrop{position:absolute;inset:0;background:rgba(12,12,14,.86);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
+#wali-photo-viewer .wpv-inner{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding:24px;max-width:94vw;transform:scale(.92);transition:transform .2s ease;}
+#wali-photo-viewer.wpv-show .wpv-inner{transform:scale(1);}
+#wali-photo-viewer .wpv-img{max-width:88vw;max-height:72vh;width:auto;height:auto;border-radius:22px;object-fit:contain;background:#fff;box-shadow:0 24px 60px -12px rgba(0,0,0,.6);}
+#wali-photo-viewer .wpv-name{color:#fff;font:800 15px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,system-ui,sans-serif;text-align:center;max-width:88vw;}
+#wali-photo-viewer .wpv-close{position:fixed;top:calc(env(safe-area-inset-top,0px) + 14px);right:18px;z-index:2;width:42px;height:42px;border-radius:50%;border:none;background:rgba(255,255,255,.18);color:#fff;font-size:26px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+#wali-photo-viewer .wpv-close:active{background:rgba(255,255,255,.32);}
 </style>
 </head>
 <body class="wali-shell">
@@ -865,11 +886,12 @@ body.wali-shell .toggle.on{ background:linear-gradient(135deg,#FE8118,#F95E08) !
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-mobile.js"></script>
+<script src="supabase-mobile.js?v=20260821-doku-sandbox"></script>
 <script src="chat-mobile.js"></script>
 <script src="native-enhance.js"></script>
 <script src="native-pro.js"></script>
-<script src="wali-shell.js"></script>
+<script src="https://sandbox.doku.com/jokul-checkout-js/v1/jokul-checkout-1.0.0.js"></script>
+<script src="wali-shell.js?v=20260821-qris-registration-lock"></script>
   <script>
   /* Transisi halaman wali: bottom-nav = sheet (naik dari bawah), lainnya = fade+zoom.
      UI murni — membungkus animateWaliContent tanpa mengubah logika app. */
