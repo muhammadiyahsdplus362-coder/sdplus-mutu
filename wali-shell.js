@@ -1,5 +1,7 @@
 const STORAGE_KEY = 'zymata-wali-shell-v1';
 const ROLE_CHOOSER_PATH = 'index.html?choose=1';
+// Ubah ke true hanya setelah QRIS production DOKU berstatus ACTIVE.
+const QRIS_PAYMENT_ENABLED = false;
 
 (function guardWaliShellRole(){
   try {
@@ -40,6 +42,8 @@ const appState = {
   financeStatus: 'belum',        // 'lunas' | 'belum' | 'terlambat'
   financeBulan: 0,               // [LABEL TAGIHAN SPP] jumlah bulan belum lunas
   financeNote: '-',              // [LABEL TAGIHAN SPP] keterangan bawah kartu
+  infaqAmount: 10000,            // Prototype UI saja; belum membuat transaksi
+  infaqPreviewOpen: false,
   tabunganSaldo: 'Rp0',
   tabunganUpdate: '-',
   tabunganUmumSaldo: 'Rp0',
@@ -253,6 +257,13 @@ const moduleDetails = {
     eyebrow: 'Administrasi',
     title: 'Riwayat SPP',
     subtitle: 'Daftar tagihan SPP anak beserta status lunas/belum dan jatuh tempo.',
+    stats: [],
+    focus: []
+  },
+  'infaq-subuh': {
+    eyebrow: 'Pembayaran',
+    title: 'Infaq Subuh',
+    subtitle: 'Pilih nominal infaq, lalu lanjutkan melalui QRIS saat layanan pembayaran sudah diaktifkan.',
     stats: [],
     focus: []
   },
@@ -1284,43 +1295,56 @@ function renderMutabaah() {
 function renderMore() {
   const finStt = appState.financeStatus;
   return `
-    <!-- Keuangan langsung di atas -->
+    <!-- Pembayaran -->
     <section class="section section--tight">
-      ${sectionHead('Keuangan', `<span data-module-route="module:keuangan" style="cursor:pointer;color:#4f46e5;font-size:11px;font-weight:800">Detail</span>`)}
+      ${sectionHead('Pembayaran', '')}
       <div class="wali-finance-row">
-        <article class="wfi-card ${getFinanceTone(finStt)}" data-module-route="module:keuangan">
+        <button type="button" class="wfi-card ${getFinanceTone(finStt)} wali-fin-action" data-module-route="module:keuangan-spp">
           <span class="wfi-label">Tagihan SPP</span>
           <strong class="wfi-amount">${appState.financeAmount}</strong>
           <div class="wfi-status">
             <span class="wfi-badge ${getFinanceTone(finStt)}">${getFinanceStatusLabel(finStt)}</span>
             <span class="wfi-due">${appState.financeNote || ('Jatuh tempo ' + appState.financeDue)}</span>
           </div>
-        </article>
-        <article class="wfi-card green" data-module-route="module:keuangan">
+        </button>
+        <button type="button" class="wfi-card blue wali-fin-action" data-module-route="module:infaq-subuh">
+          <span class="wfi-label">Infaq Subuh</span>
+          <strong class="wfi-amount">Sukarela</strong>
+          <div class="wfi-status">
+            <span class="wfi-badge blue">Segera hadir</span>
+            <span class="wfi-due">Aktivasi DOKU berlangsung</span>
+          </div>
+        </button>
+      </div>
+    </section>
+
+    <!-- Simpanan -->
+    <section class="section section--tight">
+      ${sectionHead('Simpanan', '')}
+      <div class="wali-finance-row">
+        <button type="button" class="wfi-card green wali-fin-action" data-module-route="module:keuangan-tabungan">
           <span class="wfi-label">Tabungan Anak</span>
           <strong class="wfi-amount">${appState.tabunganSaldo}</strong>
           <div class="wfi-status">
             <span class="wfi-badge green">Aman ✅</span>
             <span class="wfi-due">Update ${appState.tabunganUpdate}</span>
           </div>
-        </article>
-      </div>
-      <div class="wali-finance-row" style="grid-template-columns:1fr; margin-top:-4px;">
-        <article class="wfi-card green" data-module-route="module:keuangan">
+        </button>
+        <button type="button" class="wfi-card green wali-fin-action" data-module-route="module:keuangan-umum">
           <span class="wfi-label">Tabungan Umum</span>
           <strong class="wfi-amount">${appState.tabunganUmumSaldo}</strong>
           <div class="wfi-status">
             <span class="wfi-badge green">Aman ✅</span>
             <span class="wfi-due">Update ${appState.tabunganUmumUpdate}</span>
           </div>
-        </article>
+        </button>
       </div>
     </section>
 
     <section class="section section--tight">
-      ${sectionHead('Info & administrasi', '')}
+      ${sectionHead('Layanan lainnya', '')}
       <div class="guru-menu-grid">
-        ${moreModules.map(roleModuleCard).join('')}
+        ${moreModules.filter(function(item){ return item.id !== 'keuangan'; }).map(roleModuleCard).join('')}
       </div>
     </section>
   `;
@@ -1663,8 +1687,9 @@ function renderWaliMutabaahRumahRiwayat(list){
     return '<article class="db-ready-card" style="margin-bottom:10px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 class="card-title" style="font-size:14px;margin:0">'+tgl+'</h3>'+konfPill+'</div>'
       + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'+shalatHtml+'</div>'
-      + '<p class="card-meta" style="margin:2px 0"><b>Belajar:</b> '+(r.belajar?esc(r.belajar):'-')+' &middot; <b>Akhlak:</b> '+(r.akhlak?esc(r.akhlak):'-')+'</p>'
-      + kendalaHtml
+       + '<p class="card-meta" style="margin:2px 0"><b>Belajar:</b> '+(r.belajar?esc(r.belajar):'-')+' &middot; <b>Akhlak:</b> '+(r.akhlak?esc(r.akhlak):'-')+'</p>'
+       + (String(r.catatan||'').trim() ? '<p class="card-meta" style="margin:2px 0"><b>Keterangan:</b> '+esc(r.catatan)+'</p>' : '')
+       + kendalaHtml
       + '</article>';
   }).join('');
   return '<section class="section"><details class="riwayat-absen-toggle" open style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
@@ -1864,6 +1889,163 @@ function renderProgramKegiatanWali(detail) {
   `;
 }
 
+var dokuPaymentBusy = false;
+function waliPaymentEsc(value){
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(char){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char];
+  });
+}
+function waliDokuCheckoutUrlAllowed(value){
+  try {
+    var url = new URL(String(value || ''));
+    return url.protocol === 'https:' && /(^|\.)doku\.com$/i.test(url.hostname);
+  } catch(_) { return false; }
+}
+async function waliStartDokuPayment(options, button){
+  if(dokuPaymentBusy) return;
+  dokuPaymentBusy = true;
+  var oldText = button ? button.textContent : '';
+  if(button){ button.disabled=true; button.textContent='Menyiapkan QRIS...'; button.setAttribute('aria-busy','true'); }
+  try {
+    if(!window.ZymataMobileSupabase) throw new Error('Koneksi pembayaran belum siap.');
+    var client = window.ZymataMobileSupabase.getClient();
+    var authResult = await client.auth.getSession();
+    var authSession = authResult && authResult.data && authResult.data.session;
+    if(!authSession || !authSession.access_token) throw new Error('Sesi login berakhir. Silakan login ulang.');
+    var ctx = window.__zymataWaliCtx || {};
+    var siswaId = Number((ctx.siswa && ctx.siswa.id) || appState.activeChildId || 0);
+    if(!Number.isSafeInteger(siswaId) || siswaId <= 0) throw new Error('Data anak belum terhubung.');
+    var response = await fetch('https://hhcawtwbgfhivwfofdhx.functions.supabase.co/doku-payment/generate', {
+      method:'POST',
+      headers:{
+        'Authorization':'Bearer ' + authSession.access_token,
+        'Content-Type':'application/json',
+        'x-device-id':window.ZymataMobileSupabase.getDeviceId()
+      },
+      body:JSON.stringify({
+        paymentType:options.paymentType,
+        siswaId:siswaId,
+        referenceId:options.referenceId || null,
+        amount:options.amount || null
+      })
+    });
+    var data = await response.json().catch(function(){ return {}; });
+    if(!response.ok || !data.ok) {
+      if(data && data.code === 'QRIS_CHANNEL_INACTIVE') throw new Error('QRIS sandbox belum diaktifkan di akun DOKU. Aktifkan kanal QRIS pada DOKU Back Office.');
+      throw new Error((data && data.error) || ('Gagal menyiapkan pembayaran ('+response.status+').'));
+    }
+    var checkoutUrl = data && data.transaction && data.transaction.checkout_url;
+    if(!waliDokuCheckoutUrlAllowed(checkoutUrl)) throw new Error('URL Checkout DOKU tidak valid.');
+    if(typeof window.loadJokulCheckout !== 'function') throw new Error('Komponen DOKU Checkout gagal dimuat. Periksa koneksi internet.');
+    window.loadJokulCheckout(checkoutUrl);
+    waliShowSaveOk('DOKU Checkout dibuka. Selesaikan pembayaran melalui QRIS.');
+  } catch(error) {
+    waliShowSaveError(error && error.message ? error.message : String(error));
+  } finally {
+    dokuPaymentBusy = false;
+    if(button && button.isConnected){ button.disabled=false; button.textContent=oldText; button.removeAttribute('aria-busy'); }
+  }
+}
+
+function renderWaliSppPayableList(rows){
+  rows = (Array.isArray(rows) ? rows : []).filter(function(row){
+    return row && row._zymata_source === 'tagihan_spp' && !waliSppLunas(row) && Number(row.nominal || 0) >= 1000 && row.id;
+  });
+  if(!rows.length) return '';
+  var lockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>';
+  return '<section class="section spp-payment-section"><div class="spp-pay-head"><div><span class="card-label">Pembayaran SPP</span><h3>Tagihan yang belum lunas</h3><p>Pilih tagihan lalu selesaikan melalui QRIS.</p></div><span class="status-pill orange">'+rows.length+' aktif</span></div>'
+    + '<div class="spp-pay-list">' + rows.map(function(row){
+      var title = (row.keterangan || row.deskripsi || ('SPP '+(row.bulan||'')+' '+(row.tahun||''))).trim();
+      var due = waliSppJatuhTempo(row) || '-';
+      return '<article class="spp-pay-item">'
+        + '<div class="spp-pay-main"><span class="spp-pay-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-3-2-2 2-2-2-2 2-2-2-3 2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span>'
+        + '<div class="spp-pay-copy"><strong>'+waliPaymentEsc(title)+'</strong><span>Jatuh tempo '+waliPaymentEsc(due)+'</span></div>'
+        + '<span class="spp-pay-status">Belum lunas</span></div>'
+        + '<div class="spp-pay-total"><span>Total pembayaran</span><b>Rp '+Number(row.nominal||0).toLocaleString('id-ID')+'</b></div>'
+        + (QRIS_PAYMENT_ENABLED
+          ? '<button type="button" class="payment-primary-button" data-doku-spp="'+waliPaymentEsc(row.id)+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3"/></svg><span>Bayar dengan QRIS</span></button>'
+          : '<button type="button" class="payment-primary-button is-locked" disabled aria-disabled="true">'+lockIcon+'<span>QRIS dalam proses aktivasi</span></button>')
+        + '<div class="payment-security-note">'+lockIcon+'<span>'+(QRIS_PAYMENT_ENABLED?'Diproses aman oleh DOKU':'Pendaftaran merchant DOKU sedang berlangsung')+'</span></div>'
+        + '</article>';
+    }).join('') + '</div></section>';
+}
+
+function renderInfaqSubuhWali(detail) {
+  var amount = Number(appState.infaqAmount || 10000);
+  if(!isFinite(amount) || amount < 1000) amount = 10000;
+  var choices = [2000, 5000, 10000, 20000];
+  var choiceHtml = choices.map(function(value){
+    var active = amount === value;
+    return '<button type="button" class="infaq-amount'+(active?' is-active':'')+'" data-infaq-amount="'+value+'">Rp'+Number(value).toLocaleString('id-ID')+'</button>';
+  }).join('');
+  var paymentRows = ((appState.supabaseModules && appState.supabaseModules.payments) || []).filter(function(row){
+    return row && row.payment_type === 'infaq_subuh' && String(row.siswa_id || '') === String((window.__zymataWaliCtx && window.__zymataWaliCtx.siswa && window.__zymataWaliCtx.siswa.id) || appState.activeChildId || '');
+  });
+  var preview = appState.infaqPreviewOpen ? `
+    <section class="section infaq-checkout-preview" aria-live="polite">
+      <div class="infaq-checkout-head">
+        <div>
+          <span class="card-label">DOKU Checkout · Sandbox</span>
+          <h3>Ringkasan pembayaran</h3>
+        </div>
+        <span class="status-pill orange">Sandbox</span>
+      </div>
+      <div class="infaq-checkout-row"><span>Tujuan</span><strong>Infaq Subuh</strong></div>
+      <div class="infaq-checkout-row"><span>Atas nama</span><strong>${childProfile.fullName || appState.childName || 'Wali murid'}</strong></div>
+      <div class="infaq-checkout-row total"><span>Total</span><strong>Rp ${amount.toLocaleString('id-ID')}</strong></div>
+      <div class="infaq-doku-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01"/><circle cx="12" cy="12" r="9"/></svg>
+        <span>DOKU akan membuat transaksi sandbox dan menampilkan QRIS pada popup Checkout resmi. Pembayaran ini tidak memengaruhi tagihan SPP.</span>
+      </div>
+      ${QRIS_PAYMENT_ENABLED
+        ? '<button type="button" class="payment-primary-button" data-action="startDokuInfaq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3"/></svg><span>Bayar dengan QRIS</span></button>'
+        : '<button type="button" class="payment-primary-button is-locked" disabled aria-disabled="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>QRIS dalam proses aktivasi</span></button>'}
+      <div class="payment-security-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Checkout aman melalui DOKU</span></div>
+      <button type="button" class="infaq-secondary" data-action="closeInfaqPreview">Ubah nominal</button>
+    </section>` : '';
+  return `
+    <style>
+      .infaq-hero{margin:0 0 14px;padding:18px;border-radius:16px;background:#fff;border:1px solid #e8edf3;display:flex;align-items:center;gap:14px;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+      .infaq-hero-icon{width:48px;height:48px;border-radius:14px;background:#ecfdf5;color:#047857;display:flex;align-items:center;justify-content:center;flex:none}.infaq-hero-icon svg{width:25px;height:25px}
+      .infaq-hero h3{margin:0 0 3px;font-size:15px;color:#172033}.infaq-hero p{margin:0;color:#64748b;font-size:12px;line-height:1.5}
+      .infaq-panel{background:#fff;border:1px solid #e8edf3;border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+      .infaq-panel-title{margin:0 0 4px;font-size:14px;color:#172033}.infaq-panel-copy{margin:0 0 14px;font-size:12px;color:#64748b;line-height:1.5}
+      .infaq-amount-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.infaq-amount{min-height:44px;border:1px solid #dce3eb;background:#fff;border-radius:10px;color:#334155;font:700 13px/1 inherit;cursor:pointer}.infaq-amount.is-active{border-color:#f97316;background:#fff7ed;color:#c2410c;box-shadow:0 0 0 2px rgba(249,115,22,.1)}
+      .infaq-custom-wrap{margin-top:12px}.infaq-custom-wrap label{display:block;font-size:11px;font-weight:800;color:#64748b;margin-bottom:6px;text-transform:uppercase}.infaq-custom{width:100%;height:46px;border:1px solid #dce3eb;border-radius:10px;padding:0 13px;font:700 14px/1 inherit;color:#172033;background:#fff}
+      .infaq-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid #eef2f6}.infaq-summary span{font-size:12px;color:#64748b}.infaq-summary strong{font-size:19px;color:#172033}
+      .infaq-safe{display:flex;align-items:flex-start;gap:8px;margin:10px 2px 0;color:#64748b;font-size:11px;line-height:1.45}.infaq-safe svg{width:15px;height:15px;flex:none;margin-top:1px;color:#059669}
+      .infaq-checkout-preview{background:#fff;border:1px solid #fed7aa;border-radius:16px;padding:17px;box-shadow:0 10px 28px rgba(15,23,42,.07)}.infaq-checkout-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}.infaq-checkout-head h3{margin:4px 0 0;font-size:16px;color:#172033}.infaq-checkout-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eef2f6;font-size:12px}.infaq-checkout-row span{color:#64748b}.infaq-checkout-row strong{text-align:right;color:#172033}.infaq-checkout-row.total{border-bottom:0;padding-top:14px}.infaq-checkout-row.total strong{font-size:19px;color:#c2410c}
+      .infaq-doku-note{display:flex;gap:9px;margin:10px 0 14px;padding:11px;border-radius:10px;background:#fff7ed;color:#9a3412;font-size:11px;line-height:1.45}.infaq-doku-note svg{width:17px;height:17px;flex:none}.infaq-secondary{width:100%;height:42px;border:1px solid #dce3eb;border-radius:10px;background:#fff;color:#334155;font:700 13px/1 inherit;cursor:pointer;margin-top:9px}
+      .wali-fin-action{width:100%;font-family:inherit;color:inherit}
+    </style>
+    ${moduleIntro(detail, moduleParentTab('infaq-subuh'))}
+    <section class="section">
+      <div class="infaq-hero">
+        <span class="infaq-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>
+        <div><h3>Infaq ringan, tanpa kewajiban</h3><p>Nominal dipilih wali dan tidak memengaruhi tagihan SPP maupun saldo tabungan.</p></div>
+      </div>
+      <div class="infaq-panel">
+        <h3 class="infaq-panel-title">Pilih nominal infaq</h3>
+        <p class="infaq-panel-copy">Pembayaran diproses melalui QRIS DOKU Checkout sandbox.</p>
+        <div class="infaq-amount-grid">${choiceHtml}</div>
+        <div class="infaq-custom-wrap"><label for="infaqCustomAmount">Nominal lainnya</label><input id="infaqCustomAmount" class="infaq-custom" data-infaq-custom type="number" min="1000" step="1000" inputmode="numeric" placeholder="Masukkan nominal" value="${choices.indexOf(amount) < 0 ? amount : ''}"></div>
+        <div class="infaq-summary"><span>Total infaq</span><strong>Rp ${amount.toLocaleString('id-ID')}</strong></div>
+        ${QRIS_PAYMENT_ENABLED
+          ? '<button type="button" class="payment-primary-button payment-preview-button" data-action="previewInfaqCheckout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>Lanjut ke pembayaran</span></button>'
+          : '<button type="button" class="payment-primary-button is-locked" disabled aria-disabled="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>QRIS dalam proses aktivasi</span></button>'}
+        <div class="infaq-safe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>${QRIS_PAYMENT_ENABLED?'Kredensial DOKU tetap berada di server. Aplikasi hanya menerima URL Checkout yang aman.':'Pembayaran akan dibuka setelah proses pendaftaran DOKU selesai.'}</span></div>
+      </div>
+    </section>
+    ${preview}
+    ${renderWaliRiwayatList('Infaq Subuh', paymentRows, function(row){ return row.paid_at || row.created_at || ''; }, function(row){
+      var status = String(row.status || 'pending').toLowerCase();
+      var label = status === 'paid' ? 'Berhasil' : status === 'pending' ? 'Menunggu' : status === 'expired' ? 'Kedaluwarsa' : status === 'cancelled' ? 'Dibatalkan' : 'Gagal';
+      var tone = status === 'paid' ? 'green' : status === 'pending' ? 'orange' : 'red';
+      return { time:String(row.paid_at || row.created_at || '').slice(0,10) || '-', title:'Infaq Subuh - Rp'+Number(row.amount||0).toLocaleString('id-ID'), meta:'DOKU Checkout · '+String(row.invoice_number||'-'), status:label, tone:tone };
+    }, 'Belum ada riwayat infaq', 'Infaq yang diproses melalui DOKU akan tampil di sini.')}
+  `;
+}
+
 function renderModule(moduleId) {
   const detail = moduleDetails[moduleId];
   if (!detail) return renderAcademic();
@@ -1871,6 +2053,7 @@ function renderModule(moduleId) {
   if (moduleId === 'mutabaah-tahfidz') return renderMutabaahTahfidzWaliModule(detail);
   if (moduleId === 'calistung-anak') return window.renderCalistungWaliModule(detail); // [CALISTUNG WALI]
   if (moduleId === 'program-kegiatan') return renderProgramKegiatanWali(detail);
+  if (moduleId === 'infaq-subuh') return renderInfaqSubuhWali(detail);
   const dataKey = waliModuleDataKey(moduleId);
   // Modul write wali (form input) tidak boleh ke-render read-only/empty generic; harus jatuh ke blok custom yang punya form.
   var __waliWriteModules = ['surat-wali','mutabaah-rumah'];
@@ -2225,6 +2408,7 @@ function renderModule(moduleId) {
             ${statCard('Jatuh Tempo', jatuhTempo, 'Tagihan terdekat', 'blue')}
           </div>
         </section>
+        ${renderWaliSppPayableList(belumBayar)}
         ${renderWaliRiwayatList('Tagihan SPP', tagihanAnak, function(t){ return waliSppTanggal(t) || ''; }, function(t){
           var lunas = waliSppLunas(t);
           return { time: waliSppTanggal(t) || '-', title: (t.keterangan || t.deskripsi || 'SPP') + ' - Rp' + Number(t.nominal||0).toLocaleString('id-ID'), meta: (appState.childName || '') + (t.kelas ? ' \u00b7 ' + t.kelas : '') + (t.tahun_ajaran ? ' \u00b7 ' + t.tahun_ajaran : ''), status: lunas ? 'Lunas' : 'Belum', tone: lunas ? 'green' : 'orange' };
@@ -2397,7 +2581,7 @@ function renderModule(moduleId) {
 }
 
 function moduleParentTab(moduleId) {
-  if (['keuangan-spp', 'keuangan-tabungan', 'keuangan-umum'].includes(moduleId)) return 'home';
+  if (['keuangan', 'keuangan-spp', 'keuangan-tabungan', 'keuangan-umum', 'infaq-subuh'].includes(moduleId)) return 'more';
   if (['absensi-anak', 'nilai-anak', 'perkembangan-anak', 'catatan-anak', 'jadwal-anak'].includes(moduleId)) return 'academic';
   if (['mutabaah-rumah', 'mutabaah-tahfidz'].includes(moduleId)) return 'mutabaah';
   return 'more';
@@ -2761,6 +2945,19 @@ function bindActions() {
   });
 
   document.addEventListener('change', function(event){
+    var infaqCustom = event.target && event.target.closest && event.target.closest('[data-infaq-custom]');
+    if (infaqCustom) {
+      var customAmount = Math.floor(Number(infaqCustom.value || 0));
+      if (customAmount >= 1000) {
+        appState.infaqAmount = customAmount;
+        appState.infaqPreviewOpen = false;
+        notifyFeedback('light');
+        render();
+      } else if (infaqCustom.value) {
+        waliShowSaveError('Nominal infaq minimal Rp1.000.');
+      }
+      return;
+    }
     // [RIWAYAT BULAN] Dropdown bulan & tanggal pada semua panel riwayat wali.
     var rwBulan = event.target && event.target.closest && event.target.closest('select[data-select="wali-riwayat-bulan"]');
     if (rwBulan) {
@@ -2787,6 +2984,22 @@ function bindActions() {
   });
 
   document.addEventListener('click', async (event) => {
+    var sppPayButton = event.target && event.target.closest && event.target.closest('[data-doku-spp]');
+    if (sppPayButton) {
+      await waliStartDokuPayment({ paymentType:'spp', referenceId:sppPayButton.getAttribute('data-doku-spp') }, sppPayButton);
+      return;
+    }
+    var infaqAmountButton = event.target && event.target.closest && event.target.closest('[data-infaq-amount]');
+    if (infaqAmountButton) {
+      var presetAmount = Number(infaqAmountButton.getAttribute('data-infaq-amount') || 0);
+      if (presetAmount >= 1000) {
+        appState.infaqAmount = presetAmount;
+        appState.infaqPreviewOpen = false;
+        notifyFeedback('light');
+        render();
+      }
+      return;
+    }
     var perkMoreBtn = event.target && event.target.closest && event.target.closest('[data-perk-more]');
     if (perkMoreBtn) {
       var pc = perkMoreBtn.getAttribute('data-perk-more');
@@ -2856,6 +3069,27 @@ function bindActions() {
         if (!__wasHome) navigate('home');
         notifyFeedback('light');
         setTimeout(function(){ var el = document.getElementById('waliJadwalHariIni'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, __wasHome ? 0 : 160);
+        return;
+      }
+      if (target === 'previewInfaqCheckout') {
+        if (Number(appState.infaqAmount || 0) < 1000) {
+          waliShowSaveError('Pilih nominal infaq minimal Rp1.000.');
+          return;
+        }
+        appState.infaqPreviewOpen = true;
+        notifyFeedback('success');
+        render();
+        setTimeout(function(){ var el=document.querySelector('.infaq-checkout-preview'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'start'}); },80);
+        return;
+      }
+      if (target === 'startDokuInfaq') {
+        await waliStartDokuPayment({ paymentType:'infaq_subuh', amount:Number(appState.infaqAmount || 0) }, actionButton);
+        return;
+      }
+      if (target === 'closeInfaqPreview') {
+        appState.infaqPreviewOpen = false;
+        notifyFeedback('light');
+        render();
         return;
       }
       navigate(target);
@@ -3512,16 +3746,18 @@ animateWaliContent();
       var keuRows = await window.ZymataMobileSupabase.tryFilteredList('keuangan', filters, 20, { strict: true });
       var tabRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_siswa', filters, 20, { strict: true });
       var tabUmumRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_umum', filters, 20, { strict: true });
+      var payRes = await window.ZymataMobileSupabase.select('payment_transactions', { eq:{ siswa_id:siswaId }, select:'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at', order:'created_at', ascending:false, limit:30 });
       // Update module cache hanya untuk finance
       if(Array.isArray(sppRows) || Array.isArray(tagihanRows) || Array.isArray(keuRows)) {
         _smF.keuangan = [].concat(
-          Array.isArray(sppRows) ? sppRows : [],
-          Array.isArray(tagihanRows) ? tagihanRows : [],
-          Array.isArray(keuRows) ? keuRows : []
+          Array.isArray(sppRows) ? sppRows.map(function(r){ return Object.assign({_zymata_source:'spp_pembayaran'},r); }) : [],
+          Array.isArray(tagihanRows) ? tagihanRows.map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }) : [],
+          Array.isArray(keuRows) ? keuRows.map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }) : []
         );
       }
       if(Array.isArray(tabRows)) _smF.tabungan = tabRows;
       if(Array.isArray(tabUmumRows)) _smF.tabunganUmum = tabUmumRows;
+      if(payRes && !payRes.error && Array.isArray(payRes.data)) _smF.payments = payRes.data;
       appState.supabaseModules = _smF;
       syncWaliFinanceState();
       // Kedip fix v2: render ulang HANYA jika data keuangan BENAR-BENAR berubah.
@@ -3532,13 +3768,13 @@ animateWaliContent();
         try { return (Array.isArray(arr) ? arr : []).map(function(r){ return JSON.stringify(r); }).sort().join('|'); }
         catch(_e){ return ''; }
       }
-      var _sig = _finSig(_smF.keuangan) + '#' + _finSig(_smF.tabungan) + '#' + _finSig(_smF.tabunganUmum);
+      var _sig = _finSig(_smF.keuangan) + '#' + _finSig(_smF.tabungan) + '#' + _finSig(_smF.tabunganUmum) + '#' + _finSig(_smF.payments);
       if(_lastSig === ''){
         // Poll pertama: set baseline saja, JANGAN render (data sudah tampil dari load awal).
         _lastSig = _sig;
       } else if(_sig !== _lastSig){
         _lastSig = _sig;
-        if(appState.activeTab === 'home') render();
+        if(appState.activeTab === 'home' || appState.activeTab === 'more' || /^module:(keuangan|infaq-subuh)/.test(appState.activeTab)) render();
       }
     } catch(_){}
     _last = Date.now();
@@ -3780,8 +4016,13 @@ animateWaliContent();
   }
   function adaIsiDraft(){
     for(var i=0;i<CATS_WALI.length;i++){
-      var ents=wEntriesForKat(CATS_WALI[i]);
-      for(var r=0;r<ents.length;r++){ if((parseInt(ents[r].surah,10)||0)>0) return true; }
+      var kat=CATS_WALI[i], _isTil=isTilawahKat(kat);
+      var ents=wEntriesForKat(kat);
+      for(var r=0;r<ents.length;r++){
+        if((parseInt(ents[r].surah,10)||0)>0) return true;
+        // [TILAWAH TANPA SURAH] At-Tanzil/halaman saja juga dihitung sebagai isi.
+        if(_isTil && ((parseInt(ents[r].tanzil,10)||0)>0 || (parseInt(ents[r].halaman,10)||0)>0)) return true;
+      }
     }
     return false;
   }
@@ -3825,6 +4066,10 @@ animateWaliContent();
         var tEl=document.getElementById('zwtf-tanzil-'+c+'-'+r), hEl=document.getElementById('zwtf-hal-'+c+'-'+r);
         var tp=computeTanzilProgres(tEl?tEl.value:'', hEl?hEl.value:'');
         if(tp.tanzil){ pEl.textContent='At-Tanzil '+tp.tanzil+'/6'+(tp.halaman?(' - Hal. '+tp.halaman):'')+' - '+tp.pct+'%'; return; }
+        // [PROGRES TANPA ACUAN] Halaman tanpa At-Tanzil: jilid tak diketahui,
+        // tampilkan halamannya saja, jangan "Belum ada" atau 0%.
+        var _hOnly=parseInt(hEl?hEl.value:'',10)||0;
+        if(_hOnly && !(parseInt(sEl?sEl.value:'',10)||0)){ pEl.textContent='Hal. '+_hOnly; return; }
       }
       if(!sEl||!aEl) return;
       var rp=computeProgres(sEl.value, aEl.value);
@@ -3854,7 +4099,14 @@ animateWaliContent();
       }
       for(var i=0;i<CATS_WALI.length;i++){
         var kat=CATS_WALI[i];
-        var entries=wEntriesForKat(kat).filter(function(en){ return (parseInt(en.surah,10)||0)>0; });
+        // [TILAWAH TANPA SURAH] Dulu entri tanpa surah selalu dibuang, padahal
+        // formnya punya input At-Tanzil + Halaman. Sekarang Tilawah boleh disimpan
+        // hanya dengan At-Tanzil dan/atau Halaman — sama seperti jalur guru.
+        var _isTil=isTilawahKat(kat);
+        var entries=wEntriesForKat(kat).filter(function(en){
+          if((parseInt(en.surah,10)||0)>0) return true;
+          return _isTil && ((parseInt(en.tanzil,10)||0)>0 || (parseInt(en.halaman,10)||0)>0);
+        });
         if(!entries.length) continue;
         filled++;
         var parts=[], combinedCat=[], last=null;
@@ -3866,44 +4118,140 @@ animateWaliContent();
           var snama=(SURAH[surah_no-1]?SURAH[surah_no-1][0]:'');
           var cat=stripTanzilNote(en.catatan||'');
           var _progVal=prog.pct;
-          if(isTilawahKat(kat)){
+          if(_isTil){
             var _note=tanzilNote(en.tanzil, en.halaman);
             if(_note) cat = cat ? (cat+' '+_note) : _note;
             var _tzp=computeTanzilProgres(en.tanzil, en.halaman);
             if(_tzp.tanzil) _progVal=_tzp.pct;
+            // [PROGRES TANPA ACUAN] Tilawah tanpa surah dan tanpa At-Tanzil:
+            // jilid tak diketahui, persen tidak bisa dihitung. Simpan null,
+            // jangan 0 yang tampil "0%" seolah tidak ada kemajuan.
+            else if(!surah_no) _progVal=null;
           }
           // Riwayat: satu baris per surah.
           logs.push({ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:_progVal, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:'', guru_nama:('Wali - '+nama) });
-          parts.push(snama+' ('+ayat+' ayat)');
-          if(cat) combinedCat.push(snama+': '+cat);
+          // [TILAWAH TANPA SURAH] label ringkasan dari At-Tanzil/halaman bila surah kosong.
+          parts.push(snama?(snama+' ('+ayat+' ayat)'):((tanzilNote(en.tanzil,en.halaman)||'').replace(/^\[/,'').replace(/\]$/,'')||'Tilawah'));
+          if(cat) combinedCat.push(snama?snama+': '+cat:cat);
           last={ surah_no:surah_no, ayat:ayat, prog:prog, progVal:_progVal };
         }
         // Ringkasan: satu baris per kategori, nama surah digabung.
-        var body={ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:(last.progVal!=null?last.progVal:last.prog.pct), catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
+        // [PROGRES TANPA ACUAN] entri terakhir tanpa surah & tanpa progres terhitung
+        // -> simpan null, bukan jatuh ke prog.pct yang bernilai 0.
+        var _ringkasProg = (last.progVal!=null) ? last.progVal
+                         : (last.surah_no ? last.prog.pct : null);
+        var body={ client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(nis), nama_siswa:nama, kelas:kelas, kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:_ringkasProg, catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
         var res=await api.upsert('mutabaah_tahfidz',body,'client_key,siswa_id,konteks,kategori,tahun_ajaran,semester');
         if(res&&res.error) failed++; else saved++;
       }
       if(!filled){ toast('Isi minimal 1 kategori','error'); return; }
-      // ANTI-DOBEL: baris dengan kategori + surah + ayat + tanggal yang sama tidak ditulis dua kali.
-      var skipDobel=0;
+      // ANTI-DOBEL + KOREKSI RIWAYAT.
+      //
+      // [KOREKSI SETORAN] Dulu baris dengan kategori+surah+ayat+tanggal yang sama
+      // selalu DILEWATI, dan sisanya ditulis dengan api.insert yang galatnya
+      // ditelan `catch(e){}` kosong. Akibatnya wali tidak bisa mengoreksi setoran
+      // tanggal sebelumnya (mis. menambahkan At-Tanzil yang tertinggal), dan bila
+      // isian berubah, INSERT-nya ditolak unique index mtr_unik_v2 secara diam-diam
+      // sementara ringkasan tetap ikut berubah — terlihat "tersimpan" padahal tidak.
+      //
+      // Sekarang: isi identik -> dilewati; kunci database sama tapi isi berubah ->
+      // baris lama DI-UPDATE; benar-benar baru -> insert. Galat selalu ditampilkan.
+      var skipDobel=0, dikoreksi=0, gagalRiwayat=0, tergabung=0;
       if(logs.length){
-        var _sigOf=function(l){ return [String(l.kategori||''),String(l.surah_no||''),String(l.ayat||''),String(l.tanggal||'').slice(0,10)].join('|'); };
+        // Tanda ISI: untuk membedakan "benar-benar sama" vs "berubah".
+        var _sigOf=function(l){
+          var _q=parseTanzilNote(l&&l.catatan||'');
+          return [String(l.kategori||''),String(l.surah_no||''),String(l.ayat||''),
+                  String(_q.tanzil||''),String(_q.halaman||''),
+                  String(l.catatan==null?'':l.catatan).trim(),
+                  String(l.progres==null?'':l.progres),
+                  String(l.tanggal||'').slice(0,10)].join('|');
+        };
+        // Tanda KUNCI DATABASE: persis kolom unique index mtr_unik_v2.
+        var _dbKeyOf=function(l){
+          return [String(l.kategori||''),
+                  String(parseInt(l.surah_no,10)||0),
+                  String(parseInt(l.ayat,10)||0),
+                  String(l.tanggal||'').slice(0,10)].join('|');
+        };
+
+        // 1) Kembar persis di dalam form.
         var _seen={}, _uniq=[];
         logs.forEach(function(l){ var sg=_sigOf(l); if(_seen[sg]){ skipDobel++; return; } _seen[sg]=1; _uniq.push(l); });
         logs=_uniq;
+
+        // 2) Beda isi tapi kunci database sama (mis. dua Tilawah tanpa surah di
+        //    tanggal sama) -> hanya satu yang bisa hidup di tabel. Pakai isian
+        //    terakhir dan beri tahu, jangan buang diam-diam.
+        var _byKey={}, _urut=[];
+        logs.forEach(function(l){
+          var k=_dbKeyOf(l);
+          if(_byKey[k]===undefined){ _byKey[k]=_urut.length; _urut.push(l); }
+          else { _urut[_byKey[k]]=l; tergabung++; }
+        });
+        logs=_urut;
+
+        // 3) Bandingkan dengan yang sudah tersimpan pada tanggal ini.
+        var _updates=[];
         try{
           var _ex=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'wali_murid', tanggal:tgl }, limit:400 });
+          if(_ex&&_ex.error) throw new Error(_ex.error.message||'gagal membaca riwayat');
           var _exRows=(_ex&&_ex.data)?_ex.data:[];
           if(_exRows.length){
-            var _exSig={}; _exRows.forEach(function(r){ _exSig[_sigOf(r)]=1; });
-            logs=logs.filter(function(l){ if(_exSig[_sigOf(l)]){ skipDobel++; return false; } return true; });
+            var _exByKey={};
+            _exRows.forEach(function(r){ _exByKey[_dbKeyOf(r)]=r; });
+            logs=logs.filter(function(l){
+              var lama=_exByKey[_dbKeyOf(l)];
+              if(!lama) return true;                                        // baru -> insert
+              if(_sigOf(lama)===_sigOf(l)){ skipDobel++; return false; }   // sama -> lewati
+              if(lama.id==null) return false;                               // tak ber-id -> tak bisa di-update
+              _updates.push({ id:lama.id, row:l });                         // berubah -> KOREKSI
+              return false;
+            });
           }
-        }catch(e){}
+        }catch(e){
+          toast('Gagal memeriksa riwayat tanggal ini: '+String(e&&e.message||e),'error');
+          return;
+        }
+
+        // 4) Koreksi dijalankan satu per satu dan hasilnya DIPERIKSA.
+        if(_updates.length){
+          var client=(api.getClient?api.getClient():null);
+          if(!client||!client.from){
+            toast('Tidak bisa menyimpan koreksi: koneksi Supabase belum siap.','error');
+            return;
+          }
+          for(var u=0;u<_updates.length;u++){
+            var _up=_updates[u];
+            var _isi={ surah_nama:_up.row.surah_nama, juz:_up.row.juz, progres:_up.row.progres,
+                       catatan:_up.row.catatan, nama_siswa:_up.row.nama_siswa, kelas:_up.row.kelas,
+                       tahun_ajaran:_up.row.tahun_ajaran, semester:_up.row.semester };
+            try{
+              var _ur=await client.from('mutabaah_tahfidz_riwayat').update(_isi).eq('id',_up.id);
+              if(_ur&&_ur.error) gagalRiwayat++; else dikoreksi++;
+            }catch(e2){ gagalRiwayat++; }
+          }
+        }
       }
-      if(logs.length){ try{ await api.insert('mutabaah_tahfidz_riwayat', logs); }catch(e){} }
-      if(skipDobel) toast(skipDobel+' data kembar dilewati (sudah tercatat hari ini).','info');
-      if(saved){ toast('Tersimpan '+saved+' kategori','success'); WT.cleared=false; WT.draft={}; WT.loadedNis=null; loadTahfidz(nis); }
-      else toast('Gagal menyimpan','error');
+      // 5) Baris baru: hasilnya DIPERIKSA, bukan ditelan catch kosong.
+      if(logs.length){
+        try{
+          var _ins=await api.insert('mutabaah_tahfidz_riwayat', logs);
+          if(_ins&&_ins.error) gagalRiwayat+=logs.length;
+        }catch(e){ gagalRiwayat+=logs.length; }
+      }
+      if(tergabung) toast(tergabung+' baris Tilawah di tanggal ini digabung jadi satu (isian terakhir yang dipakai).','info');
+      if(skipDobel) toast(skipDobel+' data tidak berubah, dilewati.','info');
+      if(gagalRiwayat){
+        toast(gagalRiwayat+' baris riwayat GAGAL disimpan. Coba simpan ulang.','error');
+      }
+      if(saved||dikoreksi){
+        if(!gagalRiwayat){
+          toast(dikoreksi ? ('Tersimpan \u00b7 '+dikoreksi+' setoran dikoreksi') : ('Tersimpan '+saved+' kategori'),'success');
+        }
+        WT.cleared=false; WT.draft={}; WT.loadedNis=null; loadTahfidz(nis);
+      }
+      else if(!gagalRiwayat) toast('Gagal menyimpan','error');
     }
   };
 
@@ -3989,9 +4337,15 @@ animateWaliContent();
       var pr=r.surah_no?computeProgres(r.surah_no, r.ayat):null;
       pct=(pr&&pr.juz)?pr.pct:((r.progres!=null&&r.progres!=='')?Math.round(Number(r.progres)||0):null);
     }
+    // [PROGRES TANPA ACUAN] Tilawah tanpa surah dan tanpa At-Tanzil tidak punya
+    // dasar hitung persen. Baris lama menyimpan 0 dan tampil "0%" padahal
+    // halamannya maju — persennya disembunyikan saja.
+    if(pct===0 && !(parseInt(r.surah_no,10)||0) && isTilawahKat(r.kategori||'') && !q2TanzilOf(r)) pct=null;
     if(!inti && (pct===null||isNaN(pct))) return '';
     return esc(inti)+((pct!==null&&!isNaN(pct))?(' <span class="zlb-pct">'+pct+'%</span>'):'');
   }
+  // Pembantu kecil: At-Tanzil tercatat di catatan baris ini atau tidak.
+  function q2TanzilOf(r){ return parseTanzilNote(r&&r.catatan||'').tanzil; }
   function lembarBulanHtml(srcArr, labelTitle){
     var rows = Array.isArray(srcArr) ? srcArr : [];
     var ym = WT.lembarBulan || zlbBulanIni(); WT.lembarBulan = ym;
@@ -4123,7 +4477,13 @@ animateWaliContent();
           var _catVal=stripTanzilNote(en.catatan||'');
           var _pw=en.surah?computeProgres(en.surah, en.ayat):null;
           var progText=(_pw&&_pw.juz)?('Juz '+_pw.juz+' - '+_pw.pct+'%'+(_pw.seq?(' - tahap '+_pw.seq+'/30'):'')):'Belum ada';
-          if(isTilawahKat(kat)){ var _tt=tanzilProgText(_tzv, _hlv, ' - '); if(_tt) progText=_tt; }
+          if(isTilawahKat(kat)){
+            var _tt=tanzilProgText(_tzv, _hlv, ' - ');
+            if(_tt) progText=_tt;
+            // [PROGRES TANPA ACUAN] Halaman tanpa At-Tanzil & tanpa surah:
+            // tampilkan halamannya saja.
+            else if(!(parseInt(en.surah,10)||0) && _hlv) progText='Hal. '+_hlv;
+          }
           var delBtn=(ents.length>1)?('<button type="button" class="zwtf-del" onclick="window.zwTf.delSurah('+i+','+r+')">Hapus surah '+(r+1)+'</button>'):'';
           rowsHtml+='<div class="zwtf-row'+(r>0?' zwtf-row-sep':'')+'">'
             +'<div class="zwtf-row-head"><span class="zwtf-row-no">Surah '+(r+1)+'</span><span class="zwtf-chip" id="zwtf-prog-'+i+'-'+r+'">'+progText+'</span></div>'
