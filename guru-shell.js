@@ -7163,7 +7163,16 @@ animateContent();
           surahCount++;
           // Tilawah: nilai progres yang disimpan memakai jilid At-Tanzil + halaman.
           var _progVal=prog.pct;
-          if(isTilawahKat(kat)){ var _tzp=computeTanzilProgres(e.tanzil, e.halaman); if(_tzp.tanzil) _progVal=_tzp.pct; }
+          if(isTilawahKat(kat)){
+            var _tzp=computeTanzilProgres(e.tanzil, e.halaman);
+            if(_tzp.tanzil) _progVal=_tzp.pct;
+            // [PROGRES TANPA ACUAN] Tilawah tanpa surah DAN tanpa At-Tanzil: jilidnya
+            // tidak diketahui, jadi persen tidak bisa dihitung. Dulu tersimpan 0 dan
+            // tampil "0%" seolah tidak ada kemajuan (mis. 14 anak I-A tgl 19/8 2026).
+            // Simpan null: pembaca sudah menjaga `progres != null`, jadi persennya
+            // tidak ditampilkan alih-alih ditampilkan salah.
+            else if(!surah_no) _progVal=null;
+          }
           // Riwayat: satu baris per surah (lengkap).
           logs.push({ client_key:'default', konteks:'sekolah', siswa_id:String(s.nis||ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:surah_no, surah_nama:snama, ayat:ayat, juz:prog.juz, progres:_progVal, catatan:cat, tanggal:tgl, tahun_ajaran:ta, semester:sem, guru_nip:guruNip(), guru_nama:guruNama() });
           // [TILAWAH TANPA SURAH] Ringkasan memakai label At-Tanzil bila surah kosong.
@@ -7172,35 +7181,138 @@ animateContent();
           last={ surah_no:surah_no, ayat:ayat, prog:prog, progVal:_progVal };
         }
         // Ringkasan: satu baris per kategori dgn nama surah digabung.
-        var body={ client_key:'default', konteks:'sekolah', siswa_id:String(s.nis||ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:(last.progVal!=null?last.progVal:last.prog.pct), catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
+        // [PROGRES TANPA ACUAN] Kalau entri terakhir tidak punya surah DAN progresnya
+        // tak terhitung (Tilawah tanpa At-Tanzil), simpan null. Dulu jatuh ke
+        // `last.prog.pct` yang bernilai 0 untuk surah kosong, sehingga ringkasan
+        // menampilkan "0%" seolah tidak ada kemajuan.
+        var _ringkasProg = (last.progVal!=null) ? last.progVal
+                         : (last.surah_no ? last.prog.pct : null);
+        var body={ client_key:'default', konteks:'sekolah', siswa_id:String(s.nis||ST.mtfSiswaId), nis:String(s.nis||ST.mtfSiswaId), nama_siswa:s.nama_siswa||s.name||'', kelas:s.kelas||'', kategori:kat, surah_no:last.surah_no, surah_nama:parts.join(' \u00b7 '), ayat:last.ayat, juz:last.prog.juz, progres:_ringkasProg, catatan:combinedCat.join(' | '), tahun_ajaran:ta, semester:sem, updated_at:nowISO() };
         var res=await api.upsert('mutabaah_tahfidz',body,'client_key,siswa_id,konteks,kategori,tahun_ajaran,semester');
         if(res&&res.error) failed++; else saved++;
       }
       if(!filled){ showToast('Isi minimal 1 kategori','error','&#9888;'); return; }
-      // ANTI-DOBEL RIWAYAT: buang baris kembar di dalam form, lalu buang baris
-      // yang sudah tersimpan pada tanggal yang sama, supaya Simpan berulang atau
-      // form yang terisi otomatis tidak menumpuk data.
-      var skipDobel=0;
+      // ANTI-DOBEL RIWAYAT: buang baris kembar di dalam form, lalu bandingkan dengan
+      // baris yang sudah tersimpan pada tanggal yang sama.
+      //
+      // [KOREKSI SETORAN] Dulu bagian ini HANYA bisa menambah baris baru
+      // (api.insert) dan galatnya ditelan `catch(e){}` kosong. Akibatnya, saat guru
+      // mengoreksi At-Tanzil/halaman/catatan pada tanggal yang sudah terisi:
+      //   - baris riwayat DITOLAK database oleh unique index mtr_unik_v2
+      //     (siswa_id, tanggal, konteks, kategori, surah_no, ayat) -> untuk Tilawah
+      //     tanpa surah, surah_no & ayat dua-duanya 0 sehingga seluruh setoran
+      //     Tilawah pada satu tanggal punya kunci yang SAMA;
+      //   - tabel ringkasan tetap ikut berubah (jalur upsert di atas);
+      //   - toast tetap berbunyi "Tersimpan".
+      // Guru melihat ringkasan berubah tetapi riwayat tanggal itu tidak.
+      // Sekarang: baris yang kunci-database-nya sudah ada TIDAK di-insert, tapi
+      // DI-UPDATE, sehingga koreksi menimpa baris yang benar.
+      var skipDobel=0, dikoreksi=0, gagalRiwayat=0, tergabung=0;
       if(logs.length){
-        // [TILAWAH TANPA SURAH] Tanda kembar ikut memperhitungkan jilid At-Tanzil &
-        // halaman, supaya dua setoran Tilawah berbeda di tanggal sama tidak dianggap dobel.
-        var _sigOf=function(l){ var _q=parseTanzilNote(l&&l.catatan||''); return [String(l.kategori||''),String(l.surah_no||''),String(l.ayat||''),String(_q.tanzil||''),String(_q.halaman||''),String(l.tanggal||'').slice(0,10)].join('|'); };
+        // Tanda ISI: dipakai untuk memutuskan "benar-benar sama" vs "berubah".
+        // Ikut memperhitungkan At-Tanzil, halaman, catatan, dan progres.
+        var _sigOf=function(l){
+          var _q=parseTanzilNote(l&&l.catatan||'');
+          return [String(l.kategori||''),String(l.surah_no||''),String(l.ayat||''),
+                  String(_q.tanzil||''),String(_q.halaman||''),
+                  String(l.catatan==null?'':l.catatan).trim(),
+                  String(l.progres==null?'':l.progres),
+                  String(l.tanggal||'').slice(0,10)].join('|');
+        };
+        // Tanda KUNCI DATABASE: persis kolom pada unique index mtr_unik_v2.
+        // Dua baris dengan kunci sama TIDAK BISA hidup berdampingan di tabel.
+        var _dbKeyOf=function(l){
+          return [String(l.kategori||''),
+                  String(parseInt(l.surah_no,10)||0),
+                  String(parseInt(l.ayat,10)||0),
+                  String(l.tanggal||'').slice(0,10)].join('|');
+        };
+
+        // 1) Buang kembar di dalam form (isi benar-benar identik).
         var _seen={}, _uniq=[];
         logs.forEach(function(l){ var sg=_sigOf(l); if(_seen[sg]){ skipDobel++; return; } _seen[sg]=1; _uniq.push(l); });
         logs=_uniq;
+
+        // 2) Beberapa baris form bisa berbeda isi tapi berbagi kunci database yang
+        //    sama (mis. dua Tilawah tanpa surah di tanggal sama, beda At-Tanzil).
+        //    Database hanya bisa menyimpan SATU. Ambil yang terakhir diisi dan
+        //    beri tahu guru, jangan dibuang diam-diam.
+        var _byKey={}, _urut=[];
+        logs.forEach(function(l){
+          var k=_dbKeyOf(l);
+          if(_byKey[k]===undefined){ _byKey[k]=_urut.length; _urut.push(l); }
+          else { _urut[_byKey[k]]=l; tergabung++; }
+        });
+        logs=_urut;
+
+        // 3) Bandingkan dengan yang sudah tersimpan: lewati bila identik,
+        //    UPDATE bila kuncinya sama tetapi isinya berubah.
+        var _updates=[];
         try{
           var _exRes=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(s.nis||ST.mtfSiswaId), konteks:'sekolah', tanggal:tgl }, limit:400 });
+          if(_exRes&&_exRes.error) throw new Error(_exRes.error.message||'gagal membaca riwayat');
           var _exRows=(_exRes&&_exRes.data)?_exRes.data:[];
           if(_exRows.length){
-            var _exSig={}; _exRows.forEach(function(r){ _exSig[_sigOf(r)]=1; });
-            logs=logs.filter(function(l){ if(_exSig[_sigOf(l)]){ skipDobel++; return false; } return true; });
+            var _exByKey={};
+            _exRows.forEach(function(r){ _exByKey[_dbKeyOf(r)]=r; });
+            logs=logs.filter(function(l){
+              var lama=_exByKey[_dbKeyOf(l)];
+              if(!lama) return true;                       // benar-benar baru -> insert
+              if(_sigOf(lama)===_sigOf(l)){ skipDobel++; return false; }  // tidak berubah
+              if(lama.id==null) return false;              // tanpa id -> tidak bisa di-update
+              _updates.push({ id:lama.id, row:l });        // berubah -> koreksi
+              return false;
+            });
           }
-        }catch(e){}
+        }catch(e){
+          // Gagal membaca data lama: JANGAN diam-diam lanjut insert, karena pasti
+          // ditolak unique index dan guru akan mengira perubahannya tersimpan.
+          showToast('Gagal memeriksa riwayat tanggal ini: '+String(e&&e.message||e),'error','&#9888;');
+          return;
+        }
+
+        // 4) Jalankan koreksi lebih dulu, satu per satu, dan PERIKSA hasilnya.
+        if(_updates.length){
+          var client=(api.getClient?api.getClient():null);
+          if(!client||!client.from){
+            showToast('Tidak bisa menyimpan koreksi: koneksi Supabase belum siap.','error','&#9888;');
+            return;
+          }
+          for(var u=0;u<_updates.length;u++){
+            var _up=_updates[u];
+            var _isi={ surah_nama:_up.row.surah_nama, juz:_up.row.juz, progres:_up.row.progres,
+                       catatan:_up.row.catatan, nama_siswa:_up.row.nama_siswa, kelas:_up.row.kelas,
+                       tahun_ajaran:_up.row.tahun_ajaran, semester:_up.row.semester,
+                       guru_nip:_up.row.guru_nip, guru_nama:_up.row.guru_nama };
+            try{
+              var _ur=await client.from('mutabaah_tahfidz_riwayat').update(_isi).eq('id',_up.id);
+              if(_ur&&_ur.error) gagalRiwayat++; else dikoreksi++;
+            }catch(e2){ gagalRiwayat++; }
+          }
+        }
       }
-      if(logs.length){ try{ await api.insert('mutabaah_tahfidz_riwayat', logs); }catch(e){} }
-      if(skipDobel) showToast(skipDobel+' baris kembar dilewati (sudah tercatat di tanggal ini).','info','&#8505;');
-      if(saved){ showToast('Tersimpan '+saved+' kategori \u00b7 '+surahCount+' surah','success','&#10003;'); loadMtfForSiswa(String(s.nis||ST.mtfSiswaId)); loadRiwayat(String(s.nis||ST.mtfSiswaId)); }
-      else showToast('Gagal menyimpan','error','&#9888;');
+      // Baris baru: hasilnya DIPERIKSA, tidak lagi ditelan catch kosong.
+      if(logs.length){
+        try{
+          var _ins=await api.insert('mutabaah_tahfidz_riwayat', logs);
+          if(_ins&&_ins.error) gagalRiwayat+=logs.length;
+        }catch(e){ gagalRiwayat+=logs.length; }
+      }
+      if(tergabung) showToast(tergabung+' baris Tilawah di tanggal ini digabung jadi satu (isian terakhir yang dipakai). Pakai tanggal berbeda bila ingin terpisah.','info','&#8505;');
+      if(skipDobel) showToast(skipDobel+' baris tidak berubah, dilewati.','info','&#8505;');
+      // Riwayat gagal = data setoran hilang. Ini WAJIB terlihat, bukan disembunyikan
+      // di balik toast "Tersimpan" seperti sebelumnya.
+      if(gagalRiwayat){
+        showToast(gagalRiwayat+' baris riwayat GAGAL disimpan. Ringkasan mungkin sudah berubah tapi riwayat tanggal ini belum. Coba simpan ulang.','error','&#9888;');
+      }
+      if(saved||dikoreksi){
+        var _pesan = dikoreksi
+          ? ('Tersimpan \u00b7 '+dikoreksi+' setoran dikoreksi')
+          : ('Tersimpan '+saved+' kategori \u00b7 '+surahCount+' surah');
+        if(!gagalRiwayat) showToast(_pesan,'success','&#10003;');
+        loadMtfForSiswa(String(s.nis||ST.mtfSiswaId)); loadRiwayat(String(s.nis||ST.mtfSiswaId));
+      }
+      else if(!gagalRiwayat) showToast('Gagal menyimpan','error','&#9888;');
     }
   };
 
@@ -7354,21 +7466,38 @@ animateContent();
 
   function ringkasanProgresHtml(){
     var cards=CATS_SEKOLAH.map(function(kat){
-      var entries=draftEntries(kat).filter(function(e){ return (parseInt(e.surah,10)||0)>0; });
+      // [TILAWAH TANPA SURAH] Kartu ringkasan dulu HANYA menghitung entri ber-surah,
+      // sehingga Tilawah yang diisi dengan At-Tanzil/halaman saja selalu tampil
+      // "Belum ada" padahal isiannya ada. Syaratnya disamakan dengan aturan simpan.
+      var _isTil=isTilawahKat(kat);
+      var entries=draftEntries(kat).filter(function(e){
+        if((parseInt(e.surah,10)||0)>0) return true;
+        return _isTil && ((parseInt(e.tanzil,10)||0)>0 || (parseInt(e.halaman,10)||0)>0);
+      });
       if(!entries.length){
         return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+'</span><span class="ztf-sum-prog">-</span></div><div class="ztf-sum-surah">Belum ada</div></div>';
       }
       var last=entries[entries.length-1];
       var p=computeProgres(last.surah||0, last.ayat||0);
       var progTxt=p.juz?('Juz '+p.juz+' &middot; '+p.pct+'%'+(p.seq?(' &middot; tahap '+p.seq+'/30'):'')):'-';
-      if(isTilawahKat(kat)){
+      if(_isTil){
         var _lt=entries[entries.length-1]||{};
         var _tp=parseTanzilNote(_lt.catatan||'');
         var _tv=(_lt.tanzil||_tp.tanzil), _hv=(_lt.halaman||_tp.halaman);
-        var _tt=tanzilProgText(_tv, _hv); if(_tt) progTxt=_tt;
+        var _tt=tanzilProgText(_tv, _hv);
+        if(_tt) progTxt=_tt;
+        // Halaman tanpa At-Tanzil: jilid tak diketahui -> persen tidak bisa dihitung.
+        // Tampilkan halamannya saja, jangan "0%" atau "-" yang menyesatkan.
+        else if(!(parseInt(_lt.surah,10)||0) && _hv) progTxt='Hal. '+_hv;
       }
-      var names=entries.map(function(e){ var sn=(SURAH[e.surah-1]?SURAH[e.surah-1][0]:''); return sn+' : ayat '+(e.ayat!=null&&e.ayat!==''?e.ayat:'-'); }).join(' &middot; ');
-      return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+' <span class="ztf-chip" style="margin-left:4px">'+entries.length+' surah</span></span><span class="ztf-sum-prog">'+progTxt+'</span></div><div class="ztf-sum-surah">'+esc(names)+'</div></div>';
+      var names=entries.map(function(e){
+        var sn=(e.surah&&SURAH[e.surah-1]?SURAH[e.surah-1][0]:'');
+        if(sn) return sn+' : ayat '+(e.ayat!=null&&e.ayat!==''?e.ayat:'-');
+        // Tanpa surah: pakai label At-Tanzil / halaman.
+        return (tanzilNote(e.tanzil,e.halaman)||'').replace(/^\[/,'').replace(/\]$/,'')||'Tilawah';
+      }).join(' &middot; ');
+      var _satuan=_isTil?' entri':' surah';
+      return '<div class="ztf-sum-item"><div class="ztf-sum-top"><span class="ztf-sum-kat">'+esc(kat)+' <span class="ztf-chip" style="margin-left:4px">'+entries.length+esc(_satuan)+'</span></span><span class="ztf-sum-prog">'+progTxt+'</span></div><div class="ztf-sum-surah">'+esc(names)+'</div></div>';
     }).join('');
     return '<div class="ztf-panel"><span class="ztf-lbl">Ringkasan progres tersimpan</span><div class="ztf-sum-grid">'+cards+'</div></div>';
   }
@@ -7383,13 +7512,17 @@ animateContent();
     var s=String(r.surah_nama||(r.surah_no&&SURAH[r.surah_no-1]?SURAH[r.surah_no-1][0]:'')).trim();
     var ay=parseInt(r.ayat,10)||0;
     var inti = s ? (s+(ay>0?(' : '+ay):'')) : (ay>0?('ayat '+ay):'');
+    var q=parseTanzilNote(r.catatan||'');
     if(!inti){
       // [TILAWAH TANPA SURAH] setoran At-Tanzil tanpa surah tetap terbaca
-      var q=parseTanzilNote(r.catatan||'');
       if(q.tanzil) inti='At-Tanzil '+q.tanzil+(q.halaman?(' \u00b7 Hal. '+q.halaman):'');
       else if(q.halaman) inti='Hal. '+q.halaman;
     }
     var pr=(r.progres!=null&&r.progres!=='')?(Math.round(Number(r.progres)||0)+'%'):'';
+    // [PROGRES TANPA ACUAN] Tilawah tanpa surah dan tanpa At-Tanzil tidak punya
+    // dasar hitung. Baris lama menyimpan 0 dan tampil "0%" seolah tidak ada
+    // kemajuan padahal halamannya maju. Persennya disembunyikan saja.
+    if(pr==='0%' && !(parseInt(r.surah_no,10)||0) && !q.tanzil) pr='';
     if(!inti && !pr) return '';
     return esc(inti)+(pr?(' <span class="zlb-pct">'+esc(pr)+'</span>'):'');
   }
