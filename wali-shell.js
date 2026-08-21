@@ -1454,6 +1454,221 @@ function renderSupabaseEmptyWaliModule(detail) {
   `;
 }
 
+function waliNilaiEsc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(char) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char];
+  });
+}
+
+function waliNilaiNumber(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  var number = Number(String(value).replace(',', '.'));
+  return Number.isFinite(number) ? number : null;
+}
+
+function waliNilaiRow(row) {
+  row = row || {};
+  var tugas = waliNilaiNumber(row.nilai_tugas);
+  var ujian = waliNilaiNumber(row.nilai_ujian);
+  var candidates = [row.nilai_akhir, row.nilai, row.nilai_rapor, row.nilai_angka, row.rata_rata, row.skor];
+  var score = null;
+  for (var i = 0; i < candidates.length; i++) {
+    score = waliNilaiNumber(candidates[i]);
+    if (score !== null) break;
+  }
+  if (score === null && tugas !== null && ujian !== null) score = (tugas + ujian) / 2;
+  else if (score === null) score = tugas !== null ? tugas : ujian;
+  var subject = String(row.mapel || row.mata_pelajaran || row.nama_mapel || 'Mata pelajaran').trim();
+  var type = String(row.jenis || row.judul || row.kategori || 'Penilaian').replace(/[-_]+/g, ' ').trim();
+  type = type.replace(/\b\w/g, function(char){ return char.toUpperCase(); });
+  return {
+    id: row.id || row.uuid || row.key || '',
+    subject: subject,
+    semester: String(row.semester || 'Tanpa semester').trim(),
+    type: type,
+    score: score,
+    tugas: tugas,
+    ujian: ujian,
+    kkm: waliNilaiNumber(row.kkm),
+    date: String(row.tanggal || row.tgl || row.created_at || '').slice(0, 10),
+    note: String(row.catatan || row.keterangan || '').trim()
+  };
+}
+
+function waliNilaiFormat(score) {
+  if (score === null || !Number.isFinite(score)) return '-';
+  return Number.isInteger(score) ? String(score) : score.toFixed(1).replace('.', ',');
+}
+
+function renderNilaiAnak(detail, sourceRows) {
+  var rows = (Array.isArray(sourceRows) ? sourceRows : []).map(waliNilaiRow).filter(function(row){
+    return row.score !== null;
+  }).sort(function(a, b){ return b.date.localeCompare(a.date); });
+  var semesters = [];
+  var subjects = [];
+  rows.forEach(function(row){
+    if (semesters.indexOf(row.semester) === -1) semesters.push(row.semester);
+    if (subjects.indexOf(row.subject) === -1) subjects.push(row.subject);
+  });
+  subjects.sort(function(a, b){ return a.localeCompare(b, 'id'); });
+
+  var selectedSemester = appState.waliNilaiSemester || (rows[0] && rows[0].semester) || '__all';
+  if (selectedSemester !== '__all' && semesters.indexOf(selectedSemester) === -1) selectedSemester = '__all';
+  var semesterRows = selectedSemester === '__all' ? rows : rows.filter(function(row){ return row.semester === selectedSemester; });
+  var semesterSubjects = [];
+  semesterRows.forEach(function(row){ if (semesterSubjects.indexOf(row.subject) === -1) semesterSubjects.push(row.subject); });
+  semesterSubjects.sort(function(a, b){ return a.localeCompare(b, 'id'); });
+  var selectedSubject = appState.waliNilaiMapel || '__all';
+  if (selectedSubject !== '__all' && semesterSubjects.indexOf(selectedSubject) === -1) selectedSubject = '__all';
+  var visibleRows = selectedSubject === '__all' ? semesterRows : semesterRows.filter(function(row){ return row.subject === selectedSubject; });
+
+  var total = 0;
+  var highest = null;
+  var needsAttention = 0;
+  visibleRows.forEach(function(row){
+    total += row.score;
+    if (!highest || row.score > highest.score) highest = row;
+    if (row.score < (row.kkm !== null ? row.kkm : 70)) needsAttention++;
+  });
+  var average = visibleRows.length ? total / visibleRows.length : null;
+  var averageTone = average === null ? 'neutral' : (average >= 85 ? 'strong' : (average >= 70 ? 'steady' : 'watch'));
+  var summary = visibleRows.length
+    ? visibleRows.length + ' penilaian' + (selectedSemester !== '__all' ? ' pada semester ' + waliNilaiEsc(selectedSemester) : '')
+    : 'Belum ada penilaian pada filter ini';
+
+  var semesterOptions = '<option value="__all"' + (selectedSemester === '__all' ? ' selected' : '') + '>Semua semester</option>' +
+    semesters.map(function(value){ return '<option value="' + waliNilaiEsc(value) + '"' + (value === selectedSemester ? ' selected' : '') + '>' + waliNilaiEsc(value) + '</option>'; }).join('');
+  var subjectOptions = '<option value="__all"' + (selectedSubject === '__all' ? ' selected' : '') + '>Semua pelajaran</option>' +
+    semesterSubjects.map(function(value){ return '<option value="' + waliNilaiEsc(value) + '"' + (value === selectedSubject ? ' selected' : '') + '>' + waliNilaiEsc(value) + '</option>'; }).join('');
+
+  var grouped = {};
+  visibleRows.forEach(function(row){
+    if (!grouped[row.subject]) grouped[row.subject] = [];
+    grouped[row.subject].push(row);
+  });
+  var groupNames = Object.keys(grouped).sort(function(a, b){ return a.localeCompare(b, 'id'); });
+  var listHtml = groupNames.map(function(subject, groupIndex){
+    var subjectRows = grouped[subject];
+    var subjectAverage = subjectRows.reduce(function(sum, row){ return sum + row.score; }, 0) / subjectRows.length;
+    return '<section class="wali-nilai-subject">' +
+      '<div class="wali-nilai-subject-head"><div><h3>' + waliNilaiEsc(subject) + '</h3><p>' + subjectRows.length + ' penilaian tercatat</p></div><span>Rata-rata ' + waliNilaiFormat(subjectAverage) + '</span></div>' +
+      '<div class="wali-nilai-list">' + subjectRows.map(function(row){
+        var target = row.kkm !== null ? row.kkm : 70;
+        var status = row.score >= 90 ? 'Sangat baik' : (row.score >= target ? 'Tuntas' : 'Perlu perhatian');
+        var tone = row.score >= 90 ? 'strong' : (row.score >= target ? 'steady' : 'watch');
+        var components = [];
+        if (row.tugas !== null) components.push('<span>Tugas <strong>' + waliNilaiFormat(row.tugas) + '</strong></span>');
+        if (row.ujian !== null) components.push('<span>Ujian <strong>' + waliNilaiFormat(row.ujian) + '</strong></span>');
+        components.push('<span>KKM <strong>' + waliNilaiFormat(target) + '</strong></span>');
+        return '<article class="wali-nilai-row ' + tone + '">' +
+          '<div class="wali-nilai-row-main"><div class="wali-nilai-copy"><span class="wali-nilai-type">' + waliNilaiEsc(row.type) + '</span><h4>' + waliNilaiEsc(subject) + '</h4><p>' + (row.date ? waliNilaiEsc(waliRiwayatFormatTanggal(row.date)) : 'Tanggal belum tersedia') + '</p></div>' +
+          '<div class="wali-nilai-score"><strong>' + waliNilaiFormat(row.score) + '</strong><span>' + status + '</span></div></div>' +
+          '<div class="wali-nilai-components">' + components.join('') + '</div>' +
+          (row.note ? '<p class="wali-nilai-note"><span>Catatan guru</span>' + waliNilaiEsc(row.note) + '</p>' : '') +
+          '</article>';
+      }).join('') + '</div></section>';
+  }).join('');
+
+  return '<section class="section wali-nilai-page">' +
+    '<article class="wali-nilai-hero ' + averageTone + '"><div class="wali-nilai-hero-copy"><span class="wali-nilai-eyebrow">Capaian akademik</span><h2>Nilai ' + waliNilaiEsc(childProfile.nickName || childProfile.fullName || appState.childName || 'anak') + '</h2><p>' + summary + '</p></div>' +
+    '<div class="wali-nilai-average"><span>Rata-rata</span><strong>' + waliNilaiFormat(average) + '</strong></div></article>' +
+    '<div class="wali-nilai-kpis">' +
+      '<article><span>Nilai tertinggi</span><strong>' + (highest ? waliNilaiFormat(highest.score) : '-') + '</strong><small>' + (highest ? waliNilaiEsc(highest.subject) : 'Belum ada data') + '</small></article>' +
+      '<article><span>Mata pelajaran</span><strong>' + semesterSubjects.length + '</strong><small>Dalam periode ini</small></article>' +
+      '<article class="' + (needsAttention ? 'watch' : '') + '"><span>Perlu perhatian</span><strong>' + needsAttention + '</strong><small>Di bawah KKM / 70</small></article>' +
+    '</div>' +
+    '<div class="wali-nilai-toolbar"><label><span>Semester</span><select data-select="wali-nilai-semester">' + semesterOptions + '</select></label><label><span>Mata pelajaran</span><select data-select="wali-nilai-mapel">' + subjectOptions + '</select></label></div>' +
+    '<div class="wali-nilai-section-head"><div><h2>Rincian penilaian</h2><p>' + visibleRows.length + ' hasil ditemukan</p></div></div>' +
+    (listHtml || '<article class="wali-nilai-empty"><div>' + ICONS.nilai + '</div><h3>Belum ada nilai</h3><p>Nilai akan tampil di sini setelah sekolah menginput penilaian atau ketika filter lain dipilih.</p></article>') +
+    '</section>';
+}
+
+function waliCatatanRow(row) {
+  row = row || {};
+  var visibility = String(row.status_visibilitas || row.visibilitas || '').toLowerCase();
+  var category = String(row.kategori || row.jenis || 'Catatan umum').replace(/[-_]+/g, ' ').trim();
+  category = category.replace(/\b\w/g, function(char){ return char.toUpperCase(); });
+  return {
+    id: row.id || row.uuid || row.key || '',
+    visible: visibility !== 'ditarik' && visibility !== 'internal',
+    date: String(row.tanggal || row.tgl || row.created_at || '').slice(0, 10),
+    category: category,
+    subject: String(row.mapel || row.mata_pelajaran || '').trim(),
+    message: String(row.catatan || row.isi || row.pesan || row.deskripsi || row.keterangan || '').trim(),
+    followUp: String(row.tindak_lanjut || '').trim(),
+    status: String(row.status || '').toLowerCase()
+  };
+}
+
+function renderCatatanAnak(detail, sourceRows) {
+  var rows = (Array.isArray(sourceRows) ? sourceRows : []).map(waliCatatanRow).filter(function(row){
+    return row.visible && row.message;
+  }).sort(function(a, b){ return b.date.localeCompare(a.date); });
+  var categories = [];
+  var months = [];
+  rows.forEach(function(row){
+    if (categories.indexOf(row.category) === -1) categories.push(row.category);
+    var month = row.date.slice(0, 7);
+    if (month && months.indexOf(month) === -1) months.push(month);
+  });
+  categories.sort(function(a, b){ return a.localeCompare(b, 'id'); });
+  months.sort().reverse();
+
+  var selectedMonth = appState.waliCatatanBulan || (months[0] || '__all');
+  if (selectedMonth !== '__all' && months.indexOf(selectedMonth) === -1) selectedMonth = '__all';
+  var monthRows = selectedMonth === '__all' ? rows : rows.filter(function(row){ return row.date.slice(0, 7) === selectedMonth; });
+  var monthCategories = [];
+  monthRows.forEach(function(row){ if (monthCategories.indexOf(row.category) === -1) monthCategories.push(row.category); });
+  monthCategories.sort(function(a, b){ return a.localeCompare(b, 'id'); });
+  var selectedCategory = appState.waliCatatanKategori || '__all';
+  if (selectedCategory !== '__all' && monthCategories.indexOf(selectedCategory) === -1) selectedCategory = '__all';
+  var visibleRows = selectedCategory === '__all' ? monthRows : monthRows.filter(function(row){ return row.category === selectedCategory; });
+
+  var followUpCount = visibleRows.filter(function(row){
+    return row.followUp && !/selesai|tuntas|sudah/.test(row.status);
+  }).length;
+  var latest = visibleRows[0] || null;
+  var latestDateLabel = '-';
+  var latestDateMeta = 'Belum ada data';
+  if (latest && latest.date) {
+    var latestParts = latest.date.split('-');
+    var latestMonthIndex = parseInt(latestParts[1], 10) - 1;
+    var latestMonthShort = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][latestMonthIndex] || latestParts[1];
+    latestDateLabel = String(Number(latestParts[2])) + ' ' + latestMonthShort;
+    latestDateMeta = latestParts[0] || 'Catatan terbaru';
+  }
+  var monthOptions = '<option value="__all"' + (selectedMonth === '__all' ? ' selected' : '') + '>Semua periode</option>' +
+    months.map(function(value){ return '<option value="' + waliNilaiEsc(value) + '"' + (value === selectedMonth ? ' selected' : '') + '>' + waliNilaiEsc(waliLabelBulan(value)) + '</option>'; }).join('');
+  var categoryOptions = '<option value="__all"' + (selectedCategory === '__all' ? ' selected' : '') + '>Semua kategori</option>' +
+    monthCategories.map(function(value){ return '<option value="' + waliNilaiEsc(value) + '"' + (value === selectedCategory ? ' selected' : '') + '>' + waliNilaiEsc(value) + '</option>'; }).join('');
+
+  var cards = visibleRows.map(function(row, index){
+    var needsFollowUp = !!row.followUp && !/selesai|tuntas|sudah/.test(row.status);
+    var icon = needsFollowUp
+      ? '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v8"/><path d="M10 15.5v.5"/><circle cx="10" cy="10" r="8"/></svg>'
+      : '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12v10H8l-4 3V4z"/><path d="M7 8h6M7 11h4"/></svg>';
+    return '<article class="wali-catatan-card' + (needsFollowUp ? ' needs-follow-up' : '') + '">' +
+      '<header class="wali-catatan-card-head"><div class="wali-catatan-icon">' + icon + '</div><div class="wali-catatan-head-copy"><span>' + waliNilaiEsc(row.category) + '</span><time>' + (row.date ? waliNilaiEsc(waliRiwayatFormatTanggal(row.date)) : 'Tanggal belum tersedia') + '</time></div>' +
+      (index === 0 ? '<span class="wali-catatan-latest">Terbaru</span>' : '') + '</header>' +
+      (row.subject ? '<p class="wali-catatan-subject">' + waliNilaiEsc(row.subject) + '</p>' : '') +
+      '<p class="wali-catatan-message">' + waliNilaiEsc(row.message) + '</p>' +
+      (row.followUp ? '<div class="wali-catatan-follow"><span>Tindak lanjut</span><p>' + waliNilaiEsc(row.followUp) + '</p></div>' : '') +
+      '</article>';
+  }).join('');
+
+  return '<section class="section wali-catatan-page">' +
+    '<article class="wali-catatan-hero"><div class="wali-catatan-hero-icon">' + ICONS.catatan + '</div><div><span>Komunikasi sekolah</span><h2>Catatan ' + waliNilaiEsc(childProfile.nickName || childProfile.fullName || appState.childName || 'anak') + '</h2><p>Pesan dan arahan guru tersusun dalam satu tempat.</p></div></article>' +
+    '<div class="wali-catatan-kpis">' +
+      '<article><span>Total catatan</span><strong>' + visibleRows.length + '</strong><small>Pada filter saat ini</small></article>' +
+      '<article class="' + (followUpCount ? 'attention' : '') + '"><span>Perlu ditindaklanjuti</span><strong>' + followUpCount + '</strong><small>' + (followUpCount ? 'Perlu perhatian wali' : 'Tidak ada arahan aktif') + '</small></article>' +
+      '<article><span>Catatan terakhir</span><strong class="date">' + waliNilaiEsc(latestDateLabel) + '</strong><small>' + waliNilaiEsc(latestDateMeta) + '</small></article>' +
+    '</div>' +
+    '<div class="wali-catatan-toolbar"><label><span>Periode</span><select data-select="wali-catatan-bulan">' + monthOptions + '</select></label><label><span>Kategori</span><select data-select="wali-catatan-kategori">' + categoryOptions + '</select></label></div>' +
+    '<div class="wali-catatan-section-head"><div><h2>Pesan dari sekolah</h2><p>' + visibleRows.length + ' catatan ditemukan</p></div></div>' +
+    '<div class="wali-catatan-list">' + (cards || '<article class="wali-catatan-empty"><div>' + ICONS.catatan + '</div><h3>Belum ada catatan</h3><p>Pesan dari guru atau sekolah akan tampil di sini ketika tersedia atau saat filter lain dipilih.</p></article>') + '</div>' +
+    '</section>';
+}
+
 // ===== Riwayat modul wali (gaya seperti panel Riwayat di shell guru) =====
 // Data tersimpan dikelompokkan per tanggal di dalam panel collapsible <details>.
 function waliRiwayatRowDate(r){
@@ -2054,6 +2269,8 @@ function renderModule(moduleId) {
   if (moduleId === 'calistung-anak') return window.renderCalistungWaliModule(detail); // [CALISTUNG WALI]
   if (moduleId === 'program-kegiatan') return renderProgramKegiatanWali(detail);
   if (moduleId === 'infaq-subuh') return renderInfaqSubuhWali(detail);
+  if (moduleId === 'nilai-anak') return renderNilaiAnak(detail, appState.supabaseModules && appState.supabaseModules.nilai);
+  if (moduleId === 'catatan-anak') return renderCatatanAnak(detail, appState.supabaseModules && appState.supabaseModules.catatan);
   const dataKey = waliModuleDataKey(moduleId);
   // Modul write wali (form input) tidak boleh ke-render read-only/empty generic; harus jatuh ke blok custom yang punya form.
   var __waliWriteModules = ['surat-wali','mutabaah-rumah'];
@@ -2122,57 +2339,6 @@ function renderModule(moduleId) {
                 });
               }).join('')
             : scheduleCard({ time: 'Info', title: (_absDates.length ? 'Tidak ada absensi pada bulan ini' : 'Belum ada data absensi'), meta: (_absDates.length ? 'Pilih bulan lain di atas.' : 'Data kehadiran akan muncul setelah sekolah input absensi.'), status: 'Kosong', tone: 'blue' })
-          }
-        </div>
-      </section>
-    `;
-  }
-
-  if (moduleId === 'nilai-anak') {
-    var _smN = appState.supabaseModules || {};
-    var nilaiRows = Array.isArray(_smN.nilai) ? _smN.nilai.slice() : [];
-    function _nVal(r){ return Number(r.nilai||r.nilai_akhir||r.nilai_rapor||r.nilai_angka||r.rata_rata||r.skor||r.nilai_ujian||r.nilai_tugas||0); }
-    function _nDate(r){ return String(r.tanggal||r.tgl||r.created_at||'').slice(0,10); }
-    nilaiRows.sort(function(a,b){ return String(_nDate(b)).localeCompare(String(_nDate(a))); });
-    var avg = appState.homeScoreAverage;
-    var tertinggi = null;
-    nilaiRows.forEach(function(r){ if(!tertinggi || _nVal(r) > _nVal(tertinggi)) tertinggi = r; });
-    return `
-      ${moduleIntro(detail, moduleParentTab(moduleId))}
-      <section class="section">
-        <article class="db-ready-card">
-          <span class="status-pill gold">${nilaiRows.length ? 'Rata-rata ' + avg : 'Belum ada nilai'}</span>
-          <h3 class="card-title">${tertinggi ? 'Nilai tertinggi: ' + (tertinggi.mapel || tertinggi.mata_pelajaran || 'Mapel') + ' \u00b7 ' + _nVal(tertinggi) : 'Nilai anak belum tersedia'}</h3>
-          <p class="card-meta">Daftar nilai diambil langsung dari data sekolah di Supabase.</p>
-        </article>
-      </section>
-      <section class="section">
-        ${sectionHead('Ringkasan nilai', nilaiRows.length ? nilaiRows.length + ' entri' : 'Belum ada')}
-        <article class="input-panel">
-          <div class="form-preview-grid">
-            ${fieldPreview('Rata-rata', String(avg))}
-            ${fieldPreview('Jumlah nilai', String(nilaiRows.length))}
-            ${fieldPreview('Tertinggi', tertinggi ? String(_nVal(tertinggi)) : '-')}
-            ${fieldPreview('Mapel teratas', tertinggi ? (tertinggi.mapel || tertinggi.mata_pelajaran || '-') : '-')}
-          </div>
-        </article>
-      </section>
-      <section class="section">
-        ${sectionHead('Detail per mapel', 'Terbaru')}
-        <div class="timeline">
-          ${nilaiRows.length
-            ? nilaiRows.slice(0, 20).map(function(r){
-                var n = _nVal(r);
-                var tone = n >= 85 ? 'green' : (n >= 70 ? 'blue' : 'orange');
-                return scheduleCard({
-                  time: _nDate(r) || '-',
-                  title: (r.mapel || r.mata_pelajaran || 'Mapel') + ' \u00b7 ' + (n || '-'),
-                  meta: (r.jenis || r.kategori || '') + (r.keterangan ? ' \u00b7 ' + r.keterangan : ''),
-                  status: r.jenis || (n ? 'Nilai' : '-'),
-                  tone: tone
-                });
-              }).join('')
-            : scheduleCard({ time: 'Info', title: 'Belum ada nilai', meta: 'Nilai akan muncul setelah sekolah input penilaian.', status: 'Kosong', tone: 'blue' })
           }
         </div>
       </section>
@@ -2293,43 +2459,6 @@ function renderModule(moduleId) {
       ${prestasiRows.length ? perkCatMonthly('prestasi','Prestasi','entri',['Tanggal','Lomba','Jenis','Tingkat','Peringkat'], prestasiRows, function(r){ return [ _v(r.tanggal || r.tahun), (r.lomba || r.prestasi), r.jenis, r.tingkat, (r.peringkat ? 'Juara ' + r.peringkat : '') ]; }, function(r){ return r.tanggal || r.tahun || r.created_at || ''; }) : ''}
       ${pelanggaranRows.length ? perkCatMonthly('pelanggaran','Pelanggaran','entri',['Tanggal','Pelanggaran','Poin','Tindak lanjut','Status'], pelanggaranRows, function(r){ return [ _date(r), (r.pelanggaran || r.jenis), r.poin, (r.tindak_lanjut || r.catatan), r.status ]; }, function(r){ return r.tanggal || r.tgl || r.waktu || r.created_at || ''; }) : ''}
       ${ekskulRows.length ? perkCatSimple('ekskul','Ekstrakurikuler','kegiatan',['Nama','Pembina','Jadwal','Tempat','Status'], ekskulRows, function(r){ return [ (r.nama || r.kegiatan || r.ekskul), r.pembina, r.jadwal, r.tempat, r.status ]; }) : ''}
-    `;
-  }
-
-  if (moduleId === 'catatan-anak') {
-    var _smC = appState.supabaseModules || {};
-    var catatanRows = (Array.isArray(_smC.catatan) ? _smC.catatan.slice() : []).filter(function(r){ var v=String(r.status_visibilitas||r.visibilitas||'').toLowerCase(); return v!=='ditarik' && v!=='internal'; });
-    function _cDate(r){ return String(r.tanggal||r.tgl||r.created_at||'').slice(0,10); }
-    catatanRows.sort(function(a,b){ return String(_cDate(b)).localeCompare(String(_cDate(a))); });
-    var baruCount = catatanRows.filter(function(r){ var st=String(r.status||'').toLowerCase(); return !st || /baru|belum|aktif|terkirim/.test(st); }).length;
-    return `
-      ${moduleIntro(detail, moduleParentTab(moduleId))}
-      <section class="section">
-        <article class="db-ready-card">
-          <span class="status-pill ${baruCount ? 'orange' : 'green'}">${baruCount ? baruCount + ' catatan baru' : 'Tidak ada catatan baru'}</span>
-          <h3 class="card-title">${catatanRows.length ? 'Ada ' + catatanRows.length + ' catatan dari sekolah' : 'Belum ada catatan dari sekolah'}</h3>
-          <p class="card-meta">Catatan dari sekolah ditampilkan langsung dari data Supabase.</p>
-        </article>
-      </section>
-      <section class="section">
-        ${sectionHead('Riwayat catatan', catatanRows.length ? catatanRows.length + ' item' : 'Terbaru')}
-        <div class="timeline">
-          ${catatanRows.length
-            ? catatanRows.slice(0, 20).map(function(r){
-                var st = String(r.status||'').toLowerCase();
-                var baru = !st || /baru|belum|aktif|terkirim/.test(st);
-                return scheduleCard({
-                  time: _cDate(r) || '-',
-                  title: r.judul || r.catatan || r.isi || r.keterangan || 'Catatan',
-                  meta: (r.kategori || r.jenis || '') + (r.tindak_lanjut ? ' \u00b7 ' + r.tindak_lanjut : ''),
-                  status: baru ? 'Baru' : (r.status || 'Selesai'),
-                  tone: baru ? 'orange' : 'green'
-                });
-              }).join('')
-            : scheduleCard({ time: 'Info', title: 'Belum ada catatan', meta: 'Catatan dari sekolah akan muncul di sini.', status: 'Kosong', tone: 'blue' })
-          }
-        </div>
-      </section>
     `;
   }
 
@@ -2945,6 +3074,32 @@ function bindActions() {
   });
 
   document.addEventListener('change', function(event){
+    var catatanBulan = event.target && event.target.closest && event.target.closest('select[data-select="wali-catatan-bulan"]');
+    if (catatanBulan) {
+      appState.waliCatatanBulan = catatanBulan.value || '__all';
+      appState.waliCatatanKategori = '__all';
+      render();
+      return;
+    }
+    var catatanKategori = event.target && event.target.closest && event.target.closest('select[data-select="wali-catatan-kategori"]');
+    if (catatanKategori) {
+      appState.waliCatatanKategori = catatanKategori.value || '__all';
+      render();
+      return;
+    }
+    var nilaiSemester = event.target && event.target.closest && event.target.closest('select[data-select="wali-nilai-semester"]');
+    if (nilaiSemester) {
+      appState.waliNilaiSemester = nilaiSemester.value || '__all';
+      appState.waliNilaiMapel = '__all';
+      render();
+      return;
+    }
+    var nilaiMapel = event.target && event.target.closest && event.target.closest('select[data-select="wali-nilai-mapel"]');
+    if (nilaiMapel) {
+      appState.waliNilaiMapel = nilaiMapel.value || '__all';
+      render();
+      return;
+    }
     var infaqCustom = event.target && event.target.closest && event.target.closest('[data-infaq-custom]');
     if (infaqCustom) {
       var customAmount = Math.floor(Number(infaqCustom.value || 0));
