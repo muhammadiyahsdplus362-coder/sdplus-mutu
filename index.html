@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="SD PLUS MUTU" />
   <title>SD PLUS MUTU</title>
-  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="manifest" href="manifest.json" />
   <link rel="icon" type="image/png" sizes="32x32" href="assets/sdplus-app-icon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/sdplus-app-icon-180.png" />
   <!-- Boot guard: cegah flash layar login saat cold-start jika sudah login -->
@@ -26,6 +26,7 @@
         var r = String(user.role || '').toLowerCase().replace(/[\s_-]+/g, '');
         var dest = (r === 'guru' || r === 'walikelas') ? 'guru-shell.html'
                  : (r === 'wali' || r === 'walimurid' || r === 'orangtua' || r === 'ortu') ? 'wali-shell.html'
+                 : (r === 'pegawai' || r === 'staff' || r === 'staf' || r === 'karyawan') ? 'pegawai-shell.html'
                  : '';
         if (!dest) return;
         // Sembunyikan halaman seketika supaya login tidak sempat berkedip
@@ -304,13 +305,15 @@
 
     const roles = {
       guru: { label: 'Guru', target: 'guru-shell.html' },
-      wali: { label: 'Wali Murid', target: 'wali-shell.html' }
+      wali: { label: 'Wali Murid', target: 'wali-shell.html' },
+      pegawai: { label: 'Pegawai', target: 'pegawai-shell.html' }
     };
 
     function normalizeRole(value) {
       const role = String(value || '').toLowerCase().replace(/[\s_-]+/g, '');
       if (role === 'guru' || role === 'walikelas') return 'guru';
       if (role === 'wali' || role === 'walimurid' || role === 'orangtua' || role === 'ortu') return 'wali';
+      if (role === 'pegawai' || role === 'staff' || role === 'staf' || role === 'karyawan') return 'pegawai';
       return '';
     }
 
