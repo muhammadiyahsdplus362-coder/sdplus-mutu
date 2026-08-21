@@ -3333,8 +3333,9 @@ function renderMutabaahRumahPenilaian(list, detail, crudKey) {
       +   '<span class="card-label">Data dari wali (baca saja)</span>'
       +   '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'+shalatHtml+'</div>'
       +   '<p class="module-detail-copy" style="margin:2px 0"><b>Belajar:</b> '+(r.belajar?esc(r.belajar):'-')+'</p>'
-      +   '<p class="module-detail-copy" style="margin:2px 0"><b>Akhlak:</b> '+(r.akhlak?esc(r.akhlak):'-')+'</p>'
-      +   extra
+       +   '<p class="module-detail-copy" style="margin:2px 0"><b>Akhlak:</b> '+(r.akhlak?esc(r.akhlak):'-')+'</p>'
+       +   (r.catatan?('<p class="module-detail-copy" style="margin:2px 0"><b>Keterangan wali:</b> '+esc(r.catatan)+'</p>'):'')
+       +   extra
       +   '<div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:10px;padding-top:10px">'
       +     '<span class="card-label">Penilaian Guru</span>'
       +     '<label class="field-label">Problem / Kendala</label>'
