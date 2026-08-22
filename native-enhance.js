@@ -45,8 +45,19 @@
       '.z-tab-anim{animation:none!important}',
       '@keyframes z-fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}',
       /* Offline banner */
-      '.z-offline-banner{position:fixed;left:0;right:0;bottom:-72px;z-index:99999;background:#b91c1c;color:#fff;text-align:center;font-size:13px;font-weight:800;letter-spacing:-.01em;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));box-shadow:0 -4px 16px rgba(0,0,0,.18);transition:bottom .32s cubic-bezier(.22,.61,.36,1)}',
-      '.z-offline-banner.show{bottom:0}',
+       '.z-offline-banner{position:fixed;left:0;right:0;bottom:-72px;z-index:99999;background:#b91c1c;color:#fff;text-align:center;font-size:13px;font-weight:800;letter-spacing:-.01em;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));box-shadow:0 -4px 16px rgba(0,0,0,.18);transition:bottom .32s cubic-bezier(.22,.61,.36,1)}',
+       '.z-offline-banner.show{bottom:0}',
+       /* Wajib update: modal tetap menutup app sampai versi Play Store terpasang */
+       '.z-update-overlay{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:flex-end;justify-content:center;padding:24px 18px calc(24px + env(safe-area-inset-bottom,0px));background:rgba(7,12,25,.72);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px)}',
+       '.z-update-card{width:min(100%,420px);padding:24px 22px 20px;border-radius:8px;background:#fff;color:#0f172a;box-shadow:0 24px 70px rgba(0,0,0,.3);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif}',
+       '.z-update-icon{width:48px;height:48px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;border-radius:50%;background:#e8f7f5;color:#176b66;font-size:25px;font-weight:900}',
+       '.z-update-title{margin:0 0 8px;font-size:21px;line-height:1.25;font-weight:850;letter-spacing:0}',
+       '.z-update-copy{margin:0;color:#526071;font-size:14px;line-height:1.55}',
+       '.z-update-version{margin:12px 0 0;color:#176b66;font-size:12px;line-height:1.4;font-weight:800}',
+       '.z-update-button{width:100%;min-height:48px;margin-top:20px;padding:12px 18px;border:0;border-radius:8px;background:#176b66;color:#fff;font:800 15px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;cursor:pointer}',
+       '.z-update-button:disabled{cursor:wait;opacity:.72}',
+       '.z-update-error{display:none;margin:10px 0 0;color:#b42318;font-size:12px;line-height:1.4;font-weight:700}',
+       '.z-update-error.show{display:block}',
       /* Pressed feedback global */
       '.z-pressed{transform:scale(.97)!important;filter:brightness(.96)!important;transition:transform .08s ease,filter .08s ease}',
       /* Keyboard open: angkat bottom nav supaya tidak menutupi input */
@@ -263,6 +274,87 @@
     window.addEventListener('online', function () { setOffline(false); });
   }
 
+  /* ---------- 8. Pembaruan wajib melalui Google Play ---------- */
+  var _updateCheckBusy = false;
+  var _updateInfo = null;
+
+  function showUpdatePrompt(info) {
+    _updateInfo = info || _updateInfo || {};
+    var overlay = document.getElementById('z-update-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'z-update-overlay';
+      overlay.className = 'z-update-overlay';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('aria-labelledby', 'z-update-title');
+      overlay.innerHTML = '<div class="z-update-card">' +
+        '<div class="z-update-icon" aria-hidden="true">\u2191</div>' +
+        '<h2 class="z-update-title" id="z-update-title">Pembaruan tersedia</h2>' +
+        '<p class="z-update-copy">Versi terbaru SD PLUS MUTU harus dipasang agar aplikasi tetap aman dan semua fitur berjalan dengan baik.</p>' +
+        '<p class="z-update-version" id="z-update-version"></p>' +
+        '<button class="z-update-button" id="z-update-button" type="button">Update sekarang</button>' +
+        '<p class="z-update-error" id="z-update-error">Pembaruan belum dapat dimulai. Periksa koneksi internet lalu coba lagi.</p>' +
+        '</div>';
+      (document.body || document.documentElement).appendChild(overlay);
+      document.getElementById('z-update-button').addEventListener('click', startRequiredUpdate);
+    }
+    var version = document.getElementById('z-update-version');
+    if (version) {
+      var useVersionCode = !_updateInfo.availableVersionName && _updateInfo.availableVersionCode;
+      var current = useVersionCode ? _updateInfo.currentVersionCode : _updateInfo.currentVersionName;
+      var available = useVersionCode ? _updateInfo.availableVersionCode : _updateInfo.availableVersionName;
+      version.textContent = current && available ? ('Versi ' + current + ' \u2192 ' + available) : '';
+    }
+  }
+
+  function setUpdateButtonBusy(busy) {
+    var button = document.getElementById('z-update-button');
+    if (!button) return;
+    button.disabled = !!busy;
+    button.textContent = busy ? 'Membuka Google Play\u2026' : 'Update sekarang';
+  }
+
+  async function startRequiredUpdate() {
+    var AppUpdate = plugin('AppUpdate');
+    if (!AppUpdate) return;
+    setUpdateButtonBusy(true);
+    var error = document.getElementById('z-update-error');
+    if (error) error.classList.remove('show');
+    try {
+      if (_updateInfo && _updateInfo.immediateUpdateAllowed && AppUpdate.performImmediateUpdate) {
+        await AppUpdate.performImmediateUpdate();
+      } else if (AppUpdate.openAppStore) {
+        await AppUpdate.openAppStore({ androidPackageName: 'ai.zymata.guru' });
+      }
+    } catch (e) {
+      try {
+        if (AppUpdate.openAppStore) await AppUpdate.openAppStore({ androidPackageName: 'ai.zymata.guru' });
+      } catch (e2) {
+        if (error) error.classList.add('show');
+      }
+    } finally {
+      setUpdateButtonBusy(false);
+    }
+  }
+
+  async function checkRequiredUpdate() {
+    var AppUpdate = plugin('AppUpdate');
+    if (!isNative() || !AppUpdate || !AppUpdate.getAppUpdateInfo || _updateCheckBusy) return;
+    _updateCheckBusy = true;
+    try {
+      var info = await AppUpdate.getAppUpdateInfo();
+      // Capacitor App Update: 2 = tersedia, 3 = proses update sedang berjalan.
+      if (info && (Number(info.updateAvailability) === 2 || Number(info.updateAvailability) === 3)) {
+        showUpdatePrompt(info);
+      }
+    } catch (e) {
+      try { console.warn('[AppUpdate] Pemeriksaan update gagal:', e && e.message ? e.message : e); } catch (_) {}
+    } finally {
+      _updateCheckBusy = false;
+    }
+  }
+
   /* ---------- Skeleton helper ---------- */
   window.zSkeleton = function (target, count) {
     var el = typeof target === 'string' ? document.querySelector(target) : target;
@@ -272,7 +364,7 @@
     el.innerHTML = html + '</div>';
   };
 
-  /* ---------- 8. Simpan file native (foto / dokumen / video) ---------- */
+  /* ---------- 9. Simpan file native (foto / dokumen / video) ---------- */
   // Ambil nama file dari URL (mis. .../foto-123.jpg?token=... -> foto-123.jpg)
   function fileNameFromUrl(url, fallback) {
     try {
@@ -375,7 +467,9 @@
   injectStyles();
 
   if (isNative()) initChrome();
+  if (isNative()) checkRequiredUpdate();
   document.addEventListener('deviceready', initChrome, false); /* cordova-compat, harmless */
-  document.addEventListener('DOMContentLoaded', function () { injectStyles(); initChrome(); });
-  window.addEventListener('load', initChrome);
+  document.addEventListener('DOMContentLoaded', function () { injectStyles(); initChrome(); checkRequiredUpdate(); });
+  window.addEventListener('load', function () { initChrome(); checkRequiredUpdate(); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) checkRequiredUpdate(); });
 })();
