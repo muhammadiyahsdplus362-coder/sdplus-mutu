@@ -1096,10 +1096,19 @@ function renderHome() {
               if (ks.length) tt += (tt ? ' - ' : '') + ks.join(', ');
             }
             if (!tt && area === 'Mutabaah Rumah') {
-              tt = (r.bulan ? r.bulan + ' ' : '') + 'Shalat ' + (r.shalat || 0) + ', Sunnah ' + (r.sunnah || 0);
+              var shalatCount = r.shalat_count;
+              if (shalatCount === undefined || shalatCount === null || shalatCount === '') {
+                shalatCount = ['subuh','dzuhur','ashar','maghrib','isya'].reduce(function(total, key){
+                  var value = r['shalat_' + key];
+                  return total + ((value === true || value === 1 || value === '1' || /^ya|true$/i.test(String(value || ''))) ? 1 : 0);
+                }, 0);
+              }
+              // Mutabaah Rumah tidak memiliki field sunnah. Jangan tampilkan
+              // angka 0 dari skema ibadah lama seolah-olah itu nilai wali.
+              tt = 'Shalat ' + Number(shalatCount || 0) + '/5';
             }
             if (!tt) tt = area + ' anak';
-            var mt = r.nilai ? ('Nilai ' + r.nilai) : (r.juz ? ('Juz ' + r.juz) : (r.kategori || r.status_review || r.keterangan || r.catatan || '-'));
+            var mt = r.nilai ? ('Nilai ' + r.nilai) : (r.juz ? ('Juz ' + r.juz) : (r.kategori || r.status_review || r.keterangan_guru || r.kendala_wali || '-'));
             updates.push({
               time: String(dt).slice(0,10) || area, area: area,
               title: tt,
@@ -1892,19 +1901,20 @@ function renderWaliMutabaahRumahRiwayat(list){
     var shalat = [['Subuh',r.shalat_subuh],['Dzuhur',r.shalat_dzuhur],['Ashar',r.shalat_ashar],['Maghrib',r.shalat_maghrib],['Isya',r.shalat_isya]];
     var shalatHtml = shalat.map(function(s){ var ok = ya(s[1]); return '<span class="status-pill '+(ok?'green':'orange')+'">'+s[0]+'</span>'; }).join(' ');
     var konfBool = (r.konfirmasi_wali === true || r.konfirmasi_wali === 'true' || r.konfirmasi_wali === 1 || r.konfirmasi_wali === '1');
-    var sudahDinilai = konfBool || /dinilai|tindak lanjut|ada kendala/i.test(String(r.status_review||'')) || !!String(r.kendala||'').trim();
+     var sudahDinilai = konfBool || /dinilai|tindak lanjut|ada kendala/i.test(String(r.status_review||'')) || !!String(r.keterangan_guru||'').trim();
     var konfPill = konfBool
       ? '<span class="status-pill green">Dikonfirmasi guru</span>'
-      : (sudahDinilai
-          ? '<span class="status-pill orange">Sudah dinilai guru</span>'
-          : '<span class="status-pill blue">Belum dinilai guru</span>');
-    var kendalaHtml = String(r.kendala||'').trim() ? '<p class="card-meta" style="margin:6px 0 0"><b>Problem / Kendala (dari guru):</b> '+esc(r.kendala)+'</p>' : '';
+       : (sudahDinilai
+           ? '<span class="status-pill orange">Sudah dinilai guru</span>'
+           : '<span class="status-pill blue">Menunggu Review Guru</span>');
+     var kendalaHtml = String(r.kendala_wali||'').trim() ? '<p class="card-meta" style="margin:6px 0 0"><b>Problem / Kendala wali:</b> '+esc(r.kendala_wali)+'</p>' : '';
+     var guruNoteHtml = String(r.keterangan_guru||'').trim() ? '<p class="card-meta" style="margin:6px 0 0"><b>Penilaian guru:</b> '+esc(r.keterangan_guru)+'</p>' : '';
     return '<article class="db-ready-card" style="margin-bottom:10px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 class="card-title" style="font-size:14px;margin:0">'+tgl+'</h3>'+konfPill+'</div>'
       + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'+shalatHtml+'</div>'
        + '<p class="card-meta" style="margin:2px 0"><b>Belajar:</b> '+(r.belajar?esc(r.belajar):'-')+' &middot; <b>Akhlak:</b> '+(r.akhlak?esc(r.akhlak):'-')+'</p>'
        + (String(r.catatan||'').trim() ? '<p class="card-meta" style="margin:2px 0"><b>Keterangan:</b> '+esc(r.catatan)+'</p>' : '')
-       + kendalaHtml
+       + kendalaHtml + guruNoteHtml
       + '</article>';
   }).join('');
   return '<section class="section"><details class="riwayat-absen-toggle" open style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
