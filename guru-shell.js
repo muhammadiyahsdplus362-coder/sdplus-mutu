@@ -1918,12 +1918,25 @@ function renderSupabaseGuruDataModule(detail, rows, moduleId) {
   // Modul nilai: gunakan jenis input yang dipilih (nilai / ulangan-harian / ujian-semester)
   var _nilaiJenis = (moduleId === 'nilai') ? (appState.nilaiInputJenis || 'ulangan-harian') : null;
   // Filter list berdasarkan tipe yang dipilih (agar riwayat juga terpisah per tipe)
-  const list = (function(){
-    var _r = Array.isArray(rows) ? rows : [];
+   const list = (function(){
+     var _r = Array.isArray(rows) ? rows : [];
     if (_nilaiJenis) _r = _r.filter(function(r){ return (r.__tipe || 'nilai') === _nilaiJenis; });
-    // Pengaman kelas: buang baris dari kelas yang TIDAK diajar guru (cegah riwayat tampil beda kelas).
-    _r = _r.filter(function(r){
-      if (!r) return false;
+     // Mutabaah Rumah hanya milik wali kelas. Guru mapel yang mengajar kelas
+     // tersebut tidak boleh melihat atau mereview laporan rumahnya.
+     if (moduleId === 'mutabaah-rumah') {
+       var _normWaliKelas = function(v){ return String(v == null ? '' : v)
+         .replace(/^kelas\s*/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase(); };
+       var _waliKelas = _normWaliKelas(appState.guruWaliKelas || '');
+       if (!_waliKelas) return [];
+       _r = _r.filter(function(r){
+         if (!r) return false;
+         var k = _normWaliKelas(r.kelas || r.kelas_id || r.snapshot_kelas || r.rombel || '');
+         return !!k && k === _waliKelas;
+       });
+     }
+     // Pengaman kelas untuk modul lain: buang baris dari kelas yang TIDAK diajar guru.
+     _r = _r.filter(function(r){
+       if (!r) return false;
       var k = String(r.kelas || r.kelas_id || r.snapshot_kelas || r.rombel || '').trim();
       return !k || agIsTaughtClass(k);
     });
@@ -3304,29 +3317,38 @@ function renderMutabaahRumahPenilaian(list, detail, crudKey) {
   }
   var ya = function(v){ return /^(ya|1|true|hadir|sudah)$/i.test(String(v==null?'':v).trim()); };
   var isKonf = function(r){ return (r.konfirmasi_wali === true || r.konfirmasi_wali === 'true' || r.konfirmasi_wali === 1 || r.konfirmasi_wali === '1'); };
-  var isDinilai = function(r){ return isKonf(r) || !!String(r.kendala||'').trim() || /dinilai|tindak lanjut/i.test(String(r.status_review||'')); };
-  var sorted = rows.slice().sort(function(a,b){ var da=isDinilai(a)?1:0, db=isDinilai(b)?1:0; if(da!==db) return da-db; return String(b.tanggal||'').localeCompare(String(a.tanggal||'')); });
-  var belum = sorted.filter(function(r){ return !isDinilai(r); }).length;
-  var cards = sorted.slice(0, 80).map(function(r){
+   var isDinilai = function(r){ return isKonf(r) || !!String(r.keterangan_guru||'').trim() || /dinilai|tindak lanjut/i.test(String(r.status_review||'')); };
+   var sorted = rows.slice().sort(function(a,b){ var da=isDinilai(a)?1:0, db=isDinilai(b)?1:0; if(da!==db) return da-db; return String(b.tanggal||'').localeCompare(String(a.tanggal||'')); });
+   var belum = sorted.filter(function(r){ return !isDinilai(r); }).length;
+   var dates = [];
+   var dateSeen = {};
+   sorted.forEach(function(r){ var d = String(r.tanggal || r.tgl || '').slice(0,10); if(d && !dateSeen[d]) { dateSeen[d] = true; dates.push(d); } });
+   dates.sort().reverse();
+   appState.riwayatModulTanggal = appState.riwayatModulTanggal || {};
+   var ui = agRiwayatFilterUI('mutabaah-rumah', dates, appState.riwayatModulTanggal['mutabaah-rumah'], 'riwayat-modul-tanggal', ' data-riwayat-modul="mutabaah-rumah"');
+   var selectedDate = ui.selected;
+   var visibleRows = sorted.filter(function(r){ return String(r.tanggal || r.tgl || '').slice(0,10) === selectedDate; });
+   var cards = visibleRows.map(function(r){
     var nama = esc(r.nama_siswa || r.nama || r.siswa || 'Siswa');
     var kelas = esc(r.kelas || '-');
-    var tgl = esc(String(r.tanggal || r.tgl || '').slice(0,10) || '-');
+     var tgl = esc(String(r.tanggal || r.tgl || '').slice(0,10) || '-');
+     var updated = esc(String(r.updated_at || r.waktu_submit || r.created_at || '').replace('T',' ').slice(0,16) || '-');
     var rowId = esc(r.id || '');
     var siswaId = esc(r.siswa_id || r.siswaId || '');
     var shalat = [['Subuh',r.shalat_subuh],['Dzuhur',r.shalat_dzuhur],['Ashar',r.shalat_ashar],['Maghrib',r.shalat_maghrib],['Isya',r.shalat_isya]];
     var shalatHtml = shalat.map(function(s){ var ok = ya(s[1]); return '<span class="status-pill '+(ok?'green':'orange')+'">'+s[0]+': '+(ok?'Ya':(s[1]?esc(s[1]):'Tidak'))+'</span>'; }).join(' ');
     var konfBool = isKonf(r);
     var dinilai = isDinilai(r);
-    var statusPill = konfBool ? '<span class="status-pill green">Dikonfirmasi</span>' : (dinilai ? '<span class="status-pill orange">Sudah dinilai</span>' : '<span class="status-pill blue">Belum dinilai</span>');
+     var statusPill = konfBool ? '<span class="status-pill green">Dikonfirmasi</span>' : (dinilai ? '<span class="status-pill orange">Sudah dinilai</span>' : '<span class="status-pill blue">Menunggu Review</span>');
     var optHtml = '<option value="Dikonfirmasi"'+(konfBool?' selected':'')+'>Dikonfirmasi</option>'
       + '<option value="Belum"'+(!konfBool?' selected':'')+'>Belum dikonfirmasi</option>';
     var extra = '';
     if (r.tilawah_rumah) extra += '<p class="module-detail-copy" style="margin:2px 0"><b>Tilawah:</b> '+esc(r.tilawah_rumah)+'</p>';
     if (r.murojaah_rumah) extra += '<p class="module-detail-copy" style="margin:2px 0"><b>Murojaah:</b> '+esc(r.murojaah_rumah)+'</p>';
     if (r.catatan_wali) extra += '<p class="module-detail-copy" style="margin:2px 0"><b>Catatan wali:</b> '+esc(r.catatan_wali)+'</p>';
-    return '<details class="mutabaah-item" style="margin-bottom:10px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden">'
+     return '<details class="mutabaah-item" style="margin-bottom:10px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden">'
       + '<summary style="list-style:none;cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px">'
-      +   '<span style="display:flex;flex-direction:column;gap:2px"><b style="font-size:14px">'+nama+'</b><span class="card-label">'+kelas+' &middot; '+tgl+'</span></span>'
+       +   '<span style="display:flex;flex-direction:column;gap:2px"><b style="font-size:14px">'+nama+'</b><span class="card-label">Pengisian: '+tgl+' &middot; Update: '+updated+'</span></span>'
       +   statusPill
       + '</summary>'
       + '<article class="input-panel" style="margin:0;border-radius:0;border:0;border-top:1px solid rgba(255,255,255,0.08)">'
@@ -3334,21 +3356,22 @@ function renderMutabaahRumahPenilaian(list, detail, crudKey) {
       +   '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'+shalatHtml+'</div>'
       +   '<p class="module-detail-copy" style="margin:2px 0"><b>Belajar:</b> '+(r.belajar?esc(r.belajar):'-')+'</p>'
        +   '<p class="module-detail-copy" style="margin:2px 0"><b>Akhlak:</b> '+(r.akhlak?esc(r.akhlak):'-')+'</p>'
-       +   (r.catatan?('<p class="module-detail-copy" style="margin:2px 0"><b>Keterangan wali:</b> '+esc(r.catatan)+'</p>'):'')
+       +   (r.kendala_wali?('<p class="module-detail-copy" style="margin:2px 0"><b>Problem / Kendala wali:</b> '+esc(r.kendala_wali)+'</p>'):'')
+        +   ''
        +   extra
       +   '<div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:10px;padding-top:10px">'
       +     '<span class="card-label">Penilaian Guru</span>'
-      +     '<label class="field-label">Problem / Kendala</label>'
-      +     '<textarea class="field-textarea" data-mrn-field="kendala" rows="2" placeholder="Catat kendala / masukan untuk siswa ini...">'+esc(r.kendala||'')+'</textarea>'
+       +     '<label class="field-label">Keterangan / Penilaian Guru</label>'
+       +     '<textarea class="field-textarea" data-mrn-field="keterangan_guru" rows="2" placeholder="Tulis penilaian atau tindak lanjut guru...">'+esc(r.keterangan_guru||'')+'</textarea>'
       +     '<label class="field-label">Konfirmasi Wali</label>'
       +     '<select class="field-select" data-mrn-field="konfirmasi_wali">'+optHtml+'</select>'
       +     '<button type="button" class="save-draft-btn" style="margin-top:12px" data-mrn-save data-mrn-id="'+rowId+'" data-mrn-siswa="'+siswaId+'" data-mrn-tanggal="'+tgl+'">Simpan Penilaian</button>'
       +   '</div>'
       + '</article>'
       + '</details>';
-  }).join('');
-  var head = sectionHead('Laporan mutabaah rumah dari wali', (belum ? belum+' belum dinilai' : 'Semua sudah dinilai')+' - '+rows.length+' data');
-  return '<section class="section">'+head+cards+'</section>';
+   }).join('');
+   var head = sectionHead('Riwayat Mutabaah Rumah dari Wali', (belum ? belum+' menunggu review' : 'Semua sudah direview')+' - '+rows.length+' data');
+   return '<section class="section">'+head+ui.html+'<p class="riwayat-absen-count">'+visibleRows.length+' laporan pada '+formatTanggalID(selectedDate)+' · '+ui.jmlTanggal+' tanggal di '+agLabelBulan(ui.bulan)+'</p>'+cards+'</section>';
 }
 
 function renderMutabaahRumahGuruModule(detail) {
@@ -5222,16 +5245,16 @@ function bindActions() {
       var _Sm = window.ZymataMobileSupabase;
       if (!_Sm || !_Sm.upsert) { showError('Koneksi Supabase belum siap.'); return; }
       var mrnCard = mrnSaveBtn.closest('article');
-      var mrnKendalaEl = mrnCard ? mrnCard.querySelector('[data-mrn-field="kendala"]') : null;
+       var mrnKeteranganEl = mrnCard ? mrnCard.querySelector('[data-mrn-field="keterangan_guru"]') : null;
       var mrnKonfEl = mrnCard ? mrnCard.querySelector('[data-mrn-field="konfirmasi_wali"]') : null;
-      var mrnKendala = mrnKendalaEl ? String(mrnKendalaEl.value||'').trim() : '';
+       var mrnKeterangan = mrnKeteranganEl ? String(mrnKeteranganEl.value||'').trim() : '';
       var mrnKonf = mrnKonfEl ? String(mrnKonfEl.value||'').trim() : '';
       var mrnId = mrnSaveBtn.getAttribute('data-mrn-id') || '';
       var mrnSiswa = mrnSaveBtn.getAttribute('data-mrn-siswa') || '';
       var mrnTgl = mrnSaveBtn.getAttribute('data-mrn-tanggal') || '';
       try {
-        var mrnBody = { kendala: mrnKendala, konfirmasi_wali: (mrnKonf === 'Dikonfirmasi') };
-        mrnBody.status_review = mrnKendala ? 'Perlu Tindak Lanjut' : 'Sudah dinilai';
+         var mrnBody = { keterangan_guru: mrnKeterangan, konfirmasi_wali: (mrnKonf === 'Dikonfirmasi') };
+         mrnBody.status_review = mrnKonf === 'Dikonfirmasi' ? 'Sudah dinilai' : 'Menunggu Review';
         var mrnRes;
         if (mrnId) {
           mrnBody.id = mrnId;
@@ -6250,9 +6273,6 @@ async function loadMessagesFromSupabase(kelasUtama) {
   const db = window.db || window.ZymataMobileSupabase;
   if (!db || typeof db.select !== 'function') return;
   try {
-    // Ambil surat/pesan dari wali murid untuk kelas ini (max 50, terbaru dulu)
-    const res = await db.select('surat', { order: 'tanggal', ascending: false, limit: 30 });
-    const rows = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
     // Normalisasi nama kelas agar cocok walau beda spasi/kapital/awalan "Kelas" atau pemisah (-, /, spasi)
     var _normKelas = function(v){ return String(v == null ? '' : v).replace(/^kelas\s*/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase(); };
     // Daftar kelas guru (wali kelas + kelas yang diajar) untuk pencocokan
@@ -6265,6 +6285,20 @@ async function loadMessagesFromSupabase(kelasUtama) {
        WALI KELAS dari kelas anak tersebut; bila kelas anak tidak diketahui, surat tidak
        dibagikan ke siapa pun (jumlahnya dicatat pada penanda diagnosa). */
     var _waliKelasGuru = _normKelas(appState.guruWaliKelas || '');
+    // Filter di Supabase dulu: hanya kelas wali kelas ini dan sumber Wali
+    // Murid. Ini menghemat egress dan memastikan surat dari kelas/guru lain
+    // tidak ikut dikirim ke perangkat.
+    var _suratColumns = 'id,nomor,perihal,jenis,pihak,tanggal,status,created_at,updated_at,isi,siswa_id,siswa_nis,nama_siswa,kelas,nama_wali,tgl_mulai,tgl_selesai,payload';
+    var _suratQuery = {
+      select: _suratColumns,
+      eq: { kelas: kelasUtama || appState.guruWaliKelas || '', pihak: 'Wali Murid' },
+      order: 'tanggal',
+      ascending: false,
+      limit: 100
+    };
+    if (!_waliKelasGuru) return;
+    const res = await db.select('surat', _suratQuery);
+    const rows = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
     var _tanpaKelas = 0, _bukanKelasIni = 0;
     const filtered = rows.filter(function(r) {
       if (!r) return false;
@@ -6274,15 +6308,17 @@ async function loadMessagesFromSupabase(kelasUtama) {
       var f = payload.fields || {};
       // Sumber kelas surat (JANGAN pakai r.pihak yang berisi "Wali Murid")
       var suratKelas = r.kelas || payload.kelas || sis.kelas || f.kelas || '';
-      // Deteksi surat yang berasal dari wali murid seluas mungkin
-      var isWaliMurid = (payload.sumber === 'WaliMurid')
-        || /wali/i.test(String(payload.role || ''))
-        || /wali/i.test(String(r.sumber || ''))
-        || /surat-?wali|wali/i.test(String(payload.module || ''))
-        || !!(r.nama_siswa || sis.nama || payload.nama_siswa || f.nama_siswa)
-        || !!(r.siswa_id || sis.id)
-        || !!(r.nama_wali || payload.nama_wali)
-        || /izin|sakit|terlambat|pulang|dispensasi|orang tua|wali/i.test(String(r.jenis || '') + ' ' + String(r.perihal || '') + ' ' + String(r.pihak || ''));
+      // Hanya surat yang punya penanda asal WaliMurid yang boleh masuk ke
+      // antrian wali kelas. Nama siswa/siswa_id saja tidak cukup karena surat
+      // buatan GTK juga dapat membawa identitas siswa.
+      var _suratSource = [
+        payload.sumber, payload.role, payload.module,
+        r.sumber, r.pihak, r.jenis, r.perihal
+      ].map(function(v){ return String(v == null ? '' : v).toLowerCase(); }).join(' ');
+      var isWaliMurid = /wali\s*murid|orang\s*tua|surat[-_ ]?wali|izin\s+wali/.test(_suratSource)
+        || String(payload.sumber || '').toLowerCase() === 'walimurid'
+        || String(r.sumber || '').toLowerCase() === 'walimurid'
+        || /(?:^|[:/_-])surat[-_ ]?wali(?:$|[:/_-])/.test(String(payload.module || '').toLowerCase());
       if (!isWaliMurid) return false;
       // [SURAT HANYA WALI KELAS] Hanya wali kelas anak tersebut yang boleh melihat.
       if (!_waliKelasGuru) return false;                 // akun ini bukan wali kelas mana pun
@@ -6362,6 +6398,12 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
   if (!classes.length) return;
   const db = window.db || window.ZymataMobileSupabase;
   if (!db || typeof db.select !== 'function') return;
+  // Jadwal admin dapat berubah per hari/jam. Jangan memakai cache 10 menit
+  // untuk rebuild ini, karena jadwal lama bisa membuat sesi yang sudah
+  // dihapus tetap muncul di aplikasi guru.
+  try {
+    if (typeof window.zmClearCache === 'function') window.zmClearCache('jadwal_pelajaran');
+  } catch (_) {}
   const JAM_LABELS = ['07:00-07:35','07:35-08:10','08:10-08:45','08:45-09:20','Istirahat','09:35-10:10','10:10-10:45','10:45-11:20','11:20-11:55'];
   const HARI_TO_GETDAY = { 0:1, 1:2, 2:3, 3:4, 4:5, 5:6 };
   const normName = function(s){ return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); };
@@ -6371,11 +6413,19 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
     var allRows = [];
     for (var ci = 0; ci < classes.length; ci++) {
       var kelasNama = classes[ci];
-      var res = await db.select('jadwal_pelajaran', { eq: { kelas: kelasNama }, limit: 200 });
+       var res = await db.select('jadwal_pelajaran', { eq: { kelas: kelasNama }, select: 'id,kelas,hari_index,hari,jam_index,jam_label,jam,mapel,guru,guru_nama,guru_nip,is_break', order: 'hari_index', ascending: true, limit: 500 });
       var rws = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
-      rws.forEach(function(r){ if (r && !r.kelas) r.kelas = kelasNama; if (r) allRows.push(r); });
+       rws.forEach(function(r){ if (r && !r.kelas) r.kelas = kelasNama; if (r) allRows.push(r); });
     }
-    if (!allRows.length) { console.log('[Jadwal HP] tidak ada data untuk kelas', classes.join(', ')); return; }
+    if (!allRows.length) {
+      // Jangan pertahankan jadwal lama ketika admin sudah menghapus/mengubah
+      // semua sesi kelas tersebut di web admin.
+      Object.keys(JADWAL_MINGGUAN).forEach(function(k) {
+        JADWAL_MINGGUAN[k].splice(0, JADWAL_MINGGUAN[k].length);
+      });
+      console.log('[Jadwal HP] tidak ada data untuk kelas', classes.join(', '));
+      return;
+    }
     // Untuk guru mapel: tampilkan HANYA sesi yang diajar guru ini (cocokkan nama guru) bila kolom guru tersedia.
     var hasGuruCol = allRows.some(function(r){ return r.guru || r.nama_guru || r.guru_nama; });
     var rows = allRows;
@@ -6445,9 +6495,9 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
       sorted.forEach(function(r) {
         var ji = parseInt(r.jam_index);
         // FIX: utamakan jam_label asli dari database (jam per-hari), jangan pakai daftar jam lama.
-        var rawLabel = (r.jam_label != null && String(r.jam_label).trim()) ? String(r.jam_label).trim() : ((ji >= 0 && ji < JAM_LABELS.length) ? JAM_LABELS[ji] : ('Jam '+(ji+1)));
+         var rawLabel = (r.jam_label != null && String(r.jam_label).trim()) ? String(r.jam_label).trim() : ((ji >= 0 && ji < JAM_LABELS.length) ? JAM_LABELS[ji] : ('Jam '+(ji+1)));
         var mapel = r.mapel || '-';
-        if (mapel === '-' || /istirahat/i.test(mapel) || /istirahat/i.test(rawLabel)) return;
+         if (r.is_break === true || r.is_break === 'true' || mapel === '-' || /istirahat/i.test(mapel) || /istirahat/i.test(rawLabel)) return;
         // Waktu mulai/akhir untuk logika status butuh format HH:MM, jadi titik diubah jadi titik dua.
         var labelParts = String(rawLabel).split('-');
         var startPart = (labelParts[0] || rawLabel).trim().replace(/\./g, ':');
@@ -9558,6 +9608,9 @@ animateContent();
     S.loading = true; S.error = '';
     segarkan();
     try {
+      try {
+        if (typeof window.zmClearCache === 'function') window.zmClearCache('jadwal_pelajaran');
+      } catch (_) {}
       /* Jadwal: SEMUA baris kelas ini (tidak difilter nama guru), karena wali kelas
          memang perlu melihat sesi guru lain. */
       var jad = [];
@@ -9614,7 +9667,8 @@ animateContent();
     var out = [];
     (S.jadRows || []).forEach(function(r){
       if (!r) return;
-      if (normKelas(r.kelas) !== normKelas(kelas)) return;
+       if (normKelas(r.kelas) !== normKelas(kelas)) return;
+       if (r.is_break === true || r.is_break === 'true') return;
       if (parseInt(r.hari_index, 10) !== hi) return;
       var mapel = clean(r.mapel);
       if (!mapel || mapel === '-' || /istirahat/i.test(mapel)) return;
