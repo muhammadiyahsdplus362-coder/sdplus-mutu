@@ -491,7 +491,7 @@
   // mutabaah_rumah (53 kolom -> 26). Semua kolom di sini benar-benar dirender
   // renderMutabaahRumahPenilaian(). Terukur: 97 KB -> 36 KB.
   // Catatan: kolom `nama` TIDAK ADA di tabel ini (sudah diuji, memintanya = HTTP 400).
-  var _KOL_G_MUTABAAH_RUMAH = 'id,tanggal,kelas,siswa_id,nis,nama_siswa,belajar,kendala,' +
+   var _KOL_G_MUTABAAH_RUMAH = 'id,tanggal,kelas,siswa_id,nis,nama_siswa,belajar,kendala_wali,keterangan_guru,' +
     'akhlak,shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,' +
     'shalat_count,konfirmasi_wali,nama_wali,status_review,tilawah_rumah,murojaah_rumah,' +
     'catatan_wali,ziyadah_sekolah,status_setoran,catatan_guru,status,catatan';
@@ -641,11 +641,11 @@
     'created_at,id_siswa,nis,nama,tanggal,catatan,semester,keterangan';
   // mutabaah_rumah 53 -> 34. Tabel paling gemuk di jalur wali; semua kolom yang
   // tersisa benar-benar dirender kartu Mutabaah + riwayatnya.
-  var _KOL_W_MUTABAAH_RUMAH = 'id,siswa_id,nis,nama_siswa,kelas,tanggal,belajar,kendala,' +
+   var _KOL_W_MUTABAAH_RUMAH = 'id,siswa_id,nis,nama_siswa,kelas,tanggal,belajar,kendala_wali,keterangan_guru,' +
     'shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,shalat_count,' +
     'akhlak,catatan_akhlak,konfirmasi_wali,nama_wali,waktu_submit,status_review,created_at,' +
     'siswa_nis,mapel,tahun_ajaran,semester,status,catatan,waktu_submit_wali,tilawah_rumah,' +
-    'murojaah_rumah,catatan_wali,ziyadah_sekolah,status_setoran,catatan_guru';
+     'murojaah_rumah,catatan_wali,keterangan_guru,ziyadah_sekolah,status_setoran,catatan_guru';
   var _KOL_W_KARAKTER = 'id,siswa_id,nama_siswa,kelas,semester,disiplin,sopan,jujur,' +
     'kerja_keras,tanggung_jawab,created_at,id_siswa,nis,nama,tanggal,nilai,catatan';
   var _KOL_W_PRESTASI = 'id,siswa_id,nama_siswa,kelas,lomba,jenis,tingkat,peringkat,tahun,' +
@@ -1106,7 +1106,7 @@
       {key:'tanggal_mulai',label:'Tanggal Mulai',type:'date'},
       {key:'tanggal_selesai',label:'Tanggal Selesai',type:'date'}
     ]},
-    'wali:mutabaah-rumah': { title:'Mutabaah Rumah', fields:[
+       'wali:mutabaah-rumah': { title:'Mutabaah Rumah', fields:[
       {key:'tanggal',label:'Tanggal',type:'date'},
       {key:'shalat_subuh',label:'Shalat Subuh',type:'text',options:['Ya','Tidak']},
       {key:'shalat_dzuhur',label:'Shalat Dzuhur',type:'text',options:['Ya','Tidak']},
@@ -1114,8 +1114,8 @@
       {key:'shalat_maghrib',label:'Shalat Maghrib',type:'text',options:['Ya','Tidak']},
       {key:'shalat_isya',label:'Shalat Isya',type:'text',options:['Ya','Tidak']},
       {key:'belajar',label:'Aktivitas belajar',type:'text'},
-      {key:'akhlak',label:'Akhlak',type:'text',options:['Baik','Cukup','Perlu bimbingan']},
-      {key:'catatan',label:'Keterangan (opsional)',type:'textarea'}
+       {key:'akhlak',label:'Akhlak',type:'text',options:['Baik','Cukup','Perlu bimbingan']},
+        {key:'kendala_wali',label:'Problem / Kendala di rumah (opsional)',type:'textarea'}
     ]},
     'wali:mutabaah-quran': { title:'Mutabaah Quran', fields:[
       {key:'tanggal',label:'Tanggal',type:'date'},
@@ -1175,7 +1175,7 @@
     pelanggaran_siswa: ['siswa_id','tanggal','kode','pelanggaran','poin','catatan','status','kategori','tindak_lanjut','snapshot_nis','snapshot_nama','snapshot_kelas','kelas'],
     kalender_events: ['hari','bulan','tahun','nama','kategori'],
     mutabaah_quran: ['siswa_id','nis','nama_siswa','kelas','tanggal','tahun_ajaran','tilawah_rumah','murojaah_rumah','catatan_wali','konfirmasi_wali','nama_wali','wali_username','waktu_submit_wali','status_review','ziyadah_sekolah','status_setoran','catatan_guru'],
-    mutabaah_rumah: ['siswa_id','nis','nama_siswa','kelas','tanggal','shalat_subuh','shalat_dzuhur','shalat_ashar','shalat_maghrib','shalat_isya','shalat_count','tilawah_rumah','murojaah_rumah','belajar','akhlak','catatan_akhlak','kendala','catatan_wali','konfirmasi_wali','nama_wali','wali_username','waktu_submit','status_review','catatan']
+     mutabaah_rumah: ['siswa_id','nis','nama_siswa','kelas','tanggal','shalat_subuh','shalat_dzuhur','shalat_ashar','shalat_maghrib','shalat_isya','shalat_count','tilawah_rumah','murojaah_rumah','belajar','akhlak','catatan_akhlak','kendala_wali','keterangan_guru','catatan_wali','konfirmasi_wali','nama_wali','wali_username','waktu_submit','status_review','catatan']
   };
 
   function moduleTable(moduleKey){ return MODULE_TARGET_TABLE[moduleKey] || null; }
@@ -1275,8 +1275,8 @@
         if(!mapped.tanggal) mapped.tanggal = now.slice(0,10);
         if(!mapped.nama_wali && sess.nama) mapped.nama_wali = sess.nama;
         if(!mapped.wali_username && sess.username) mapped.wali_username = sess.username;
-        if(mapped.konfirmasi_wali === undefined) mapped.konfirmasi_wali = true;
-        if(!mapped.status_review) mapped.status_review = (mapped.kendala && String(mapped.kendala).trim()) ? 'Perlu Tindak Lanjut' : 'Sudah Diisi';
+         if(mapped.konfirmasi_wali === undefined) mapped.konfirmasi_wali = false;
+         if(!mapped.status_review) mapped.status_review = 'Menunggu Review';
         if(!mapped.waktu_submit) mapped.waktu_submit = now;
       }
       // 3g) Mutabaah Quran: status_review, konfirmasi_wali, nama_wali, tahun_ajaran, waktu_submit_wali
