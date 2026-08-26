@@ -1910,6 +1910,53 @@ function guruModuleDataKey(moduleId) {
   return map[moduleId] || '';
 }
 
+const GURU_LAZY_DATA_KEYS = {
+  'absensi-siswa': 'absensi',
+  'jurnal-guru': 'jurnal',
+  'jurnal-kelas': 'jurnalKelas',
+  'catatan-siswa': 'catatan',
+  'ibadah': 'ibadah',
+  'surat-izin': 'surat',
+  'mutabaah-rumah': 'mutabaahRumah',
+  'keuangan': 'keuangan',
+  'karakter': 'karakter',
+  'prestasi': 'prestasi',
+  'ekstrakurikuler': 'ekskul',
+  'pelanggaran': 'pelanggaran',
+  'kalender-akademik': 'kalender'
+};
+window.__zGuruLazyLoaded = window.__zGuruLazyLoaded || {};
+window.__zGuruLazyLoading = window.__zGuruLazyLoading || {};
+window.__zGuruLazyQueue = window.__zGuruLazyQueue || Promise.resolve();
+
+function guruActiveDataKey(tab) {
+  var moduleId = String(tab || '').indexOf('module:') === 0 ? String(tab).slice(7) : '';
+  return GURU_LAZY_DATA_KEYS[moduleId] || '';
+}
+
+async function ensureGuruModuleData(moduleId) {
+  var key = GURU_LAZY_DATA_KEYS[moduleId] || '';
+  if (!key || window.__zGuruLazyLoaded[key] || window.__zGuruLazyLoading[key]) return;
+  window.__zGuruLazyLoading[key] = true;
+  var detail = modulePlaceholders[moduleId] || {};
+  var run = window.__zGuruLazyQueue.catch(function(){}).then(async function(){
+    if (window.__zGuruLazyLoaded[key]) return;
+    if (moduleId === 'jurnal-guru' || moduleId === 'jurnal-kelas') loadMasterMapel();
+    if (window.__zGuruInflightHydrate) await window.__zGuruInflightHydrate;
+    if (window.__zGuruLazyLoaded[key]) return;
+    if (window.zSyncPill) window.zSyncPill.show('Memuat ' + (detail.title || 'data') + '\u2026');
+    await hydrateGuruFromSupabase({ only: [key], shell: false });
+  });
+  window.__zGuruLazyQueue = run.catch(function(){});
+  try {
+    await run;
+  } finally {
+    window.__zGuruLazyLoading[key] = false;
+    if (window.zSyncPill) window.zSyncPill.hide();
+    if (appState.activeTab === 'module:' + moduleId && !window.__qrScannerOpen) render();
+  }
+}
+
 /* [PENGUMUMAN BACA SAJA] Pengumuman hanya dibuat dari web admin sekolah,
    jadi form input generiknya dimatikan di aplikasi guru. */
 const READONLY_GURU_MODULES = { 'mutabaah-rumah': true, 'pengumuman': true };
@@ -2008,6 +2055,9 @@ function renderModulePlaceholder(moduleId) {
   if (moduleId === 'jurnal-kelas-wali') return window.renderJurnalKelasWaliGuruModule(detail);
   if (moduleId === 'tabungan') return renderTabunganInputGuruModule(moduleId, detail);
   const dataKey = guruModuleDataKey(moduleId);
+  if (dataKey && window.__zGuruLazyLoading[dataKey] && !(appState.supabaseModules && Array.isArray(appState.supabaseModules[dataKey]))) {
+    return moduleIntro(detail) + '<section class="section"><article class="module-detail-card"><p class="module-detail-copy">Memuat data dari Supabase\u2026</p></article></section>';
+  }
   /* Modul nilai: selalu pakai UI baru NH-1..NH-6, bypass Supabase generic form */
   if (moduleId === 'nilai') return renderScoreModule(detail);
   if (appState.syncMode === 'supabase-live' && moduleId === 'absensi-siswa') return renderStudentAttendanceModule(detail);
@@ -4586,6 +4636,18 @@ function navigateTo(nextTab, opts = {}) {
   if (!opts.skipHistory && window.history && window.history.pushState) {
     window.history.pushState({ tab: nextTab }, '', '#'+nextTab.replace(':','-'));
   }
+  var moduleId = nextTab.indexOf('module:') === 0 ? nextTab.slice(7) : '';
+  if (moduleId && GURU_LAZY_DATA_KEYS[moduleId]) {
+    setTimeout(function(){ ensureGuruModuleData(moduleId); }, 0);
+  } else if (nextTab === 'teacherAttendance' && !window.__zGuruLazyLoaded.presensiGuru) {
+    setTimeout(function(){
+      if (window.__zGuruLazyLoading.presensiGuru) return;
+      window.__zGuruLazyLoading.presensiGuru = true;
+      Promise.resolve(window.__zGuruInflightHydrate).catch(function(){}).then(function(){
+        return hydrateGuruFromSupabase({ only: ['presensiGuru'], shell: false });
+      }).finally(function(){ window.__zGuruLazyLoading.presensiGuru = false; });
+    }, 0);
+  }
   return true;
 }
 
@@ -6409,13 +6471,22 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
   const normName = function(s){ return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); };
   const teacherKey = normName(teacherName);
   try {
-    // Ambil jadwal dari SEMUA kelas yang diajar guru ini
+    // Satu query gabungan menggantikan satu query untuk setiap kelas. Jika server
+    // menolak atau batas gabungan penuh, kembali ke jalur lama agar data tetap utuh.
     var allRows = [];
-    for (var ci = 0; ci < classes.length; ci++) {
-      var kelasNama = classes[ci];
-       var res = await db.select('jadwal_pelajaran', { eq: { kelas: kelasNama }, select: 'id,kelas,hari_index,hari,jam_index,jam_label,jam,mapel,guru,guru_nama,guru_nip,is_break', order: 'hari_index', ascending: true, limit: 500 });
-      var rws = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
-       rws.forEach(function(r){ if (r && !r.kelas) r.kelas = kelasNama; if (r) allRows.push(r); });
+    var _jadwalCols = 'id,kelas,hari_index,hari,jam_index,jam_label,jam,mapel,guru,guru_nama,guru_nip,is_break';
+    var _jadwalLimit = Math.max(500, classes.length * 500);
+    var _batch = await db.select('jadwal_pelajaran', { in: { kelas: classes }, select: _jadwalCols, order: 'hari_index', ascending: true, limit: _jadwalLimit }).catch(function(){ return null; });
+    var _batchRows = Array.isArray(_batch && _batch.data) ? _batch.data : (Array.isArray(_batch) ? _batch : null);
+    if (_batch && !_batch.error && Array.isArray(_batchRows) && _batchRows.length < _jadwalLimit) {
+      allRows = _batchRows.slice();
+    } else {
+      for (var ci = 0; ci < classes.length; ci++) {
+        var kelasNama = classes[ci];
+        var res = await db.select('jadwal_pelajaran', { eq: { kelas: kelasNama }, select: _jadwalCols, order: 'hari_index', ascending: true, limit: 500 });
+        var rws = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
+        rws.forEach(function(r){ if (r && !r.kelas) r.kelas = kelasNama; if (r) allRows.push(r); });
+      }
     }
     if (!allRows.length) {
       // Jangan pertahankan jadwal lama ketika admin sudah menghapus/mengubah
@@ -6539,13 +6610,24 @@ async function rebuildJadwalFromSupabase(kelasArg, teacherName) {
   }
 }
 
-async function hydrateGuruFromSupabase() {
+async function hydrateGuruFromSupabase(options) {
+  options = options || {};
+  var _scopeKey = guruActiveDataKey(appState.activeTab);
+  var _only = Array.isArray(options.only) ? options.only : (_scopeKey ? [_scopeKey] : ['home']);
+  var _shellLoad = options.shell !== false && _only.indexOf('home') !== -1;
+  // Resume/focus/save can arrive together. Share only an active hydrate;
+  // normal startup, navigation, and data ordering remain unchanged.
+  if (window.__zGuruInflightHydrate) return window.__zGuruInflightHydrate;
+  window.__zGuruInflightHydrate = (async function(){
   if (!window.ZymataMobileSupabase) return;
   const session = window.ZymataMobileSupabase.readSession();
   if (!session) return;
   try {
-    const ctx = await window.ZymataMobileSupabase.loadGuruContext(session);
+    const ctx = (!_shellLoad && window.__zGuruLastContext)
+      ? window.__zGuruLastContext
+      : await window.ZymataMobileSupabase.loadGuruContext(session);
     if (!ctx) return;
+    window.__zGuruLastContext = ctx;
     const guru = ctx.guru || {};
     const kelasDiajarRaw = Array.isArray(guru.kelas_diajar) ? guru.kelas_diajar : String(guru.kelas_diajar || '').split(/[,;|]/).map(s => s.trim()).filter(Boolean);
     const waliKelas = String(guru.wali_kelas || '').trim();
@@ -6574,8 +6656,6 @@ async function hydrateGuruFromSupabase() {
       .filter(Boolean)
       .filter(s => { const k = s.toLowerCase(); if (_mapelSeen[k]) return false; _mapelSeen[k] = 1; return true; });
     appState.guruMapelList = mapelList.slice();
-    loadMasterMapel(); // muat daftar mapel resmi sekolah (master_mapel) di latar belakang
-
     appState.syncMode = 'supabase-live';
     appState.teacherName = guru.nama || session.nama || session.nama_guru || session.username || 'Guru';
     appState.teacherNip = String(guru.nip || guru.nip_guru || guru.NIP || session.nip || session.nip_guru || '').trim();
@@ -6585,8 +6665,10 @@ async function hydrateGuruFromSupabase() {
     appState.teacherRoleLabel = waliKelas ? 'Wali kelas' : 'Guru';
     appState.teacherJabatan = String(guru.jabatan || guru.jabatan_guru || '').trim();
     appState.lastSyncLabel = 'Tersambung Supabase';
-    appState.unreadAnnouncements = 0;
-    appState.unreadMessages = 0;
+    if (_shellLoad) {
+      appState.unreadAnnouncements = 0;
+      appState.unreadMessages = 0;
+    }
     // FIX: pulihkan judul tab dari teks empty-state setelah data Supabase termuat
     tabMeta.class.eyebrow = (appState.teacherClass && appState.teacherClass !== 'Kelas belum terhubung') ? ('Kelas ' + appState.teacherClass) : 'Kelas';
     tabMeta.class.title = (appState.teacherClass && appState.teacherClass !== 'Kelas belum terhubung') ? ('Kelas ' + appState.teacherClass) : 'Pantau kelas dengan jelas';
@@ -6609,11 +6691,11 @@ async function hydrateGuruFromSupabase() {
     ctx.kelasList = kelasList.slice();
     const _S = window.ZymataMobileSupabase;
     const [resUtama, siswaAll, , , modulesData] = await Promise.all([
-      kelasUtama ? _S.select('siswa', { eq: { kelas: kelasUtama }, select: _KOL_SISWA, limit: 200 }).catch(function(){ return null; }) : Promise.resolve(null),
-      _S.select('siswa', siswaQuery).catch(function(){ return null; }),
-      rebuildJadwalFromSupabase((appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList : kelasUtama, appState.teacherName).catch(function(){ return null; }),
-      loadMessagesFromSupabase(kelasUtama).catch(function(){ return null; }),
-      _S.loadGuruModuleData(ctx).catch(function(){ return null; })
+      _shellLoad && kelasUtama ? _S.select('siswa', { eq: { kelas: kelasUtama }, select: _KOL_SISWA, limit: 200 }).catch(function(){ return null; }) : Promise.resolve(null),
+      _shellLoad ? _S.select('siswa', siswaQuery).catch(function(){ return null; }) : Promise.resolve(null),
+      _shellLoad ? rebuildJadwalFromSupabase((appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList : kelasUtama, appState.teacherName).catch(function(){ return null; }) : Promise.resolve(null),
+      _shellLoad ? loadMessagesFromSupabase(kelasUtama).catch(function(){ return null; }) : Promise.resolve(null),
+      _S.loadGuruModuleData(ctx, { only: _only }).catch(function(){ return null; })
     ]);
     // Terapkan hasil berurutan (tanpa race condition)
     if (resUtama && !resUtama.error && Array.isArray(resUtama.data)) {
@@ -6629,25 +6711,41 @@ async function hydrateGuruFromSupabase() {
     }
     if (siswaAll && !siswaAll.error && Array.isArray(siswaAll.data)) rebuildSiswaFromRows(siswaAll.data);
     // Fallback: kalau roster kosong (mis. format kelas guru beda dgn tabel siswa), muat semua siswa tanpa filter kelas
-    if (agStudentCount() === 0) {
+    if (_shellLoad && agStudentCount() === 0) {
       try {
         var _allSiswa = await _S.select('siswa', { select: _KOL_SISWA, limit: 1000 });
         if (_allSiswa && !_allSiswa.error && Array.isArray(_allSiswa.data)) rebuildSiswaFromRows(_allSiswa.data);
       } catch (_eAll) {}
     }
     // Simpan riwayat absensi yang sudah ada (dari cache lokal / optimistik) SEBELUM ditimpa.
-    var _prevAbsensiRiwayat = (appState.supabaseModules && Array.isArray(appState.supabaseModules.absensi)) ? appState.supabaseModules.absensi.slice() : [];
-    if (modulesData) appState.supabaseModules = dedupeModules(modulesData);
+    var _prevModules = (appState.supabaseModules && typeof appState.supabaseModules === 'object') ? appState.supabaseModules : {};
+    var _prevAbsensiRiwayat = Array.isArray(_prevModules.absensi) ? _prevModules.absensi.slice() : [];
+    var _loadedKeys = modulesData && Array.isArray(modulesData.__loadedKeys) ? modulesData.__loadedKeys.slice() : null;
+    if (modulesData) {
+      var _freshModules = dedupeModules(modulesData);
+      delete _freshModules.__loadedKeys;
+      if (_loadedKeys) {
+        _loadedKeys.forEach(function(key){
+          if (Array.isArray(_freshModules[key])) _prevModules[key] = _freshModules[key];
+          if (!_shellLoad || (key !== 'absensi' && key !== 'presensiGuru')) window.__zGuruLazyLoaded[key] = true;
+        });
+        appState.supabaseModules = _prevModules;
+      } else {
+        appState.supabaseModules = _freshModules;
+      }
+    }
     // FIX: cegah RIWAYAT absensi hilang saat reload. loadGuruModuleData kadang tidak
     // mengembalikan seluruh riwayat absensi, jadi gabungkan riwayat lama dengan data baru.
     appState.supabaseModules = appState.supabaseModules || {};
-    appState.supabaseModules.absensi = agMergeAbsensiRiwayat(appState.supabaseModules.absensi, _prevAbsensiRiwayat);
+    if (!_loadedKeys || _loadedKeys.indexOf('absensi') !== -1) {
+      appState.supabaseModules.absensi = agMergeAbsensiRiwayat(appState.supabaseModules.absensi, _prevAbsensiRiwayat);
+    }
     // [PDF FIX] loadGuruModuleData bawaan bisa membuang kolom pdf_files. Ambil pdf_files langsung
     // dari Supabase lalu tempelkan ke item jurnal berdasarkan id, agar PDF tampil di role guru.
     try {
       if (window.ZymataMobileSupabase && typeof window.ZymataMobileSupabase.getClient === 'function') {
         var _cliH = window.ZymataMobileSupabase.getClient();
-        var _jurnalArr = (appState.supabaseModules && Array.isArray(appState.supabaseModules.jurnal)) ? appState.supabaseModules.jurnal : null;
+        var _jurnalArr = (!_loadedKeys || _loadedKeys.indexOf('jurnal') !== -1) && appState.supabaseModules && Array.isArray(appState.supabaseModules.jurnal) ? appState.supabaseModules.jurnal : null;
         if (_cliH && typeof _cliH.from === 'function' && _jurnalArr && _jurnalArr.length) {
           var _pdfMap = {};
           var _pdfTbls = ['jurnal_guru', 'jurnal_kelas'];
@@ -6672,8 +6770,8 @@ async function hydrateGuruFromSupabase() {
         }
       }
     } catch(eH){ console.warn('[JurnalPDF] gagal enrich pdf_files:', eH); }
-    syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
-    if (kelasUtama && appState.supabaseModules && appState.supabaseModules.absensi) {
+    if (!_loadedKeys || _loadedKeys.indexOf('presensiGuru') !== -1) syncTeacherAttendanceFromTodayRow(getTodayTeacherAttendanceRow());
+    if ((!_loadedKeys || _loadedKeys.indexOf('absensi') !== -1) && kelasUtama && appState.supabaseModules && appState.supabaseModules.absensi) {
       appState.attendanceDone = Object.keys(getTodayAbsensiMap(kelasUtama)).length;
     }
     saveDataCache();
@@ -6688,6 +6786,9 @@ async function hydrateGuruFromSupabase() {
      * pindah modul lalu kembali (render dipicu navigasi). */
     if (!window.__qrScannerOpen) { try { render(); } catch(_){} }
   }
+  })();
+  try { return await window.__zGuruInflightHydrate; }
+  finally { window.__zGuruInflightHydrate = null; }
 }
 
 loadState();
@@ -8355,7 +8456,7 @@ animateContent();
     var client = (api && typeof api.getClient === 'function') ? api.getClient() : null;
     if (!client || typeof client.from !== 'function') throw new Error('client tidak tersedia');
 
-    var kolom = opts.columns || '*';
+    var kolom = opts.select || opts.columns || '*';
     var batas = Math.min(diminta, MAKS);
     var semua = [];
     var mulai = 0;
