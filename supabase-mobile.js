@@ -565,7 +565,6 @@
     prestasi:             ['siswa_id','id_siswa','nis','siswa_nis'],
     pelanggaran_siswa:    ['siswa_id','nis','snapshot_nis'],
     surat:                ['siswa_id','siswa_nis'],   // TIDAK punya kolom `nis`
-    spp_pembayaran:       ['siswa_id','nis','siswa_nis'],
     tagihan_spp:          ['siswa_id','nis'],
     keuangan:             ['siswa_id','nis','siswa_nis'],
     tabungan_siswa:       ['siswa_id','nis','siswa_nis'],
@@ -587,6 +586,16 @@
   // tidak dibaca sebagai pemisah cabang or=. Sudah diuji: nama dengan , ( ) . ' "
   // semuanya HTTP 200.
   function _orQ(v){ return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
+
+  function _orKelas(kelasList, includeSnapshot){
+    var out = [];
+    (Array.isArray(kelasList) ? kelasList : []).forEach(function(k){
+      if(!k) return;
+      out.push('kelas.eq.' + _orQ(k));
+      if(includeSnapshot) out.push('snapshot_kelas.eq.' + _orQ(k));
+    });
+    return out.join(',');
+  }
 
   // Susun ekspresi or=(...) untuk satu tabel. Balikan '' berarti "jangan pakai or,
   // tetap jalur lama" (mis. tabel tidak terdaftar atau identitas anak tidak diketahui).
@@ -659,8 +668,6 @@
     'siswa_nis,nama_siswa,kelas,mapel,semester,catatan,nama_wali,tgl_mulai,tgl_selesai';
   // Tabel keuangan: kolom pemilik-anak (nis/siswa_nis/nama_siswa) WAJIB ada karena
   // waliRowMilikAnak() menyaringnya lagi di wali-shell.js:715-727.
-  var _KOL_W_SPP_BAYAR = 'id,siswa_id,siswa_nis,nama_siswa,kelas,mapel,tahun_ajaran,semester,' +
-    'tanggal,status,catatan,created_at,bulan,tahun,nominal,tanggal_bayar,metode,keterangan,nis';
   var _KOL_W_TAGIHAN = 'id,siswa_id,nis,nama_siswa,kelas,bulan,tahun,nominal,status,created_at,' +
     'tanggal_lunas,tanggal_bayar';
   var _KOL_W_KEUANGAN = 'id,tanggal,keterangan,kategori,jenis,nominal,created_at,siswa_id,' +
@@ -671,6 +678,8 @@
   var _KOL_W_TABUNGAN_UMUM = 'id,siswa_id,nis,nama_siswa,kelas,nama_wali,jenis,nominal,debit,' +
     'kredit,saldo,keterangan,tanggal,petugas,metode,created_at';
   var _KOL_W_PAYMENTS = 'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at';
+  var _KOL_W_TAHFIDZ_SEKOLAH = 'id,siswa_id,nis,nama_siswa,kelas,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tanggal,tahun_ajaran,semester,guru_nip,guru_nama,created_at';
+  var _KOL_W_TAHFIDZ_RINGKAS = 'id,siswa_id,nis,nama_siswa,kelas,konteks,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tahun_ajaran,semester,updated_at';
 
   async function loadWaliContext(session){
     session = session || readSession();
@@ -773,7 +782,8 @@
     opts = opts || {};
     const collected = [];
     const seen = {};
-    const _lim = limit || 50;
+    const _baseLim = limit || 50;
+    const _lim = opts.batchFilters ? _baseLim * Math.max(filters.length, 1) : _baseLim;
     /* [EGRESS KOLOM GURU] Dua opsi tambahan, dua-duanya opsional supaya pemanggil lama
        tidak berubah perilaku sama sekali:
          opts.select : daftar kolom yang benar-benar dibaca UI. Tanpa ini seluruh kolom
@@ -787,9 +797,11 @@
                        105 baris berganti antar dua pemanggilan absensi_siswa).
                        Dengan urutan tanggal menurun, yang terambil selalu yang TERBARU
                        — dan itu justru yang dipakai layar riwayat. */
-    const _mkOpt = function(eq){
-      const o = { eq: eq, limit: _lim };
+    const _mkOpt = function(eq, batched){
+      const o = { eq: eq, limit: batched ? _lim : _baseLim };
       if(opts.select) o.select = opts.select;
+      if(opts.gte) o.gte = opts.gte;
+      if(opts.lte) o.lte = opts.lte;
       if(opts.order){
         o.order = opts.order;
         o.ascending = (opts.ascending === true);
@@ -816,7 +828,7 @@
         3. `strict` tidak lagi berarti "berhenti di filter pertama" untuk jalur or=,
            karena satu query sudah mencakup semua kemungkinan sekaligus. */
     if(opts.or){
-      const _oOpt = _mkOpt(null);
+      const _oOpt = _mkOpt(null, true);
       _oOpt.or = opts.or;
       let _orGagal = false;
       const _res = await select(table, _oOpt).catch(function(e){ return { error: e }; });
@@ -826,21 +838,40 @@
         console.warn('[ZymataMobile.tryFilteredList ' + table + '] or= ditolak (' +
           String((_res.error && _res.error.message) || _res.error) + ') -> mundur ke jalur per-filter.');
       } else if(Array.isArray(_res.data)){
-        for(const r of _res.data){
-          const k = r && (r.id || JSON.stringify(r));
-          if(!seen[k]){ seen[k] = true; collected.push(r); }
+        if(opts.batchFilters && _res.data.length >= _lim){
+          _orGagal = true;
+        } else if(opts.batchFilters){
+          // Bentuk kembali hasil lama: maksimal `limit` untuk setiap filter kelas,
+          // dalam urutan yang sama, lalu deduplikasi antar-filter.
+          for(const eq of filters){
+            let count = 0;
+            for(const r of _res.data){
+              if(!r) continue;
+              const cocok = Object.keys(eq).every(function(col){ return String(r[col]) === String(eq[col]); });
+              if(!cocok) continue;
+              const k = r.id || JSON.stringify(r);
+              if(!seen[k]){ seen[k] = true; collected.push(r); }
+              count++;
+              if(count >= _baseLim) break;
+            }
+          }
+        } else {
+          for(const r of _res.data){
+            const k = r && (r.id || JSON.stringify(r));
+            if(!seen[k]){ seen[k] = true; collected.push(r); }
+          }
         }
       }
       if(!_orGagal){
         // Sukses (termasuk sukses dengan 0 baris): jangan tembak filter satu-satu lagi.
         if(collected.length) return collected;
         if(opts.strict || opts.noFallback) return [];
-        return await safeList(table, _mkOpt(null));
+        return await safeList(table, _mkOpt(null, false));
       }
       // gagal -> lanjut ke loop per-filter di bawah (perilaku lama)
     }
     for(const eq of filters){
-      const rows = await safeList(table, _mkOpt(eq));
+      const rows = await safeList(table, _mkOpt(eq, false));
       for(const r of rows){
         const k = r && (r.id || JSON.stringify(r));
         if(!seen[k]){ seen[k] = true; collected.push(r); }
@@ -854,7 +885,7 @@
     // Modul berbasis kelas (guru): JANGAN fallback ambil semua -> cegah kelas lain bocor ke riwayat.
     if(opts.noFallback) return [];
     // Default fallback: ambil data terbaru (untuk guru/role lain yang dilindungi RLS).
-    return await safeList(table, _mkOpt(null));
+    return await safeList(table, _mkOpt(null, false));
   }
 
   function normalizeItem(row, fallbackTitle){
@@ -1449,7 +1480,16 @@
     });
   }
 
-  async function loadGuruModuleData(context){
+  async function loadGuruModuleData(context, options){
+    options = options || {};
+    const _only = Array.isArray(options.only) ? options.only : null;
+    const _want = function(key){
+      if(!_only) return true;
+      if(_only.indexOf(key) !== -1) return true;
+      return _only.indexOf('home') !== -1 && ['presensiGuru','absensi','pengumuman'].indexOf(key) !== -1;
+    };
+    const _homeToday = !!(_only && _only.indexOf('home') !== -1);
+    const _loadedKeys = _only ? _only.slice() : null;
     const session = (context && context.session) || readSession() || {};
     const guru = (context && context.guru) || {};
     // Ambil semua kelas dari wali_kelas + seluruh kelas_diajar (bukan cuma index[0])
@@ -1495,27 +1535,29 @@
     const pelanggaranFilters = _allKelasArr.length
       ? _allKelasArr.reduce(function(a, k){ return a.concat([{ kelas: k }, { snapshot_kelas: k }]); }, [])
       : classFilters;
+    const _kelasOr = _orKelas(_allKelasArr, false);
+    const _pelanggaranOr = _orKelas(_allKelasArr, true);
     const appPrefix = 'guru:';
     const mobile = {
-      absensi: appRowsToItems(await loadAppModuleRows(appPrefix + 'absensi-siswa')),
-      nilai: appRowsToItems(await loadAppModuleRows(appPrefix + 'nilai')),
-      jurnal: appRowsToItems(await loadAppModuleRows(appPrefix + 'jurnal-guru')),
-      jurnalKelas: appRowsToItems(await loadAppModuleRows(appPrefix + 'jurnal-kelas')),
-      catatan: appRowsToItems(await loadAppModuleRows(appPrefix + 'catatan-siswa')),
-      hafalan: appRowsToItems(await loadAppModuleRows(appPrefix + 'hafalan')),
-      membaca_quran: appRowsToItems(await loadAppModuleRows(appPrefix + 'membaca-quran')),
-      ibadah: appRowsToItems(await loadAppModuleRows(appPrefix + 'ibadah')),
-      surat: appRowsToItems(await loadAppModuleRows(appPrefix + 'surat-izin')),
-      pengumuman: appRowsToItems(await loadAppModuleRows(appPrefix + 'pengumuman')),
-      keuangan: appRowsToItems(await loadAppModuleRows(appPrefix + 'keuangan')),
-      tabungan: appRowsToItems(await loadAppModuleRows(appPrefix + 'tabungan')),
-      karakter: appRowsToItems(await loadAppModuleRows(appPrefix + 'karakter')),
-      prestasi: appRowsToItems(await loadAppModuleRows(appPrefix + 'prestasi')),
-      ekskul: appRowsToItems(await loadAppModuleRows(appPrefix + 'ekstrakurikuler')),
-      pelanggaran: appRowsToItems(await loadAppModuleRows(appPrefix + 'pelanggaran')),
-      kalender: appRowsToItems(await loadAppModuleRows(appPrefix + 'kalender-akademik')),
-      mutabaahRumah: appRowsToItems(await loadAppModuleRows(appPrefix + 'mutabaah-rumah')),
-      mutabaahQuran: appRowsToItems(await loadAppModuleRows(appPrefix + 'mutabaah-quran'))
+      absensi: appRowsToItems(_want('absensi') ? await loadAppModuleRows(appPrefix + 'absensi-siswa') : []),
+      nilai: appRowsToItems(_want('nilai') ? await loadAppModuleRows(appPrefix + 'nilai') : []),
+      jurnal: appRowsToItems(_want('jurnal') ? await loadAppModuleRows(appPrefix + 'jurnal-guru') : []),
+      jurnalKelas: appRowsToItems(_want('jurnalKelas') ? await loadAppModuleRows(appPrefix + 'jurnal-kelas') : []),
+      catatan: appRowsToItems(_want('catatan') ? await loadAppModuleRows(appPrefix + 'catatan-siswa') : []),
+      hafalan: appRowsToItems(_want('hafalan') ? await loadAppModuleRows(appPrefix + 'hafalan') : []),
+      membaca_quran: appRowsToItems(_want('membaca_quran') ? await loadAppModuleRows(appPrefix + 'membaca-quran') : []),
+      ibadah: appRowsToItems(_want('ibadah') ? await loadAppModuleRows(appPrefix + 'ibadah') : []),
+      surat: appRowsToItems(_want('surat') ? await loadAppModuleRows(appPrefix + 'surat-izin') : []),
+      pengumuman: appRowsToItems(_want('pengumuman') ? await loadAppModuleRows(appPrefix + 'pengumuman') : []),
+      keuangan: appRowsToItems(_want('keuangan') ? await loadAppModuleRows(appPrefix + 'keuangan') : []),
+      tabungan: appRowsToItems(_want('tabungan') ? await loadAppModuleRows(appPrefix + 'tabungan') : []),
+      karakter: appRowsToItems(_want('karakter') ? await loadAppModuleRows(appPrefix + 'karakter') : []),
+      prestasi: appRowsToItems(_want('prestasi') ? await loadAppModuleRows(appPrefix + 'prestasi') : []),
+      ekskul: appRowsToItems(_want('ekskul') ? await loadAppModuleRows(appPrefix + 'ekstrakurikuler') : []),
+      pelanggaran: appRowsToItems(_want('pelanggaran') ? await loadAppModuleRows(appPrefix + 'pelanggaran') : []),
+      kalender: appRowsToItems(_want('kalender') ? await loadAppModuleRows(appPrefix + 'kalender-akademik') : []),
+      mutabaahRumah: appRowsToItems(_want('mutabaahRumah') ? await loadAppModuleRows(appPrefix + 'mutabaah-rumah') : []),
+      mutabaahQuran: appRowsToItems(_want('mutabaahQuran') ? await loadAppModuleRows(appPrefix + 'mutabaah-quran') : [])
     };
     /* [EGRESS KOLOM GURU] Opsi bersama untuk semua pembacaan per-kelas.
        `order:'tanggal'` + `nullsFirst:false` bukan kosmetik: `limit` TANPA ORDER BY
@@ -1526,9 +1568,40 @@
        di depan pada urutan DESC, yang bisa memakan seluruh kuota limit. */
     const _urutTgl = { noFallback: true, order: 'tanggal', ascending: false, nullsFirst: false };
     const _pk = function(select){ return Object.assign({ select: select }, _urutTgl); };
+    const _pkKelas = function(select){
+      var out = _pk(select);
+      if(_kelasOr){ out.or = _kelasOr; out.batchFilters = true; }
+      return out;
+    };
+    const _pkPelanggaran = function(select){
+      var out = _pk(select);
+      if(_pelanggaranOr){ out.or = _pelanggaranOr; out.batchFilters = true; }
+      return out;
+    };
+    const _pkHomeAbsensi = function(select){
+      var out = _pk(select);
+      if(_homeToday){
+        var _now = new Date();
+        var _today = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
+        out.gte = { tanggal: _today };
+        out.lte = { tanggal: _today };
+      }
+      return out;
+    };
+    const _homeAbsensiFilters = _homeToday ? classFilters : allKelasFilters;
+    const _presensiOpts = { strict: true, select: _KOL_G_ABSENSI_GURU, order: 'tanggal', ascending: false, nullsFirst: false };
+    if(_homeToday){
+      var _pNow = new Date();
+      var _pToday = _pNow.getFullYear() + '-' + String(_pNow.getMonth() + 1).padStart(2, '0') + '-' + String(_pNow.getDate()).padStart(2, '0');
+      _presensiOpts.gte = { tanggal: _pToday };
+      _presensiOpts.lte = { tanggal: _pToday };
+    }
     return {
-      presensiGuru: nip ? await tryFilteredList('absensi_guru', [{ nip }], 90, { strict: true, select: _KOL_G_ABSENSI_GURU, order: 'tanggal', ascending: false, nullsFirst: false }) : [],
-      absensi: mobile.absensi.concat(await tryFilteredList('absensi_siswa', allKelasFilters, 120, _pk(_KOL_G_ABSENSI))),
+      __loadedKeys: _loadedKeys,
+      presensiGuru: _want('presensiGuru') && nip ? await tryFilteredList('absensi_guru', [{ nip }], 90, _presensiOpts) : [],
+      // Absensi jauh lebih besar daripada tabel modul lain. Tetap gunakan batas
+      // 120 per kelas agar batching tidak berubah menjadi unduhan ribuan baris.
+      absensi: mobile.absensi.concat(_want('absensi') ? await tryFilteredList('absensi_siswa', _homeAbsensiFilters, 120, _homeToday ? _pkHomeAbsensi(_KOL_G_ABSENSI) : _pk(_KOL_G_ABSENSI)) : []),
       /* [EGRESS MODUL MATI] `nilai` TIDAK PERNAH dibaca dari sini. guru-shell.js:1999
          mengembalikan renderScoreModule(detail) sebelum baris 2001 yang memakai
          supabaseModules[dataKey], dan renderScoreModule mengambil angkanya dari
@@ -1536,9 +1609,9 @@
          (3 tabel x 17 kelas) terbuang tiap hydrate. Kuncinya tetap ada supaya bentuk
          objek yang dikembalikan tidak berubah bagi pemanggil lain. */
       nilai: mobile.nilai,
-      jurnal: mobile.jurnal.concat(await tryFilteredList('jurnal_guru', commonGuruFilters, 50, _pk(_KOL_G_JURNAL_GURU))),
-      jurnalKelas: mobile.jurnalKelas.concat(await tryFilteredList('jurnal_kelas', allKelasFilters, 80, _pk(_KOL_G_JURNAL_KELAS))),
-      catatan: mobile.catatan.concat(await tryFilteredList('jurnal_siswa', allKelasFilters, 80, _pk(_KOL_G_JURNAL_SISWA))),
+      jurnal: mobile.jurnal.concat(_want('jurnal') ? await tryFilteredList('jurnal_guru', commonGuruFilters, 50, _pk(_KOL_G_JURNAL_GURU)) : []),
+      jurnalKelas: mobile.jurnalKelas.concat(_want('jurnalKelas') ? await tryFilteredList('jurnal_kelas', allKelasFilters, 80, _pkKelas(_KOL_G_JURNAL_KELAS)) : []),
+      catatan: mobile.catatan.concat(_want('catatan') ? await tryFilteredList('jurnal_siswa', allKelasFilters, 80, _pkKelas(_KOL_G_JURNAL_SISWA)) : []),
       /* [EGRESS MODUL MATI] `hafalan` & `membaca_quran` tidak punya entri di
          guruModuleDataKey() (guru-shell.js:1889-1911) dan tidak ada route
          `module:hafalan` / `module:membaca-quran` di menu guru, jadi hasilnya
@@ -1546,22 +1619,22 @@
          Mutaba'ah Tahfidz yang membaca tabel mutabaah_tahfidz_riwayat sendiri. */
       hafalan: mobile.hafalan,
       membaca_quran: mobile.membaca_quran,
-      ibadah: mobile.ibadah.concat(await tryFilteredList('ibadah', allKelasFilters, 80, _pk(_KOL_G_IBADAH))),
-      surat: mobile.surat.concat(await tryFilteredList('surat', allKelasFilters, 80, _pk(_KOL_G_SURAT))),
-      pengumuman: mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 }))),
-      keuangan: mobile.keuangan.concat(await safeList('keuangan', { select: _KOL_G_KEUANGAN, order: 'tanggal', ascending: false, nullsFirst: false, limit: 80 })),
+      ibadah: mobile.ibadah.concat(_want('ibadah') ? await tryFilteredList('ibadah', allKelasFilters, 80, _pkKelas(_KOL_G_IBADAH)) : []),
+      surat: mobile.surat.concat(_want('surat') ? await tryFilteredList('surat', allKelasFilters, 80, _pkKelas(_KOL_G_SURAT)) : []),
+      pengumuman: mobile.pengumuman.concat(_want('pengumuman') ? _rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 })) : []),
+      keuangan: mobile.keuangan.concat(_want('keuangan') ? await safeList('keuangan', { select: _KOL_G_KEUANGAN, order: 'tanggal', ascending: false, nullsFirst: false, limit: 80 }) : []),
       /* [EGRESS MODUL MATI] `tabungan` adalah pemborosan TERBESAR di hydrate guru:
          641 KB dari 1,89 MB (34%) untuk 17 kelas, dan NOL pembaca. guru-shell.js:1996
          mengembalikan renderTabunganInputGuruModule() sebelum baris 2001, sedangkan
          halaman Tabungan memakai loader sendiri (loadTabunganData, guru-shell.js:1611)
          yang menarik satu kelas saja dengan 18 kolom terpilih. */
       tabungan: mobile.tabungan,
-      karakter: mobile.karakter.concat(await tryFilteredList('karakter', allKelasFilters, 80, _pk(_KOL_G_KARAKTER))),
-      prestasi: mobile.prestasi.concat(await tryFilteredList('prestasi', allKelasFilters, 80, _pk(_KOL_G_PRESTASI))),
-      ekskul: mobile.ekskul.concat(await safeList('ekskul', { select: _KOL_EKSKUL_GURU, limit: 50 })),
-      pelanggaran: mobile.pelanggaran.concat(await tryFilteredList('pelanggaran_siswa', pelanggaranFilters, 80, _pk(_KOL_G_PELANGGARAN))),
-      kalender: mobile.kalender.concat(await safeList('kalender_events', { select: _KOL_G_KALENDER, order: 'tahun', ascending: false, nullsFirst: false, limit: 80 })),
-      mutabaahRumah: mobile.mutabaahRumah.concat(await tryFilteredList('mutabaah_rumah', allKelasFilters, 80, _pk(_KOL_G_MUTABAAH_RUMAH))),
+      karakter: mobile.karakter.concat(_want('karakter') ? await tryFilteredList('karakter', allKelasFilters, 80, _pkKelas(_KOL_G_KARAKTER)) : []),
+      prestasi: mobile.prestasi.concat(_want('prestasi') ? await tryFilteredList('prestasi', allKelasFilters, 80, _pkKelas(_KOL_G_PRESTASI)) : []),
+      ekskul: mobile.ekskul.concat(_want('ekskul') ? await safeList('ekskul', { select: _KOL_EKSKUL_GURU, limit: 50 }) : []),
+      pelanggaran: mobile.pelanggaran.concat(_want('pelanggaran') ? await tryFilteredList('pelanggaran_siswa', pelanggaranFilters, 80, _pkPelanggaran(_KOL_G_PELANGGARAN)) : []),
+      kalender: mobile.kalender.concat(_want('kalender') ? await safeList('kalender_events', { select: _KOL_G_KALENDER, order: 'tahun', ascending: false, nullsFirst: false, limit: 80 }) : []),
+      mutabaahRumah: mobile.mutabaahRumah.concat(_want('mutabaahRumah') ? await tryFilteredList('mutabaah_rumah', allKelasFilters, 80, _pkKelas(_KOL_G_MUTABAAH_RUMAH)) : []),
       /* [EGRESS TABEL HANTU] Tabel `mutabaah_quran` TIDAK ADA di database (dicek ke
          REST: HTTP 404 PGRST205 "Could not find the table"). Sebelumnya tetap
          ditembak 17x per hydrate dan selalu gagal. `mutabaahQuran` juga tidak ada
@@ -1570,7 +1643,13 @@
     };
   }
 
-  async function loadWaliModuleData(context){
+  async function loadWaliModuleData(context, options){
+    options = options || {};
+    var _only = Array.isArray(options.only) ? options.only : null;
+    var _want = function(key){
+      if(!_only) return true;
+      return _only.indexOf(key) !== -1;
+    };
     const session = (context && context.session) || readSession() || {};
     const siswa = (context && context.siswa) || {};
     let nis = clean(siswa.nis || session.nis_siswa || '');
@@ -1611,6 +1690,28 @@
     const nilaiFilters = filters.concat(
       (namaSiswa && kelas) ? [{ nama_siswa: namaSiswa, kelas: kelas }] : []
     );
+    var tahfidzSekolah = [];
+    if(_want('mutabaahTahfidzSekolah') && nis){
+      try{
+        var _tfRows = await safeList('mutabaah_tahfidz_riwayat', {
+          eq: { siswa_id: nis, konteks: 'sekolah' },
+          select: 'id,siswa_id,nis,nama_siswa,kelas,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tanggal,tahun_ajaran,semester,guru_nip,guru_nama,created_at',
+          order: 'tanggal', ascending: false, limit: 100
+        });
+        tahfidzSekolah = Array.isArray(_tfRows) ? _tfRows : [];
+      }catch(_tfErr){ tahfidzSekolah = []; }
+    }
+    var tahfidzRingkasSekolah = [];
+    if(_want('mutabaahTahfidzRingkas') && nis){
+      try{
+        var _tfSummary = await safeList('mutabaah_tahfidz', {
+          eq: { siswa_id: nis, konteks: 'sekolah' },
+          select: _KOL_W_TAHFIDZ_RINGKAS,
+          order: 'updated_at', ascending: false, limit: 20
+        });
+        tahfidzRingkasSekolah = Array.isArray(_tfSummary) ? _tfSummary : [];
+      }catch(_tfSummaryErr){ tahfidzRingkasSekolah = []; }
+    }
     function belongsToChild(r){
       if(!r) return false;
       // [PERBAIKAN ABSENSI WALI] Bila NIS anak sudah diketahui, jangan akui sebuah baris
@@ -1664,14 +1765,32 @@
       if(or) o.or = or;
       return o;
     };
+    var _badgeCatatan = [];
+    var _badgeCalistung = [];
+    if(options.badges){
+      _badgeCatatan = filterMine(await tryFilteredList('jurnal_siswa', filters, 200, _w(
+        'jurnal_siswa',
+        'id,tanggal,siswa_id,siswa_nis,nis,kelas,status,status_visibilitas,created_at',
+        'tanggal'
+      )));
+      if(nis){
+        _badgeCalistung = await safeList('calistung', {
+          eq: { nis: nis },
+          select: 'id,row_uid,tanggal,updated_at',
+          order: 'tanggal', ascending: false, limit: 200
+        });
+      }
+    }
     return {
-      absensi: filterMine(mobile.absensi.concat(await tryFilteredList('absensi_siswa', filters, 80, _w('absensi_siswa', _KOL_W_ABSENSI)))),
-      nilai: filterMine(mobile.nilai
-        // nilai_siswa TIDAK punya kolom `tanggal` (sudah diperiksa ke server) -> urut created_at.
-        .concat(await tryFilteredList('nilai_siswa', nilaiFilters, 80, _w('nilai_siswa', _KOL_W_NILAI, 'created_at', true)))
-        .concat(await tryFilteredList('ulangan_harian_nilai', nilaiFilters, 80, _w('ulangan_harian_nilai', _KOL_W_UH, 'tanggal', true)))
-        .concat(await tryFilteredList('ujian_semester_nilai', nilaiFilters, 80, _w('ujian_semester_nilai', _KOL_W_US, 'tanggal', true)))),
-      catatan: filterMine(mobile.catatan.concat(await tryFilteredList('jurnal_siswa', filters, 50, _w('jurnal_siswa', _KOL_W_JURNAL_SISWA)))),
+       badgeCatatan: _badgeCatatan,
+       badgeCalistung: _badgeCalistung,
+       absensi: _want('absensi') ? filterMine(mobile.absensi.concat(await tryFilteredList('absensi_siswa', filters, 80, _w('absensi_siswa', _KOL_W_ABSENSI)))) : [],
+       nilai: _want('nilai') ? filterMine(mobile.nilai
+         // nilai_siswa TIDAK punya kolom `tanggal` (sudah diperiksa ke server) -> urut created_at.
+         .concat(await tryFilteredList('nilai_siswa', nilaiFilters, 80, _w('nilai_siswa', _KOL_W_NILAI, 'created_at', true)))
+         .concat(await tryFilteredList('ulangan_harian_nilai', nilaiFilters, 80, _w('ulangan_harian_nilai', _KOL_W_UH, 'tanggal', true)))
+         .concat(await tryFilteredList('ujian_semester_nilai', nilaiFilters, 80, _w('ujian_semester_nilai', _KOL_W_US, 'tanggal', true)))) : [],
+       catatan: _want('catatan') ? filterMine(mobile.catatan.concat(await tryFilteredList('jurnal_siswa', filters, 50, _w('jurnal_siswa', _KOL_W_JURNAL_SISWA)))) : [],
       /* [EGRESS MODUL MATI] `hafalan` ditarik 50 baris tiap hydrate, tapi hasilnya buntu:
          wali-shell.js:3265-3272 hanya mengisi appState.hafalanSurah/hafalanProgress/
          hafalanTanzil/hafalanHalaman, dan keempat field itu TIDAK dibaca renderer mana pun
@@ -1680,13 +1799,13 @@
          renderAcademic/renderChild sebagai pembaca, tapi kedua fungsi itu tidak
          menyentuhnya. Kunci tetap ada (array kosong) supaya bentuk objek tidak berubah. */
       hafalan: mobile.hafalan,
-      ibadah: filterMine(mobile.ibadah.concat(await tryFilteredList('ibadah', filters, 50, _w('ibadah', _KOL_W_IBADAH)))),
+       ibadah: _want('perkembangan') ? filterMine(mobile.ibadah.concat(await tryFilteredList('ibadah', filters, 50, _w('ibadah', _KOL_W_IBADAH)))) : [],
       /* [EGRESS MODUL MATI] `membaca_quran`: NOL pembaca di app wali. wali-shell.js:2020
          menetapkan `membacaRows = []` (array kosong literal), sehingga `sorotanMembaca`
          (baris 2031) dihitung lalu dibuang tanpa pernah dirender. Tidak ada `sm.membaca_quran`
          di mana pun, dan 'membaca_quran' bukan dataKey mana pun di waliModuleDataKey(). */
       membaca_quran: mobile.membaca_quran,
-      mutabaahRumah: filterMine((mobile.mutabaahRumah||[]).concat(await tryFilteredList('mutabaah_rumah', filters, 50, _w('mutabaah_rumah', _KOL_W_MUTABAAH_RUMAH)))),
+       mutabaahRumah: _want('mutabaahRumah') ? filterMine((mobile.mutabaahRumah||[]).concat(await tryFilteredList('mutabaah_rumah', filters, 50, _w('mutabaah_rumah', _KOL_W_MUTABAAH_RUMAH)))) : [],
       /* [EGRESS TABEL HANTU] Tabel `mutabaah_quran` TIDAK ADA di database (REST balas
          HTTP 404 PGRST205 "Could not find the table"). Dari log edge 24 jam: 10.229
          request/hari dari app wali ke tabel ini, SEMUANYA 404, plus preflight OPTIONS-nya.
@@ -1694,20 +1813,24 @@
          di wali-shell.js:475 yang cuma menghitung badge — dan karena tabelnya tidak ada,
          nilainya memang selalu kosong bahkan sebelum perubahan ini. renderMutabaah()
          (wali-shell.js:1240) juga sudah menetapkan quranRows = [] sendiri. */
-      mutabaahQuran: mobile.mutabaahQuran,
-      karakter: filterMine(await tryFilteredList('karakter', filters, 50, _w('karakter', _KOL_W_KARAKTER))),
-      prestasi: filterMine(await tryFilteredList('prestasi', filters, 50, _w('prestasi', _KOL_W_PRESTASI))),
-      pelanggaran: filterMine(await tryFilteredList('pelanggaran_siswa', filters, 50, _w('pelanggaran_siswa', _KOL_W_PELANGGARAN))),
-      surat: filterMine(mobile.surat.concat(await tryFilteredList('surat', filters, 50, _w('surat', _KOL_W_SURAT)))),
-      keuangan: filterMine(mobile.keuangan.concat((await tryFilteredList('spp_pembayaran', filters, 30, _w('spp_pembayaran', _KOL_W_SPP_BAYAR))).map(function(r){ return Object.assign({_zymata_source:'spp_pembayaran'},r); })
-        // tagihan_spp juga tidak punya kolom `tanggal`.
-        .concat((await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at'))).map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }))
-        .concat((await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))).map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); })))),
-      payments: await safeList('payment_transactions', { select:_KOL_W_PAYMENTS, order:'created_at', ascending:false, limit:50 }),
-      tabungan: filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, _w('tabungan_siswa', _KOL_W_TABUNGAN)))),
-      tabunganUmum: filterMine(await tryFilteredList('tabungan_umum', filters, 30, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))),
-      ekskul: await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }),
-      pengumuman: mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 })))
+       mutabaahQuran: mobile.mutabaahQuran,
+       mutabaahTahfidzSekolah: tahfidzSekolah,
+       mutabaahTahfidzRingkas: tahfidzRingkasSekolah,
+       karakter: _want('perkembangan') ? filterMine(await tryFilteredList('karakter', filters, 50, _w('karakter', _KOL_W_KARAKTER))) : [],
+       prestasi: _want('perkembangan') ? filterMine(await tryFilteredList('prestasi', filters, 50, _w('prestasi', _KOL_W_PRESTASI))) : [],
+       pelanggaran: _want('perkembangan') ? filterMine(await tryFilteredList('pelanggaran_siswa', filters, 50, _w('pelanggaran_siswa', _KOL_W_PELANGGARAN))) : [],
+       surat: _want('surat') ? filterMine(mobile.surat.concat(await tryFilteredList('surat', filters, 50, _w('surat', _KOL_W_SURAT)))) : [],
+       keuangan: _want('keuangan') ? filterMine(
+         mobile.keuangan
+           // tagihan_spp juga tidak punya kolom `tanggal`.
+           .concat((await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at'))).map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }))
+           .concat((await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))).map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }))
+        ) : [],
+       payments: _want('keuangan') ? await safeList('payment_transactions', { select:_KOL_W_PAYMENTS, order:'created_at', ascending:false, limit:50 }) : [],
+       tabungan: _want('keuangan') ? filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, _w('tabungan_siswa', _KOL_W_TABUNGAN)))) : [],
+       tabunganUmum: _want('keuangan') ? filterMine(await tryFilteredList('tabungan_umum', filters, 30, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))) : [],
+       ekskul: _want('perkembangan') ? await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }) : [],
+       pengumuman: _want('pengumuman') ? mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 }))) : []
     };
   }
 
