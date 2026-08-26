@@ -283,8 +283,17 @@
   </script>
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      var zymataSwReloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (zymataSwReloading) return;
+        zymataSwReloading = true;
+        window.location.reload();
+      });
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('./guru-sw.js').catch(function () {});
+        navigator.serviceWorker.register('./guru-sw.js').then(function (registration) {
+          registration.update().catch(function () {});
+          if (registration.waiting) registration.waiting.postMessage('SKIP_WAITING');
+        }).catch(function () {});
       });
     }
   </script>
