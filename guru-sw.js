@@ -6,7 +6,7 @@
 //  Selama versi ini berubah, SW baru mengambil file baru, membuang cache lama,
 //  dan pengguna TIDAK perlu hapus cache manual lagi.
 // ============================================================================
-const CACHE_VERSION = 'v20260822-jadwal-admin-sync';
+const CACHE_VERSION = 'v20260827-guru-lazy-modules';
 const CACHE_NAME = `zymata-shell-${CACHE_VERSION}`;
 
 // Semua file inti yang dipakai KEDUA tampilan (Guru & Wali).
