@@ -578,9 +578,10 @@ body.wali-shell .lux-chip.orange{ background:#FFE9D6 !important; color:#F95E08 !
 body.wali-shell .lux-chip.red   { background:#FBE0DD !important; color:#D14343 !important; }
 
 /* Rekap pekan ini: selaraskan ke palet (oranye / teal / mint) */
-body.wali-shell .lux-recap .lux-stat:nth-child(1) .lux-stat-val{ color:#F95E08 !important; -webkit-text-fill-color:#F95E08 !important; background:none !important; }
-body.wali-shell .lux-recap .lux-stat:nth-child(2) .lux-stat-val{ color:#3E7E78 !important; -webkit-text-fill-color:#3E7E78 !important; background:none !important; }
-body.wali-shell .lux-recap .lux-stat:nth-child(3) .lux-stat-val{ color:#4E7A3A !important; -webkit-text-fill-color:#4E7A3A !important; background:none !important; }
+ body.wali-shell .lux-recap{grid-template-columns:repeat(2,minmax(0,1fr)) !important;gap:14px !important;margin-bottom:34px !important;}
+ body.wali-shell .lux-recap .lux-stat{min-height:112px !important;display:flex !important;flex-direction:column !important;justify-content:center !important;}
+ body.wali-shell .lux-recap .lux-stat:nth-child(1) .lux-stat-val{ color:#F95E08 !important; -webkit-text-fill-color:#F95E08 !important; background:none !important; }
+ body.wali-shell .lux-recap .lux-stat:nth-child(2) .lux-stat-val{ color:#3E7E78 !important; -webkit-text-fill-color:#3E7E78 !important; background:none !important; }
 
 /* ===== LATAR KREM + FONT (Smart Learn) — perbaikan menyeluruh ===== */
 body.wali-shell .app-shell{ background:#FBF8F1 !important; }
@@ -886,12 +887,12 @@ body.wali-shell .toggle.on{ background:linear-gradient(135deg,#FE8118,#F95E08) !
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-mobile.js?v=20260821-doku-sandbox"></script>
+<script src="supabase-mobile.js?v=20260826-wali-tahfidz-final"></script>
 <script src="chat-mobile.js"></script>
 <script src="native-enhance.js"></script>
 <script src="native-pro.js"></script>
 <script src="https://sandbox.doku.com/jokul-checkout-js/v1/jokul-checkout-1.0.0.js"></script>
-<script src="wali-shell.js?v=20260821-qris-registration-lock"></script>
+<script src="wali-shell.js?v=20260826-wali-tahfidz-final"></script>
   <script>
   /* Transisi halaman wali: bottom-nav = sheet (naik dari bawah), lainnya = fade+zoom.
      UI murni — membungkus animateWaliContent tanpa mengubah logika app. */
