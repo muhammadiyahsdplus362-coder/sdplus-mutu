@@ -1073,10 +1073,6 @@ function renderHome() {
           <span class="lux-stat-val grad-aqua">${appState.homeAttendanceRate}%</span>
           <span class="lux-stat-lbl">Kehadiran</span>
         </button>
-        <button type="button" class="lux-stat" data-module-route="module:nilai-anak">
-          <span class="lux-stat-val grad-violet">${appState.homeScoreAverage}</span>
-          <span class="lux-stat-lbl">Rata nilai</span>
-        </button>
         <button type="button" class="lux-stat" data-module-route="mutabaah">
           <span class="lux-stat-val grad-emerald">${appState.homeMutabaahProgress}%</span>
           <span class="lux-stat-lbl">Mutabaah</span>
@@ -1089,7 +1085,10 @@ function renderHome() {
         function pushFrom(arr, area, tone){
           (arr || []).slice(0, 3).forEach(function(r){
             var dt = r.tanggal || r.tgl || r.created_at || r.updated_at || r.waktu_submit || r.waktu_submit_wali || '';
-            var tt = r.surat || r.judul || r.title || r.lomba || r.kegiatan || r.perihal || r.tilawah_rumah || r.materi || '';
+            var isTahfidzSchool = area === 'Mutabaah Tahfidz Sekolah';
+            var isTilawahSchool = isTahfidzSchool && /tilawah/i.test(String(r.kategori || ''));
+            var tt = isTahfidzSchool ? (r.kategori || 'Setoran Tahfidz') : (r.surah_nama || r.surat || r.judul || r.title || r.lomba || r.kegiatan || r.perihal || r.tilawah_rumah || r.materi || '');
+            if (!tt && area === 'Mutabaah Tahfidz Sekolah') tt = r.kategori || 'Setoran Tahfidz';
             if (!tt && area === 'Karakter') {
               var ks = [r.disiplin,r.sopan,r.jujur,r.kerja_keras,r.tanggung_jawab].filter(Boolean);
               tt = r.semester ? r.semester : '';
@@ -1108,7 +1107,14 @@ function renderHome() {
               tt = 'Shalat ' + Number(shalatCount || 0) + '/5';
             }
             if (!tt) tt = area + ' anak';
-            var mt = r.nilai ? ('Nilai ' + r.nilai) : (r.juz ? ('Juz ' + r.juz) : (r.kategori || r.status_review || r.keterangan_guru || r.kendala_wali || '-'));
+            var mt = isTilawahSchool
+              ? [
+                  (r.surah_nama || (function(){ var m=String(r.catatan||'').match(/\[?(At-Tanzil\s+[^\]]+)/i); return m ? m[1] : ''; })()),
+                  r.progres != null ? ('Progres ' + r.progres + '%') : '',
+                ].filter(Boolean).join(' · ')
+              : isTahfidzSchool
+                ? [r.surah_nama || (r.surah_no ? ('Surah ' + r.surah_no) : ''), r.ayat ? ('Ayat ' + r.ayat) : '', r.progres != null ? ('Progres ' + r.progres + '%') : ''].filter(Boolean).join(' · ')
+              : (r.progres ? ('Progres ' + r.progres) : (r.nilai ? ('Nilai ' + r.nilai) : (r.juz ? ('Juz ' + r.juz) : (r.kategori || r.status_review || r.keterangan_guru || r.kendala_wali || '-'))));
             updates.push({
               time: String(dt).slice(0,10) || area, area: area,
               title: tt,
@@ -1117,11 +1123,7 @@ function renderHome() {
             });
           });
         }
-        pushFrom(sm.mutabaahRumah, 'Mutabaah Rumah', 'green');
-        pushFrom(sm.karakter, 'Karakter', 'blue');
-        pushFrom(sm.prestasi, 'Prestasi', 'green');
-        pushFrom(sm.pelanggaran, 'Pelanggaran', 'red');
-        pushFrom(sm.nilai, 'Nilai', 'blue');
+        pushFrom(sm.mutabaahTahfidzSekolah, 'Mutabaah Tahfidz Sekolah', 'green');
         updates.sort(function(a,b){ return String(b.time).localeCompare(String(a.time)); });
         updates = updates.slice(0, 5);
         if (!updates.length) return '';
@@ -1129,7 +1131,7 @@ function renderHome() {
           '<div class="lux-timeline">' +
           updates.map(function(u){
             return `<div class="lux-tl-item"><span class="lux-tl-dot ${u.tone}"></span>
-              <div class="lux-tl-body"><span class="lux-tl-title">${u.title}</span><span class="lux-tl-meta">${u.area} &middot; ${u.time}</span></div>
+              <div class="lux-tl-body"><span class="lux-tl-title">${u.title}</span><span class="lux-tl-meta">${u.meta || u.area} &middot; ${u.time}</span></div>
               <span class="lux-tl-pill ${u.tone}">${u.status}</span></div>`;
           }).join('') + '</div>';
       })()}
@@ -1254,21 +1256,15 @@ function renderAcademic() {
 
 function renderMutabaah() {
   var sm = appState.supabaseModules || {};
-  /* Tab Mutabaah HANYA menampilkan mutabaah_rumah.
-     Catatan: komentar lama menyebut "mutabaah_rumah & mutabaah_quran", padahal
-     ada `quranRows = []` (array kosong literal) di sini sehingga mutabaah_quran tidak
-     pernah tampil. Variabel itu beserta `quranWeek` sudah dihapus. Tabel
-     `mutabaah_quran` juga TIDAK ADA di database (REST balas 404 PGRST205) dan sudah
-     tidak ditarik lagi saat hydrate.
-     hafalan & ibadah adalah input admin pada tabel terpisah, jadi tidak diikutkan di sini. */
-  var rumahRows = Array.isArray(sm.mutabaahRumah)?sm.mutabaahRumah.slice():[];
+  // Ringkasan Mutabaah memakai setoran sekolah dari Tahfidz, bukan aktivitas rumah.
+  var tahfidzRows = Array.isArray(sm.mutabaahTahfidzSekolah)?sm.mutabaahTahfidzSekolah.slice():[];
   var _wkAgo = Date.now()-7*24*3600*1000;
   var _inWeek = function(r){ var d=Date.parse(r.tanggal||r.created_at||''); return !isNaN(d) && d>=_wkAgo; };
-  var rumahWeek = rumahRows.filter(_inWeek).length;
-  var updates = rumahRows.slice().sort(function(a,b){ return String(b.tanggal||b.created_at||'').localeCompare(String(a.tanggal||a.created_at||'')); }).slice(0,8).map(function(r){
-    var title = r.tilawah_rumah || r.murojaah_rumah || r.surat || r.shalat || r.kegiatan || r.keterangan || r.catatan || r.catatan_wali || 'Mutabaah';
-    var st = r.status_setoran || r.status_review || r.status || '-';
-    return { time: (r.tanggal||r.created_at||'-'), title: String(title), meta: [r.kelas, r.juz?('Juz '+r.juz):''].filter(Boolean).join(' \u00b7 ')||'-', status: String(st), tone: /baik|lunas|tuntas|tercapai|selesai|sudah/i.test(String(st))?'green':'blue' };
+  var sekolahWeek = tahfidzRows.filter(_inWeek).length;
+  var updates = tahfidzRows.slice().sort(function(a,b){ return String(b.tanggal||b.created_at||'').localeCompare(String(a.tanggal||a.created_at||'')); }).slice(0,8).map(function(r){
+    var title = r.surah_nama || (r.surah_no ? ('Surah '+r.surah_no) : '') || r.kategori || 'Setoran Tahfidz';
+    var st = r.progres || 'Setoran sekolah';
+    return { time: (r.tanggal||r.created_at||'-'), title: String(title), meta: [r.kategori, r.ayat?('Ayat '+r.ayat):'', r.guru_nama?('Guru '+r.guru_nama):''].filter(Boolean).join(' \u00b7 ')||'-', status: String(st), tone: 'green' };
   });
   return `
     <section class="section">
@@ -1279,8 +1275,8 @@ function renderMutabaah() {
         </div>
         <div class="wali-stat-div"></div>
         <div class="wali-stat-item">
-          <span class="wali-stat-val">${rumahWeek}</span>
-          <span class="wali-stat-lbl">Rumah</span>
+           <span class="wali-stat-val">${sekolahWeek}</span>
+           <span class="wali-stat-lbl">Setoran sekolah</span>
         </div>
       </div>
     </section>
@@ -1295,7 +1291,7 @@ function renderMutabaah() {
       <div class="timeline">
         ${updates.length
           ? updates.map(scheduleCard).join('')
-          : scheduleCard({ time: 'Info', title: 'Belum ada data', meta: 'Data mutabaah akan otomatis tampil dari Supabase.', status: 'Kosong', tone: 'blue' })}
+           : scheduleCard({ time: 'Info', title: 'Belum ada setoran sekolah', meta: 'Data Mutabaah Tahfidz dari guru akan tampil di sini.', status: 'Kosong', tone: 'blue' })}
       </div>
     </section>
   `;
@@ -2921,6 +2917,13 @@ function mountWaliChat() {
 
 function renderContent() {
   if (contentEl) contentEl.classList.remove('zchat-active');
+  if(appState.activeTab.startsWith('module:') && _waliDetailKeys[appState.activeTab]){
+    var _detailKey = _waliDetailKeys[appState.activeTab].join(',');
+    if(!_waliLoadedDetail[_detailKey]){
+      contentEl.innerHTML = '<section class="section" style="padding:48px 20px;text-align:center"><div class="wali-sync-dot" style="display:inline-block;width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#f97316;border-radius:50%;animation:waliSyncSpin .7s linear infinite"></div><h3 style="margin:16px 0 6px">Memuat data</h3><p style="margin:0;color:#64748b;font-size:13px">Menyiapkan data terbaru untuk modul ini.</p></section>';
+      return;
+    }
+  }
   if (appState.activeTab.startsWith('module:')) {
     contentEl.innerHTML = renderModule(appState.activeTab.replace('module:', ''));
     return;
@@ -2971,6 +2974,7 @@ function navigate(target) {
     else if (target === 'module:calistung-anak') { markWaliModuleSeen('calistung'); }
     render();
     animateWaliContent();
+    ensureWaliDetailLoaded(target);
   }
 }
 
@@ -3640,10 +3644,15 @@ function computeWaliRecap(){
   var sum=0, cnt=0;
   nilai.forEach(function(r){ var n=Number(r.nilai||r.nilai_akhir||r.nilai_rapor||r.nilai_angka||r.rata_rata||r.skor||r.nilai_ujian||r.nilai_tugas||0); if(n>0){ sum+=n; cnt++; } });
   appState.homeScoreAverage = cnt ? Math.round(sum/cnt) : 0;
-  var mut=[].concat(Array.isArray(sm.mutabaahRumah)?sm.mutabaahRumah:[], Array.isArray(sm.ibadah)?sm.ibadah:[]);
-  var weekAgo=Date.now()-7*24*3600*1000, recent=0;
-  mut.forEach(function(r){ var d=Date.parse(_d(r)); if(!isNaN(d) && d>=weekAgo) recent++; });
-  appState.homeMutabaahProgress = Math.min(100, Math.round((recent/7)*100));
+  var mut = Array.isArray(sm.mutabaahTahfidzRingkas) ? sm.mutabaahTahfidzRingkas : [];
+  var mutHistory = Array.isArray(sm.mutabaahTahfidzSekolah) ? sm.mutabaahTahfidzSekolah : [];
+  var weekAgo=Date.now()-7*24*3600*1000, recent=0, progress=0;
+  mutHistory.forEach(function(r){
+    var d=Date.parse(_d(r));
+    if(!isNaN(d) && d>=weekAgo) recent++;
+  });
+  mut.forEach(function(r){ var p=Number(r.progres); if(isFinite(p) && p>progress) progress=p; });
+  appState.homeMutabaahProgress = mut.length ? Math.round(progress) : 0;
   /* [BUNTU] Keempat field hafalan* di bawah TIDAK DIBACA SIAPA PUN.
      Komentar lama di sini mengklaim renderAcademic (baris 1194) dan renderChild
      (baris 1144) membacanya — itu TIDAK BENAR, keduanya tidak menyentuhnya.
@@ -3709,6 +3718,14 @@ function hideSyncIndicator() {
 // data baru langsung terlihat di riwayat tanpa perlu keluar-masuk modul, walau
 // server atau cache jembatan belum mengembalikan baris tersebut.
 var waliBarisBaru = [];
+var _waliLoadedDetail = {};
+var _waliDetailLoading = {};
+var _waliDetailKeys = {
+  'module:perkembangan-anak': ['perkembangan'],
+  'module:catatan-anak': ['catatan'],
+  'module:surat-wali': ['surat'],
+  'module:nilai-anak': ['nilai']
+};
 function waliSisipBarisBaru() {
   appState.supabaseModules = appState.supabaseModules || {};
   waliBarisBaru = waliBarisBaru.filter(function(x){ return x && (Date.now() - x.ts) < 600000; });
@@ -3723,6 +3740,28 @@ function waliCatatBarisBaru(storeKey, row) {
   if (!storeKey || !row) return;
   waliBarisBaru.push({ storeKey: storeKey, row: row, ts: Date.now() });
   waliSisipBarisBaru();
+}
+
+async function ensureWaliDetailLoaded(route){
+  var keys = _waliDetailKeys[route];
+  if(!keys || !window.ZymataMobileSupabase || !window.__zymataWaliCtx || !window.__zymataWaliCtx.siswa) return;
+  var key = keys.join(',');
+  if(_waliLoadedDetail[key]) return;
+  if(_waliDetailLoading[key]) return _waliDetailLoading[key];
+  _waliDetailLoading[key] = (async function(){
+    var data = await window.ZymataMobileSupabase.loadWaliModuleData(window.__zymataWaliCtx, { only: keys });
+    var sm = appState.supabaseModules || {};
+    if(keys.indexOf('perkembangan') !== -1){
+      ['ibadah','karakter','prestasi','pelanggaran','ekskul'].forEach(function(k){ if(data && Array.isArray(data[k])) sm[k] = data[k]; });
+    } else if(keys.indexOf('nilai') !== -1 && data && Array.isArray(data.nilai)) sm.nilai = data.nilai;
+    else if(keys.indexOf('catatan') !== -1 && data && Array.isArray(data.catatan)) sm.catatan = data.catatan;
+    else if(keys.indexOf('surat') !== -1 && data && Array.isArray(data.surat)) sm.surat = data.surat;
+    appState.supabaseModules = filterWaliPengumuman(sm);
+    _waliLoadedDetail[key] = true;
+    if(String(appState.activeTab || '') === route) render();
+  })().catch(function(error){ console.warn('[WaliDetail] load gagal:', error && error.message ? error.message : error); })
+    .finally(function(){ delete _waliDetailLoading[key]; });
+  return _waliDetailLoading[key];
 }
 
 async function hydrateWaliFromSupabase() {
@@ -3784,7 +3823,14 @@ async function hydrateWaliFromSupabase() {
 
     appState.unreadAnnouncements = 0;
     appState.unreadNotes = 0;
-    appState.supabaseModules = filterWaliPengumuman(await window.ZymataMobileSupabase.loadWaliModuleData(ctx));
+    var _startupWaliData = await window.ZymataMobileSupabase.loadWaliModuleData(ctx, {
+      only: ['absensi','mutabaahTahfidzSekolah','mutabaahTahfidzRingkas','keuangan','pengumuman'],
+      badges: true
+    });
+    appState.supabaseModules = filterWaliPengumuman(_startupWaliData);
+    appState.waliCalistungRows = Array.isArray(_startupWaliData && _startupWaliData.badgeCalistung)
+      ? _startupWaliData.badgeCalistung : [];
+    _waliLoadedDetail = {};
     // [RIWAYAT LANGSUNG TAMPIL] Pastikan kiriman baru tidak hilang setelah penyegaran.
     try { waliSisipBarisBaru(); } catch(_e) { console.warn('[RIWAYAT LANGSUNG TAMPIL] gagal sisip ulang', _e); }
     try { computeWaliRecap(); } catch(_e) {}
@@ -3793,7 +3839,8 @@ async function hydrateWaliFromSupabase() {
       const sm = appState.supabaseModules || {};
       var _seenN = appState.seenNotes || [];
       var _seenA = appState.seenAnnouncements || [];
-      appState.unreadNotes = (sm.catatan || []).filter(function(r){ var st = String(r.status||'').toLowerCase(); var fresh = !st || /baru|belum|aktif|terkirim/.test(st); return fresh && _seenN.indexOf(waliItemKey(r)) === -1; }).length;
+       var _badgeNotes = Array.isArray(_startupWaliData && _startupWaliData.badgeCatatan) ? _startupWaliData.badgeCatatan : (sm.catatan || []);
+       appState.unreadNotes = _badgeNotes.filter(function(r){ var st = String(r.status||'').toLowerCase(); var fresh = !st || /baru|belum|aktif|terkirim/.test(st); return fresh && _seenN.indexOf(waliItemKey(r)) === -1; }).length;
       appState.unreadAnnouncements = (sm.pengumuman || []).filter(function(r){ return _seenA.indexOf(waliItemKey(r)) === -1; }).length;
       // Isi panel lonceng & daftar pengumuman dari Supabase (focus modul = referensi array yg sama)
       announcements.splice(0, announcements.length);
@@ -3807,18 +3854,6 @@ async function hydrateWaliFromSupabase() {
           status: r.kategori || r.label || 'Info'
         });
       });
-    } catch(_) {}
-    // [BADGE MODUL] Muat baris calistung ringkas (hanya kolom kunci) untuk hitung
-    // titik merah, lalu hitung ulang semua badge modul beranda.
-    try {
-      var _nisBadge = String(appState.childNis || (childProfile && childProfile.nis) || '').trim();
-      if (_nisBadge && _nisBadge !== '-' && window.ZymataMobileSupabase && typeof window.ZymataMobileSupabase.select === 'function') {
-        var _resCal = await window.ZymataMobileSupabase.select('calistung', {
-          eq: { nis: _nisBadge }, select: 'id,row_uid,tanggal,updated_at', order: 'tanggal', ascending: false, limit: 200
-        }).catch(function(){ return null; });
-        var _calRows = (_resCal && Array.isArray(_resCal.data)) ? _resCal.data : (Array.isArray(_resCal) ? _resCal : []);
-        appState.waliCalistungRows = _calRows;
-      }
     } catch(_) {}
     try { recomputeWaliModuleBadges(); } catch(_) {}
     syncWaliFinanceState();
@@ -3906,16 +3941,14 @@ animateWaliContent();
       if(!filters.length) { _last = Date.now(); return; }
       var _smF = appState.supabaseModules || {};
       // Ambil data finance langsung dari Supabase
-      var sppRows = await window.ZymataMobileSupabase.tryFilteredList('spp_pembayaran', filters, 20, { strict: true });
       var tagihanRows = await window.ZymataMobileSupabase.tryFilteredList('tagihan_spp', filters, 20, { strict: true });
       var keuRows = await window.ZymataMobileSupabase.tryFilteredList('keuangan', filters, 20, { strict: true });
       var tabRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_siswa', filters, 20, { strict: true });
       var tabUmumRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_umum', filters, 20, { strict: true });
       var payRes = await window.ZymataMobileSupabase.select('payment_transactions', { eq:{ siswa_id:siswaId }, select:'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at', order:'created_at', ascending:false, limit:30 });
       // Update module cache hanya untuk finance
-      if(Array.isArray(sppRows) || Array.isArray(tagihanRows) || Array.isArray(keuRows)) {
+      if(Array.isArray(tagihanRows) || Array.isArray(keuRows)) {
         _smF.keuangan = [].concat(
-          Array.isArray(sppRows) ? sppRows.map(function(r){ return Object.assign({_zymata_source:'spp_pembayaran'},r); }) : [],
           Array.isArray(tagihanRows) ? tagihanRows.map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }) : [],
           Array.isArray(keuRows) ? keuRows.map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }) : []
         );
