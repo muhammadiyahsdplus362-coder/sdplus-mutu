@@ -1849,7 +1849,7 @@ window.zTab = {
     showToast('Menyimpan '+entries.length+' data\u2026','info','&#128190;');
     try{
     var sisMap={};
-    try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, select:'id,siswa_id,nis,nama,nama_siswa', limit:2000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||row.siswa_id||''), nama:row.nama||row.nama_siswa||'' }; }); } }catch(e){}
+    try{ var rS=await api.select('siswa',{ eq:{ kelas:S.kelas }, select:'id,nis,nama', limit:2000 }); if(rS&&!rS.error&&Array.isArray(rS.data)){ rS.data.forEach(function(row){ var nn=String(row.nis||''); if(nn) sisMap[nn]={ id:String(row.id||''), nama:row.nama||'' }; }); } }catch(e){}
     var saldoByNis={}, saldoBySid={}, sigCount={};
     var _tabSig=function(sid,nis,nama,tgl,jn,nom,db,kr,ket,mtd){ return ['default',String(sid||nis||nama||'').toLowerCase().trim(),String(tgl||'').slice(0,10),String(jn||'').toLowerCase().trim(),Number(nom)||0,Number(db)||0,Number(kr)||0,String(ket||'').toLowerCase().trim(),String(mtd||'').toLowerCase().trim()].join('|'); };
     try{ var rT=await api.select('tabungan_siswa',{ eq:{ kelas:S.kelas }, select:'siswa_id,nis,nama_siswa,tanggal,jenis,nominal,debit,kredit,keterangan,metode', limit:20000 }); if(rT&&!rT.error&&Array.isArray(rT.data)){ rT.data.forEach(function(r){ var x=tabDelta(r); var delta=x.d-x.k; var kn=String(r.nis||''),ks=String(r.siswa_id||''); if(kn) saldoByNis[kn]=(saldoByNis[kn]||0)+delta; if(ks) saldoBySid[ks]=(saldoBySid[ks]||0)+delta; var _sg=_tabSig(r.siswa_id,r.nis,r.nama_siswa,r.tanggal,r.jenis,r.nominal,r.debit,r.kredit,r.keterangan,r.metode); sigCount[_sg]=(sigCount[_sg]||0)+1; }); } }catch(e){}
@@ -1980,6 +1980,11 @@ function renderSupabaseGuruDataModule(detail, rows, moduleId) {
          var k = _normWaliKelas(r.kelas || r.kelas_id || r.snapshot_kelas || r.rombel || '');
          return !!k && k === _waliKelas;
        });
+     }
+     if (moduleId === 'jurnal-kelas') {
+       var _normGuruJurnal = function(v){ return String(v == null ? '' : v).toLowerCase().replace(/\b(s\.?pd\.?|m\.?pd\.?|s\.?ag\.?|s\.?mat\.?|dra?\.?|h\.?|hj\.?)\b/g, '').replace(/[^a-z0-9]/g, ''); };
+       var _guruSaya = _normGuruJurnal(appState.teacherName || '');
+       _r = _r.filter(function(r){ if(!r||!_guruSaya)return false; var _pemilik=_normGuruJurnal(r.guru_nama||r.guru||r.nama_guru||''); return !!_pemilik&&_pemilik===_guruSaya; });
      }
      // Pengaman kelas untuk modul lain: buang baris dari kelas yang TIDAK diajar guru.
      _r = _r.filter(function(r){
