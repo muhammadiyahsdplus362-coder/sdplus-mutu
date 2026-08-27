@@ -737,6 +737,16 @@ function waliRowMilikAnak(t){
   return rowNama === anakNama;
 }
 
+async function refreshWaliTabunganSaldo(ctx){
+  var api=window.ZymataMobileSupabase;
+  var siswa=ctx&&ctx.siswa;
+  if(!api||!siswa||typeof api.getWaliTabunganSaldo!=='function') return;
+  var siswaId=String(siswa.id||''), nis=String(siswa.nis||'');
+  var key=siswaId+'|'+nis;
+  var res=await api.getWaliTabunganSaldo(siswaId,nis);
+  if(res&&res.data){ appState._waliTabunganSaldoRpc=Object.assign({_key:key},res.data); }
+}
+
 function syncWaliFinanceState(){
   var anakNama = appState.childName || '';
   var _smF = appState.supabaseModules || {};
@@ -757,6 +767,13 @@ function syncWaliFinanceState(){
   var setorUmum = 0, tarikUmum = 0;
   tabUmumAnak.forEach(function(t){ var deb=Number(t.debit||0), kre=Number(t.kredit||0); if(deb||kre){ setorUmum+=deb; tarikUmum+=kre; } else { var n=Number(t.nominal||0); if(/setor|masuk/i.test(t.jenis||'')) setorUmum+=n; else tarikUmum+=n; } });
   var saldoUmum = setorUmum - tarikUmum;
+  var ctxSiswa=window.__zymataWaliCtx&&window.__zymataWaliCtx.siswa;
+  var rpcKey=String(ctxSiswa&&ctxSiswa.id||'')+'|'+String(ctxSiswa&&ctxSiswa.nis||'');
+  var rpc=appState._waliTabunganSaldoRpc;
+  if(rpc&&rpc._key===rpcKey){
+    saldoTab=Number(rpc.saldo_tabungan_siswa||0);
+    saldoUmum=Number(rpc.saldo_tabungan_umum||0);
+  }
   if(appState.syncMode === 'supabase-empty') return;
   if(tagihanAnak.length > 0){
     appState.financeAmount = 'Rp ' + Number(totalTagihan).toLocaleString('id-ID');
@@ -769,11 +786,11 @@ function syncWaliFinanceState(){
       ? (_jmlBlm + ' bulan belum lunas')
       : (_jmlBlm === 1 ? ('Jatuh tempo ' + (appState.financeDue || '-')) : 'Semua lunas');
   }
-  if(tabAnak.length > 0){
+  if(tabAnak.length > 0 || (rpc&&rpc._key===rpcKey)){
     appState.tabunganSaldo = 'Rp ' + Number(saldoTab).toLocaleString('id-ID');
     appState.tabunganUpdate = tabAnak.length ? (tabAnak[0].tanggal || tabAnak[0].tgl || '-') : '-';
   }
-  if(tabUmumAnak.length > 0){
+  if(tabUmumAnak.length > 0 || (rpc&&rpc._key===rpcKey)){
     appState.tabunganUmumSaldo = 'Rp ' + Number(saldoUmum).toLocaleString('id-ID');
     appState.tabunganUmumUpdate = tabUmumAnak.length ? (tabUmumAnak[0].tanggal || tabUmumAnak[0].tgl || '-') : '-';
   }
@@ -2532,6 +2549,13 @@ function renderModule(moduleId) {
     var setorTab = 0, tarikTab = 0;
     tabAnak.forEach(function(t){ if(t.debit||t.kredit){ setorTab+=Number(t.debit||0); tarikTab+=Number(t.kredit||0); } else { var n=Number(t.nominal||0); if(/setor|masuk/i.test(t.jenis||'')) setorTab+=n; else tarikTab+=n; } });
     var saldoTab = setorTab - tarikTab;
+    var _ctxSaldo=window.__zymataWaliCtx&&window.__zymataWaliCtx.siswa;
+    var _rpcSaldo=appState._waliTabunganSaldoRpc;
+    var _rpcSaldoKey=String(_ctxSaldo&&_ctxSaldo.id||'')+'|'+String(_ctxSaldo&&_ctxSaldo.nis||'');
+    if(_rpcSaldo&&_rpcSaldo._key===_rpcSaldoKey){
+      saldoTab=Number(_rpcSaldo.saldo_tabungan_siswa||0);
+      saldoUmum=Number(_rpcSaldo.saldo_tabungan_umum||0);
+    }
     var jatuhTempo = belumBayar.length ? (waliSppJatuhTempo(belumBayar[0]) || '-') : '-';
     if (moduleId === 'keuangan-spp') {
       return `
@@ -2917,7 +2941,9 @@ function mountWaliChat() {
 
 function renderContent() {
   if (contentEl) contentEl.classList.remove('zchat-active');
-  if(appState.activeTab.startsWith('module:') && _waliDetailKeys[appState.activeTab]){
+  // Surat tetap lazy-load, tetapi form dan data cache harus langsung dirender.
+  // Pengambilan data detail berjalan di belakang agar layar tidak tertahan.
+  if(appState.activeTab.startsWith('module:') && _waliDetailKeys[appState.activeTab] && appState.activeTab !== 'module:surat-wali'){
     var _detailKey = _waliDetailKeys[appState.activeTab].join(',');
     if(!_waliLoadedDetail[_detailKey]){
       contentEl.innerHTML = '<section class="section" style="padding:48px 20px;text-align:center"><div class="wali-sync-dot" style="display:inline-block;width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#f97316;border-radius:50%;animation:waliSyncSpin .7s linear infinite"></div><h3 style="margin:16px 0 6px">Memuat data</h3><p style="margin:0;color:#64748b;font-size:13px">Menyiapkan data terbaru untuk modul ini.</p></section>';
@@ -3371,10 +3397,10 @@ function bindActions() {
             _kunciRiwayat.forEach(function(t){ appState.waliRiwayatBulan[waliKunciRiwayat(t)] = waliBulanDariTgl(_tglBaru); });
           }
         } catch(_e) { console.warn('[RIWAYAT LANGSUNG TAMPIL] gagal tampilkan kiriman baru', _e); }
-        notifyFeedback('success');
-        waliShowSaveOk('Tersimpan ke Supabase.');
-        try { render(); } catch(_e) {}
-        await hydrateWaliFromSupabase();
+         notifyFeedback('success');
+         waliShowSaveOk('Tersimpan ke Supabase.');
+         try { render(); } catch(_e) {}
+          if (!_isSuratKey || String(appState.activeTab || '') !== 'module:surat-wali') await hydrateWaliFromSupabase();
       } catch (error) { var _emx = error && error.message ? error.message : String(error); console.warn('[MobileWaliCRUD] simpan gagal:', _emx); notifyFeedback('error'); waliShowSaveError('Gagal simpan: ' + _emx); }
       return;
     }
@@ -3759,7 +3785,11 @@ async function ensureWaliDetailLoaded(route){
     appState.supabaseModules = filterWaliPengumuman(sm);
     _waliLoadedDetail[key] = true;
     if(String(appState.activeTab || '') === route) render();
-  })().catch(function(error){ console.warn('[WaliDetail] load gagal:', error && error.message ? error.message : error); })
+  })().catch(function(error){
+    _waliLoadedDetail[key] = true;
+    console.warn('[WaliDetail] load gagal:', error && error.message ? error.message : error);
+    if(String(appState.activeTab || '') === route) render();
+  })
     .finally(function(){ delete _waliDetailLoading[key]; });
   return _waliDetailLoading[key];
 }
@@ -3856,10 +3886,17 @@ async function hydrateWaliFromSupabase() {
       });
     } catch(_) {}
     try { recomputeWaliModuleBadges(); } catch(_) {}
+    await refreshWaliTabunganSaldo(ctx);
     syncWaliFinanceState();
     appState._waliLastHydrateTs = Date.now();
     saveState();
     saveWaliDataCache();
+    // Setelah hydrate utama, pastikan modul detail yang sedang terbuka ikut
+    // diambil ulang. Tanpa ini reset _waliLoadedDetail di atas meninggalkan
+    // layar detail pada placeholder "Menyiapkan data terbaru".
+    if (_waliDetailKeys[String(appState.activeTab || '')]) {
+      ensureWaliDetailLoaded(String(appState.activeTab));
+    }
     render();
   } catch (error) {
     console.warn('[MobileWali] gagal load Supabase:', error && error.message ? error.message : error);
@@ -3943,8 +3980,8 @@ animateWaliContent();
       // Ambil data finance langsung dari Supabase
       var tagihanRows = await window.ZymataMobileSupabase.tryFilteredList('tagihan_spp', filters, 20, { strict: true });
       var keuRows = await window.ZymataMobileSupabase.tryFilteredList('keuangan', filters, 20, { strict: true });
-      var tabRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_siswa', filters, 20, { strict: true });
-      var tabUmumRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_umum', filters, 20, { strict: true });
+       var tabRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_siswa', filters, 90, { strict: true });
+       var tabUmumRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_umum', filters, 90, { strict: true });
       var payRes = await window.ZymataMobileSupabase.select('payment_transactions', { eq:{ siswa_id:siswaId }, select:'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at', order:'created_at', ascending:false, limit:30 });
       // Update module cache hanya untuk finance
       if(Array.isArray(tagihanRows) || Array.isArray(keuRows)) {
@@ -3957,6 +3994,7 @@ animateWaliContent();
       if(Array.isArray(tabUmumRows)) _smF.tabunganUmum = tabUmumRows;
       if(payRes && !payRes.error && Array.isArray(payRes.data)) _smF.payments = payRes.data;
       appState.supabaseModules = _smF;
+      await refreshWaliTabunganSaldo(ctx);
       syncWaliFinanceState();
       // Kedip fix v2: render ulang HANYA jika data keuangan BENAR-BENAR berubah.
       // Signature dibuat TAHAN-URUTAN (tiap baris di-stringify lalu di-sort) supaya
@@ -4140,6 +4178,23 @@ animateWaliContent();
   function childNama(){ return String((childProfile&&childProfile.fullName)||appState.childName||'Anak'); }
   function childKelas(){ return String(appState.childClass||(childProfile&&childProfile.className)||''); }
   function toast(msg,type){ try{ if(typeof waliToast==='function'){ waliToast(msg,type); return; } }catch(e){} }
+  function confirmHapusTahfidz(tgl){
+    return new Promise(function(resolve){
+      var old=document.getElementById('zwtf-confirm-hapus'); if(old) old.remove();
+      var ov=document.createElement('div'); ov.id='zwtf-confirm-hapus';
+      ov.innerHTML='<div data-zwtf-cancel style="position:absolute;inset:0;background:rgba(15,23,42,.58);backdrop-filter:blur(3px)"></div>'
+        +'<div role="dialog" aria-modal="true" aria-labelledby="zwtf-confirm-title" style="position:relative;width:min(360px,calc(100vw - 32px));background:#fff;border:1px solid #fee2e2;border-radius:18px;padding:20px;box-shadow:0 24px 70px rgba(15,23,42,.35);text-align:center">'
+        +'<div style="width:48px;height:48px;margin:0 auto 12px;border-radius:15px;background:#fff1f2;color:#be123c;display:flex;align-items:center;justify-content:center;font-size:24px">&#128465;</div>'
+        +'<h3 id="zwtf-confirm-title" style="margin:0 0 8px;color:#111827;font-size:17px">Hapus setoran tanggal ini?</h3>'
+        +'<p style="margin:0;color:#64748b;font-size:13px;line-height:1.5">Semua Ziyadah, Tilawah, dan Murojaah Wali pada <b>'+esc(tgl)+'</b> akan dihapus. Setoran sekolah tidak berubah.</p>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px"><button type="button" data-zwtf-cancel style="border:1px solid #e2e8f0;background:#fff;color:#475569;border-radius:12px;padding:11px;font-weight:800">Batal</button><button type="button" data-zwtf-ok style="border:0;background:#e11d48;color:#fff;border-radius:12px;padding:11px;font-weight:800">Hapus Setoran</button></div></div>';
+      ov.style.cssText='position:fixed;inset:0;z-index:100100;display:flex;align-items:center;justify-content:center;padding:16px';
+      var done=function(v){ if(ov.parentNode) ov.remove(); resolve(v); };
+      ov.querySelectorAll('[data-zwtf-cancel]').forEach(function(el){ el.addEventListener('click',function(){ done(false); }); });
+      ov.querySelector('[data-zwtf-ok]').addEventListener('click',function(){ done(true); });
+      document.body.appendChild(ov);
+    });
+  }
 
   // [LEMBAR 1 BULAN WALI] lembarBulan = bulan lembar yang sedang dilihat, 'YYYY-MM'
   var WT = { tab:'wali_murid', wali:{}, sekolah:{}, riwayat:[], riwayatSekolah:[], loading:false, loadedNis:null, tgl:todayStr(), cleared:false, draft:{}, lembarBulan:'' };
@@ -4256,6 +4311,55 @@ animateWaliContent();
     },
     setTanggal: function(v){ WT.tgl=String(v||'').slice(0,10)||todayStr(); WT.cleared=false; WT.draft={}; render(); },
     kosongkanForm: function(){ WT.cleared=true; WT.draft={}; render(); toast('Form dikosongkan.','info'); },
+    hapusSetoranHariIni: async function(){
+      var api=SB(), nis=childNis(), tgl=String(WT.tgl||todayStr()).slice(0,10);
+      if(!api || !nis){ toast('Data anak belum termuat','error'); return; }
+      var rows=(WT.riwayat||[]).filter(function(r){
+        return r && String(r.konteks||'')==='wali_murid'
+          && String(r.siswa_id||'')===String(nis)
+          && String(r.tanggal||r.tgl||'').slice(0,10)===tgl;
+      });
+      if(!rows.length){ toast('Tidak ada setoran pada tanggal ini','info'); return; }
+      if(!(await confirmHapusTahfidz(tgl))) return;
+      var client=api.getClient?api.getClient():null;
+      if(!client||!client.from){ toast('Koneksi Supabase belum siap','error'); return; }
+      try{
+        var ids=rows.map(function(r){ return r.id; }).filter(function(id){ return id!==undefined&&id!==null&&id!==''; });
+        if(!ids.length) throw new Error('ID setoran tidak tersedia');
+        var del=await client.from('mutabaah_tahfidz_riwayat').delete().in('id',ids).eq('siswa_id',String(nis)).eq('konteks','wali_murid');
+        if(del&&del.error) throw del.error;
+        // Hilangkan langsung dari layar setelah DELETE berhasil. Sinkronisasi
+        // ringkasan dan pembacaan ulang tetap berjalan di belakang.
+        WT.riwayat=WT.riwayat.filter(function(r){ return ids.indexOf(r.id)===-1; });
+        WT.cleared=true; WT.draft={}; WT.loadedNis=null;
+        render();
+        toast('Setoran tanggal '+tgl+' dihapus','success');
+        var cats={}; rows.forEach(function(r){ if(r.kategori) cats[String(r.kategori)]=true; });
+        for(var kategori in cats){
+          var remainQ=await client.from('mutabaah_tahfidz_riwayat').select('*')
+            .eq('siswa_id',String(nis)).eq('konteks','wali_murid').eq('kategori',kategori)
+            .eq('tahun_ajaran',String(rows[0].tahun_ajaran||curTA())).eq('semester',String(rows[0].semester||curSemester()))
+            .order('tanggal',{ascending:false}).limit(1);
+          if(remainQ&&remainQ.error) throw remainQ.error;
+          var latest=Array.isArray(remainQ.data)?remainQ.data[0]:null;
+          if(latest){
+            var up=await client.from('mutabaah_tahfidz').upsert({
+              client_key:'default', konteks:'wali_murid', siswa_id:String(nis), nis:String(latest.nis||nis),
+              nama_siswa:latest.nama_siswa||childNama(), kelas:latest.kelas||childKelas(), kategori:kategori,
+              surah_no:latest.surah_no, surah_nama:latest.surah_nama, ayat:latest.ayat, juz:latest.juz,
+              progres:latest.progres, catatan:latest.catatan||'', tahun_ajaran:latest.tahun_ajaran||curTA(),
+              semester:latest.semester||curSemester(), updated_at:nowISO()
+            },{onConflict:'client_key,siswa_id,konteks,kategori,tahun_ajaran,semester'});
+            if(up&&up.error) throw up.error;
+          } else {
+            var ds=await client.from('mutabaah_tahfidz').delete().eq('siswa_id',String(nis)).eq('konteks','wali_murid').eq('kategori',kategori);
+            if(ds&&ds.error) throw ds.error;
+          }
+        }
+        try{ if(window.zmClearCache){ window.zmClearCache('mutabaah_tahfidz_riwayat'); window.zmClearCache('mutabaah_tahfidz'); } }catch(_e){}
+        loadTahfidz(nis);
+      }catch(error){ toast('Gagal menghapus setoran: '+String(error&&error.message||error),'error'); }
+    },
     recalc: function(c,r){
       var sEl=document.getElementById('zwtf-surah-'+c+'-'+r), aEl=document.getElementById('zwtf-ayat-'+c+'-'+r), pEl=document.getElementById('zwtf-prog-'+c+'-'+r);
       if(!pEl) return;
@@ -4709,6 +4813,7 @@ animateWaliContent();
           : ('<p class="zwtf-note" style="margin:0 0 12px">'+(WT.cleared?'Form dikosongkan.':(_hariIni?'Belum ada setoran hari ini.':'Belum ada setoran pada tanggal ini.'))+'</p>'));
       body='<section class="section"><article class="input-panel">'+tglField+cards
         +'<button type="button" class="save-draft-btn" style="margin-top:12px" onclick="window.zwTf.save()">Simpan Mutabaah Tahfidz</button>'
+        +(adaSetoranTgl()?'<button type="button" class="save-draft-btn" style="margin-top:8px;background:#fff1f2;border:1px solid #fecaca;color:#b91c1c" onclick="window.zwTf.hapusSetoranHariIni()">Hapus Setoran Tanggal Ini</button>':'')
         // [LEMBAR 1 BULAN WALI] riwayat per tanggal diganti lembar bulanan
         +'</article></section>'+lembarBulanHtml(WT.riwayat, 'Mutabaah Tahfidz');
     } else {
