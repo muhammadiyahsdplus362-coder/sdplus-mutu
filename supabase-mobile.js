@@ -154,6 +154,18 @@
     return Array.isArray(res.data) ? (res.data[0] || null) : null;
   }
 
+  async function getWaliTabunganSaldo(siswaId, nis){
+    try {
+      const res = await getClient().rpc('get_wali_tabungan_saldo', {
+        p_siswa_id: clean(siswaId || ''),
+        p_nis: clean(nis || '')
+      });
+      if(res && res.error) return { error: res.error };
+      const row = Array.isArray(res && res.data) ? res.data[0] : (res && res.data);
+      return { data: row || null, error: null };
+    } catch(error) { return { data: null, error: error }; }
+  }
+
   function saveSession(user){
     const payload = {
       id: user.id || '',
@@ -1506,6 +1518,8 @@
       guru.nama ? { guru: guru.nama } : null,
       guru.nama ? { guru_nama: guru.nama } : null
     ].filter(Boolean);
+    const jurnalKelasGuruNama = clean(guru.nama || session.nama_guru || session.nama || session.username || '');
+    const jurnalKelasGuruFilters = jurnalKelasGuruNama ? [{ guru_nama: jurnalKelasGuruNama }, { guru: jurnalKelasGuruNama }] : commonGuruFilters;
     const classFilters = [kelas ? { kelas } : null].filter(Boolean);
     // Build allKelasFilters: semua kelas yang diajar guru (wali + guru mapel)
     const _mengajarRows = (context && context.mengajar) ? context.mengajar : [];
@@ -1610,7 +1624,7 @@
          objek yang dikembalikan tidak berubah bagi pemanggil lain. */
       nilai: mobile.nilai,
       jurnal: mobile.jurnal.concat(_want('jurnal') ? await tryFilteredList('jurnal_guru', commonGuruFilters, 50, _pk(_KOL_G_JURNAL_GURU)) : []),
-      jurnalKelas: mobile.jurnalKelas.concat(_want('jurnalKelas') ? await tryFilteredList('jurnal_kelas', allKelasFilters, 80, _pkKelas(_KOL_G_JURNAL_KELAS)) : []),
+      jurnalKelas: mobile.jurnalKelas.concat(_want('jurnalKelas') ? await tryFilteredList('jurnal_kelas', jurnalKelasGuruFilters, 80, _pk(_KOL_G_JURNAL_KELAS)) : []),
       catatan: mobile.catatan.concat(_want('catatan') ? await tryFilteredList('jurnal_siswa', allKelasFilters, 80, _pkKelas(_KOL_G_JURNAL_SISWA)) : []),
       /* [EGRESS MODUL MATI] `hafalan` & `membaca_quran` tidak punya entri di
          guruModuleDataKey() (guru-shell.js:1889-1911) dan tidak ada route
@@ -1770,7 +1784,7 @@
     if(options.badges){
       _badgeCatatan = filterMine(await tryFilteredList('jurnal_siswa', filters, 200, _w(
         'jurnal_siswa',
-        'id,tanggal,siswa_id,siswa_nis,nis,kelas,status,status_visibilitas,created_at',
+        'id,tanggal,siswa_id,siswa_nis,nis,kelas,status_visibilitas,created_at',
         'tanggal'
       )));
       if(nis){
@@ -1827,8 +1841,8 @@
            .concat((await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))).map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }))
         ) : [],
        payments: _want('keuangan') ? await safeList('payment_transactions', { select:_KOL_W_PAYMENTS, order:'created_at', ascending:false, limit:50 }) : [],
-       tabungan: _want('keuangan') ? filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, _w('tabungan_siswa', _KOL_W_TABUNGAN)))) : [],
-       tabunganUmum: _want('keuangan') ? filterMine(await tryFilteredList('tabungan_umum', filters, 30, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))) : [],
+       tabungan: _want('keuangan') ? filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 90, _w('tabungan_siswa', _KOL_W_TABUNGAN)))) : [],
+       tabunganUmum: _want('keuangan') ? filterMine(await tryFilteredList('tabungan_umum', filters, 90, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))) : [],
        ekskul: _want('perkembangan') ? await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }) : [],
        pengumuman: _want('pengumuman') ? mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 }))) : []
     };
@@ -1994,7 +2008,7 @@
   };
 
   window.ZymataMobileSupabase = {
-    getClient, select, first, safeList, tryFilteredList, normalizeItem, upsert, insert,
+    getClient, select, first, safeList, tryFilteredList, getWaliTabunganSaldo, normalizeItem, upsert, insert,
     moduleTable, createSpecificOrFallback,
     loadAppModuleRows, createAppModuleRow, updateAppModuleRow, deleteAppModuleRow,
     signIn, signOut, readSession, saveSession, clearSession,
