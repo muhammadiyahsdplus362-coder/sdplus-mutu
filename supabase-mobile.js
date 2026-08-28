@@ -663,10 +663,10 @@
   // mutabaah_rumah 53 -> 34. Tabel paling gemuk di jalur wali; semua kolom yang
   // tersisa benar-benar dirender kartu Mutabaah + riwayatnya.
    var _KOL_W_MUTABAAH_RUMAH = 'id,siswa_id,nis,nama_siswa,kelas,tanggal,belajar,kendala_wali,keterangan_guru,' +
-    'shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,shalat_count,' +
-    'akhlak,catatan_akhlak,konfirmasi_wali,nama_wali,waktu_submit,status_review,created_at,' +
-    'siswa_nis,mapel,tahun_ajaran,semester,status,catatan,waktu_submit_wali,tilawah_rumah,' +
-     'murojaah_rumah,catatan_wali,keterangan_guru,ziyadah_sekolah,status_setoran,catatan_guru';
+     'shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,shalat_count,' +
+     'akhlak,catatan_akhlak,konfirmasi_wali,nama_wali,waktu_submit,status_review,created_at,' +
+     'siswa_nis,mapel,tahun_ajaran,semester,status,catatan,waktu_submit_wali,tilawah_rumah,' +
+     'murojaah_rumah,catatan_wali,ziyadah_sekolah,status_setoran,catatan_guru';
   var _KOL_W_KARAKTER = 'id,siswa_id,nama_siswa,kelas,semester,disiplin,sopan,jujur,' +
     'kerja_keras,tanggung_jawab,created_at,id_siswa,nis,nama,tanggal,nilai,catatan';
   var _KOL_W_PRESTASI = 'id,siswa_id,nama_siswa,kelas,lomba,jenis,tingkat,peringkat,tahun,' +
@@ -1519,7 +1519,9 @@
       guru.nama ? { guru_nama: guru.nama } : null
     ].filter(Boolean);
     const jurnalKelasGuruNama = clean(guru.nama || session.nama_guru || session.nama || session.username || '');
-    const jurnalKelasGuruFilters = jurnalKelasGuruNama ? [{ guru_nama: jurnalKelasGuruNama }, { guru: jurnalKelasGuruNama }] : commonGuruFilters;
+    const jurnalKelasGuruFilters = jurnalKelasGuruNama
+      ? [{ guru_nama: jurnalKelasGuruNama }, { guru: jurnalKelasGuruNama }]
+      : commonGuruFilters;
     const classFilters = [kelas ? { kelas } : null].filter(Boolean);
     // Build allKelasFilters: semua kelas yang diajar guru (wali + guru mapel)
     const _mengajarRows = (context && context.mengajar) ? context.mengajar : [];
