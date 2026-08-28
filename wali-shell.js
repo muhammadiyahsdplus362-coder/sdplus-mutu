@@ -3750,7 +3750,8 @@ var _waliDetailKeys = {
   'module:perkembangan-anak': ['perkembangan'],
   'module:catatan-anak': ['catatan'],
   'module:surat-wali': ['surat'],
-  'module:nilai-anak': ['nilai']
+  'module:nilai-anak': ['nilai'],
+  'module:mutabaah-rumah': ['mutabaahRumah']
 };
 function waliSisipBarisBaru() {
   appState.supabaseModules = appState.supabaseModules || {};
@@ -3782,6 +3783,7 @@ async function ensureWaliDetailLoaded(route){
     } else if(keys.indexOf('nilai') !== -1 && data && Array.isArray(data.nilai)) sm.nilai = data.nilai;
     else if(keys.indexOf('catatan') !== -1 && data && Array.isArray(data.catatan)) sm.catatan = data.catatan;
     else if(keys.indexOf('surat') !== -1 && data && Array.isArray(data.surat)) sm.surat = data.surat;
+    else if(keys.indexOf('mutabaahRumah') !== -1 && data && Array.isArray(data.mutabaahRumah)) sm.mutabaahRumah = data.mutabaahRumah;
     appState.supabaseModules = filterWaliPengumuman(sm);
     _waliLoadedDetail[key] = true;
     if(String(appState.activeTab || '') === route) render();
