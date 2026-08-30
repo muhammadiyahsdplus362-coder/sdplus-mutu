@@ -1982,9 +1982,15 @@ function renderSupabaseGuruDataModule(detail, rows, moduleId) {
        });
      }
      if (moduleId === 'jurnal-kelas') {
-       var _normGuruJurnal = function(v){ return String(v == null ? '' : v).toLowerCase().replace(/\b(s\.?pd\.?|m\.?pd\.?|s\.?ag\.?|s\.?mat\.?|dra?\.?|h\.?|hj\.?)\b/g, '').replace(/[^a-z0-9]/g, ''); };
+       var _normGuruJurnal = function(v){ return String(v == null ? '' : v)
+         .toLowerCase().replace(/\b(s\.?pd\.?|m\.?pd\.?|s\.?ag\.?|s\.?mat\.?|dra?\.?|h\.?|hj\.?)\b/g, '')
+         .replace(/[^a-z0-9]/g, ''); };
        var _guruSaya = _normGuruJurnal(appState.teacherName || '');
-       _r = _r.filter(function(r){ if(!r||!_guruSaya)return false; var _pemilik=_normGuruJurnal(r.guru_nama||r.guru||r.nama_guru||''); return !!_pemilik&&_pemilik===_guruSaya; });
+       _r = _r.filter(function(r){
+         if (!r || !_guruSaya) return false;
+         var _pemilik = _normGuruJurnal(r.guru_nama || r.guru || r.nama_guru || '');
+         return !!_pemilik && _pemilik === _guruSaya;
+       });
      }
      // Pengaman kelas untuk modul lain: buang baris dari kelas yang TIDAK diajar guru.
      _r = _r.filter(function(r){
@@ -9360,17 +9366,19 @@ animateContent();
   if(window.__ZY_GAJI_GURU_HP_V1__) return;
   window.__ZY_GAJI_GURU_HP_V1__ = true;
 
-  var T_GAJI='gaji_guru';                 /* [GAJI GURU HP] tabel sama dgn web */
-  var T_SET='pengaturan_gaji';
-  var T_ABS='absensi_guru';
+   var T_GAJI='gaji_guru';                 /* [GAJI GURU HP] tabel sama dgn web */
+   var T_SET='pengaturan_gaji';
+   var T_ABS='absensi_guru';
+   var T_KAL='kalender_events';
+   var T_SYS='pengaturan_sistem';
 
   var POT_ALPA_BAWAAN=15000, POT_IZIN_BAWAAN=0, POT_TERLAMBAT_BAWAAN=0;
 
-  var LIBUR={'2024-01-01':1,'2024-03-29':1,'2024-04-10':1,'2024-04-11':1,'2024-05-01':1,'2024-08-17':1,'2024-12-25':1,'2025-01-01':1,'2025-05-01':1,'2025-08-17':1,'2025-12-25':1,'2026-01-01':1,'2026-05-01':1,'2026-08-17':1,'2026-12-25':1};
+   var LIBUR={'2024-01-01':1,'2024-03-29':1,'2024-04-10':1,'2024-04-11':1,'2024-05-01':1,'2024-08-17':1,'2024-12-25':1,'2025-01-01':1,'2025-05-01':1,'2025-08-17':1,'2025-12-25':1,'2026-01-01':1,'2026-05-01':1,'2026-08-17':1,'2026-08-25':1,'2026-12-25':1};
 
   var BULAN=['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
-  var GJ={ loaded:false, loading:false, bulan:'', gaji:null, pot:null, potManual:null, absen:null, galat:'' };
+   var GJ={ loaded:false, loading:false, retryTimer:null, nip:'', bulan:'', gaji:null, pot:null, potManual:null, absen:null, kalender:[], hariKerja:null, galat:'' };
 
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function SB(){ return window.ZymataMobileSupabase; }
@@ -9380,29 +9388,131 @@ animateContent();
   function toast(m,t,i){ if(typeof showToast==='function') showToast(m, t||'success', i||'&#10003;'); }
   function rp(n){ return 'Rp '+(Number(n)||0).toLocaleString('id-ID'); }
   function pad2(n){ n=String(n); return n.length<2?('0'+n):n; }
-  function bulanIni(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1); }
-  function todayISO(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
-  function hariKerja(iso){
-    if(LIBUR[iso]) return false;
-    var dow=new Date(iso+'T00:00:00').getDay();
-    return dow>=1 && dow<=6;   /* Senin-Sabtu, sama dgn web */
-  }
+   function bulanIni(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1); }
+   function todayISO(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+   function nipKey(v){
+     var s=String(v==null?'':v).trim();
+     var digits=s.replace(/\D/g,'');
+     return digits||s.toLowerCase();
+   }
+   function nipSama(a,b){
+     var ka=nipKey(a), kb=nipKey(b);
+     if(!ka||!kb) return false;
+     return ka===kb || ka.replace(/^0+(?=\d)/,'')===kb.replace(/^0+(?=\d)/,'');
+   }
+   function nipCandidates(v){
+     var raw=String(v==null?'':v).trim(), key=nipKey(raw), stripped=key.replace(/^0+(?=\d)/,'');
+     return Array.from(new Set([raw,key,stripped].filter(Boolean)));
+   }
+   function namaSama(a,b){
+     return String(a==null?'':a).replace(/\s+/g,' ').trim().toLowerCase()===String(b==null?'':b).replace(/\s+/g,' ').trim().toLowerCase();
+   }
+   function hariKerja(iso){
+     if(LIBUR[iso]) return false;
+     var dow=new Date(iso+'T00:00:00').getDay();
+     return dow>=1 && dow<=6;   /* Senin-Sabtu, sama dgn web */
+   }
+   function tanggalKalender(v){
+     var s=String(v==null?'':v).trim();
+     var m=s.match(/\d{4}-\d{2}-\d{2}/);
+     return m?m[0]:'';
+   }
+   function kalenderLibur(iso){
+     return (GJ.kalender||[]).some(function(r){
+       if(!r) return false;
+       var kat=String(r.kat||r.kategori||r.jenis||'').trim().toLowerCase();
+       if(kat!=='libur sekolah' && kat!=='libur nasional') return false;
+       var mulai=tanggalKalender(r.tanggal||r.mulai||r.tanggal_mulai||r.start_date);
+       var selesai=tanggalKalender(r.selesai||r.tanggal_selesai||r.end_date)||mulai;
+       if(!mulai && r.tahun!=null && r.bulan!=null && r.hari!=null){
+         var y=String(r.tahun), m=String(Number(r.bulan)+1).padStart(2,'0'), d=String(r.hari).padStart(2,'0');
+         mulai=y+'-'+m+'-'+d; selesai=mulai;
+       }
+       return !!mulai && iso>=mulai && iso<=selesai;
+     });
+   }
+   function hariLibur(iso){
+     var dow=new Date(iso+'T00:00:00').getDay();
+     return dow===0 || !!LIBUR[iso] || kalenderLibur(iso);
+   }
+   function loadHariKerjaLocal(){
+     try{
+       var raw=localStorage.getItem('zymata_hari_kerja_guru_v1');
+       var map=raw?JSON.parse(raw):{};
+       return map&&typeof map==='object'&&!Array.isArray(map)?map:{};
+     }catch(e){ return {}; }
+   }
+   function hariKerjaGuru(iso){
+     if(!hariKerja(iso) || hariLibur(iso)) return false;
+     /* Baca ulang localStorage saat menghitung. Admin dan aplikasi guru
+        kadang tetap terbuka bersamaan pada origin yang sama, sehingga jadwal
+        bisa berubah setelah modul gaji selesai dimuat. */
+     var map=Object.assign({},GJ.hariKerja||{},loadHariKerjaLocal());
+     var raw=nipSaya(), key=raw, digits=raw.replace(/\D/g,'');
+     var days=map[key];
+     if(!Array.isArray(days) && digits){
+       var normalized=digits.replace(/^0+(?=\d)/,'');
+       var found=Object.keys(map).find(function(k){ return String(k).replace(/\D/g,'').replace(/^0+(?=\d)/,'')===normalized; });
+       if(found) days=map[found];
+     }
+     if(!Array.isArray(days) || !days.length) return true;
+     var dow=new Date(iso+'T00:00:00').getDay();
+     return days.indexOf(dow===0?6:dow-1)>=0;
+   }
+
+   function statusEfektif(row){
+     var st=String(row&&row.status||'hadir').trim().toLowerCase();
+     if(st==='alpha'||st==='alfa'||st==='tanpa') return 'alpa';
+     if(st==='izin'||st==='sakit'||st==='terlambat'||st==='alpa') return st;
+     if(st!=='hadir'&&st!=='dinas') return st;
+     var ket=String(row&&(row.keterangan||row.ket||row.catatan)||'');
+     if(/terlambat|late/i.test(ket)) return 'terlambat';
+     if(/tepat waktu|sebelum batas|terisi dari jadwal/i.test(ket)) return st;
+     var candidates=[row&&row.jam_masuk,row&&row.jamMasuk,row&&row.check_in,row&&row.checkIn,row&&row.masuk,row&&row.jam,row&&row.waktu_masuk];
+     return candidates.some(function(v){
+       var m=String(v==null?'':v).replace('.',':').match(/(\d{1,2}):(\d{2})/);
+       return m && (parseInt(m[1],10)*60+parseInt(m[2],10))>(6*60+55);
+     }) ? 'terlambat' : st;
+   }
 
   /* ---------------- muat data ---------------- */
-  async function loadGJ(){
-    if(GJ.loading) return;
-    GJ.loading=true; GJ.galat='';
-    var nip=nipSaya();
-    try{
+   async function loadGJ(){
+     if(GJ.loading) return;
+     GJ.loading=true; GJ.galat='';
+     var nip=nipSaya();
+     if(!nip){
+       GJ.loaded=false; GJ.loading=false; GJ.nip='';
+       if(!GJ.retryTimer){
+         GJ.retryTimer=setTimeout(function(){
+           GJ.retryTimer=null;
+           if(activeGJ()) loadGJ();
+         },1000);
+       }
+       return;
+     }
+     try{
       var api=SB();
       if(!api) throw new Error('Koneksi Supabase belum siap');
       if(!nip) throw new Error('NIP akun guru masih kosong, hubungi admin');
 
-      /* 1) gaji pokok & tunjangan (baris milik NIP ini saja) */
-      var rG=await api.select(T_GAJI, { eq:{ nip:nip }, limit:5 });
-      if(rG&&rG.error) throw rG.error;
-      var rowG=(rG&&Array.isArray(rG.data)&&rG.data.length)?rG.data[0]:null;
-      GJ.gaji=rowG?{ pokok:Number(rowG.pokok)||0, tunjangan:Number(rowG.tunjangan)||0, nama:rowG.nama||'' }:{ pokok:0, tunjangan:0, nama:'' };
+       /* 1) Ambil data gaji seperti web admin: cocokkan NIP yang dinormalisasi,
+          tetapi tetap membatasi query ke kandidat NIP akun ini saja. */
+       var rowG=null, gajiCandidates=nipCandidates(nip);
+       for(var gi=0;gi<gajiCandidates.length&&!rowG;gi++){
+         var rGi=await api.select(T_GAJI, { eq:{ nip:gajiCandidates[gi] }, limit:5 });
+         if(rGi&&rGi.error) throw rGi.error;
+         var gRows=(rGi&&Array.isArray(rGi.data))?rGi.data:[];
+         rowG=gRows.find(function(r){ return nipSama(r&&r.nip,nip); }) || null;
+       }
+       /* Fallback nama hanya bila format NIP tidak sama. Jangan mengambil seluruh
+          tabel gaji karena setiap guru hanya boleh melihat gajinya sendiri. */
+       if(!rowG && namaSaya() && namaSaya()!=='Guru'){
+         var rGn=await api.select(T_GAJI, { eq:{ nama:namaSaya() }, limit:5 });
+         if(rGn&&rGn.error) throw rGn.error;
+         var gnRows=(rGn&&Array.isArray(rGn.data))?rGn.data:[];
+         rowG=gnRows.find(function(r){ return nipSama(r&&r.nip,nip) || namaSama(r&&r.nama,namaSaya()); }) || null;
+       }
+        GJ.gaji=rowG?{ pokok:Number(rowG.pokok)||0, tunjangan:Number(rowG.tunjangan)||0, nama:rowG.nama||'' }:{ pokok:0, tunjangan:0, nama:'', belumDiatur:true };
 
       /* 2) kebijakan potongan + potongan manual khusus NIP ini */
       var pot={ alpa:POT_ALPA_BAWAAN, izin:POT_IZIN_BAWAAN, terlambat:POT_TERLAMBAT_BAWAAN };
@@ -9415,49 +9525,94 @@ animateContent();
           if(r.key==='potongan_alpa'&&isFinite(v)) pot.alpa=v;
           else if(r.key==='potongan_izin'&&isFinite(v)) pot.izin=v;
           else if(r.key==='potongan_terlambat'&&isFinite(v)) pot.terlambat=v;
-          else if(r.key==='potongan_manual_'+nip){
-            if(r.value!=null && String(r.value)!=='' && isFinite(v)) manual=v;
-          }
+           else if(r.key.indexOf('potongan_manual_')===0){
+             var manualNip=r.key.slice('potongan_manual_'.length);
+             if(nipSama(manualNip,nip) && r.value!=null && String(r.value)!=='' && isFinite(v)) manual=v;
+           }
         });
       }
-      GJ.pot=pot; GJ.potManual=manual;
+       GJ.pot=pot; GJ.potManual=manual;
 
-      /* 3) absensi saya (semua tanggal, dipilah per bulan saat menghitung) */
-      var rA=await api.select(T_ABS, { eq:{ nip:nip }, order:'tanggal', ascending:false, limit:2000 });
-      if(rA&&rA.error) throw rA.error;
-      GJ.absen=(rA&&Array.isArray(rA.data))?rA.data:[];
+       /* Kalender Akademik adalah sumber libur sekolah yang dipakai web admin.
+          Ambil di sini agar alpha otomatis dan alpha tersimpan pada hari libur
+          tidak ikut memotong gaji di aplikasi guru. */
+       GJ.kalender=[];
+       try{
+         var rK=await api.select(T_KAL, { limit:500 });
+         if(rK&&!rK.error&&Array.isArray(rK.data)) GJ.kalender=rK.data;
+       }catch(_eKal){}
 
-      GJ.loaded=true;
-    }catch(e){
-      GJ.gaji=GJ.gaji||{ pokok:0, tunjangan:0, nama:'' };
+       /* Hari kerja khusus diatur dari web admin pada pengaturan_sistem. */
+       /* Admin dan aplikasi guru berada pada origin lokal yang sama. Gunakan
+          jadwal yang sudah dipilih admin dari localStorage sebagai sumber
+          langsung; data Supabase dipakai untuk perangkat/origin lain. */
+       GJ.hariKerja=loadHariKerjaLocal();
+       try{
+         try{ if(typeof window.zmClearCache==='function') window.zmClearCache(T_SYS); }catch(_eClearHari){}
+         var rH=await api.select(T_SYS, { eq:{ key:'zymata_hari_kerja_guru' }, limit:1 });
+         if(rH&&!rH.error&&Array.isArray(rH.data)&&rH.data[0]&&rH.data[0].value!=null){
+           var hVal=typeof rH.data[0].value==='string'?JSON.parse(rH.data[0].value):rH.data[0].value;
+           if(hVal&&typeof hVal==='object'&&!Array.isArray(hVal)&&Object.keys(hVal).length) Object.assign(GJ.hariKerja,hVal);
+         }
+       }catch(_eHariKerja){}
+
+       /* 3) Ambil absensi memakai kandidat format NIP akun, tetap scoped ke guru ini. */
+       var absRows=[];
+       var absSeen={};
+       var absCandidates=nipCandidates(nip);
+       for(var ai=0;ai<absCandidates.length;ai++){
+         var rAi=await api.select(T_ABS, { eq:{ nip:absCandidates[ai] }, order:'tanggal', ascending:false, limit:2000 });
+         if(rAi&&rAi.error) throw rAi.error;
+         (rAi&&Array.isArray(rAi.data)?rAi.data:[]).forEach(function(r){
+           var id=String((r&&r.id!=null?r.id:'')+'|'+(r&&r.tanggal||'')+'|'+(r&&r.sesi||'')+'|'+(r&&r.nip||''));
+           if(!absSeen[id]){ absSeen[id]=1; absRows.push(r); }
+         });
+       }
+       GJ.absen=absRows.filter(function(r){
+         var rowNip=r&&((r.nip!=null?r.nip:(r.nip_guru!=null?r.nip_guru:r.NIP)));
+         return nipSama(rowNip,nip);
+       });
+
+       GJ.nip=nip;
+       GJ.loaded=true;
+     }catch(e){
+      GJ.gaji=GJ.gaji||{ pokok:0, tunjangan:0, nama:'', belumDiatur:true };
       GJ.pot=GJ.pot||{ alpa:POT_ALPA_BAWAAN, izin:POT_IZIN_BAWAAN, terlambat:POT_TERLAMBAT_BAWAAN };
       GJ.absen=GJ.absen||[];
-      GJ.loaded=true;
+       GJ.nip=nip;
+       GJ.loaded=true;
       var m=(e&&e.message)?e.message:String(e);
       GJ.galat=m;
       if(/does not exist|relation|schema cache/i.test(m)) GJ.galat='Tabel gaji belum tersedia di Supabase.';
     }
-    GJ.loading=false;
-    if(activeGJ() && typeof render==='function') render();
-  }
+     GJ.loading=false;
+     if(activeGJ() && typeof render==='function') render();
+   }
 
   /* ---------------- hitung (rumus sama dgn web) ---------------- */
   function rekap(ym){
     var rows=GJ.absen||[];
     var perTgl={};    /* tanggal -> status pertama yang ditemukan (1 hari 1 hitungan) */
     var ketTgl={};
-    rows.forEach(function(r){
-      var tgl=String(r.tanggal||'').slice(0,10);
-      if(tgl.indexOf(ym)!==0) return;
-      if(perTgl[tgl]) return;
-      perTgl[tgl]=String(r.status||'hadir').toLowerCase();
-      ketTgl[tgl]=String(r.keterangan||r.ket||'');
+     rows.forEach(function(r){
+       var tgl=String(r.tanggal||'').slice(0,10);
+       if(tgl.indexOf(ym)!==0) return;
+       if(hariLibur(tgl)) return;
+       if(!hariKerjaGuru(tgl) && statusEfektif(r)==='alpa') return;
+        var st=statusEfektif(r);
+        var ket=String(r.keterangan||r.ket||'');
+       /* Satu tanggal dapat memiliki beberapa sesi. Prioritaskan status
+          pemotong agar hasilnya sama dengan rekap admin. */
+        var rank={alpa:5,izin:4,sakit:3,terlambat:2,hadir:1,dinas:1};
+       if(perTgl[tgl] && (rank[perTgl[tgl]]||0)>=(rank[st]||0)) return;
+       perTgl[tgl]=st;
+       ketTgl[tgl]=ket;
     });
 
     var alpa=0, izin=0, sakit=0, terlambat=0, hadir=0;
     Object.keys(perTgl).forEach(function(tgl){
       var st=perTgl[tgl];
-      if(st==='alpa') alpa++;
+       if(st==='alpa'||st==='alpha'||st==='alfa'||st==='tanpa') alpa++;
       else if(st==='izin'){
         /* izin yang sudah DITERIMA admin tidak dipotong (sama dgn web) */
         if(!/\[izin:diterima\]/i.test(ketTgl[tgl]||'')) izin++;
@@ -9482,7 +9637,7 @@ animateContent();
           var nowMin=now.getHours()*60+now.getMinutes();
           if(nowMin<=(12*60)) break;   /* hari ini baru dihitung setelah jam 12:00 */
         }
-        if(!hariKerja(iso)) continue;
+       if(!hariKerjaGuru(iso)) continue;
         if(!perTgl[iso]) kosong++;
       }
     }
@@ -9552,9 +9707,14 @@ animateContent();
   };
 
   /* ---------------- renderer modul ---------------- */
-  window.renderGajiSayaGuruModule = function(detail){
-    detail=detail||{};
-    var head='<div class="ggj-head">'
+   window.renderGajiSayaGuruModule = function(detail){
+     detail=detail||{};
+     var currentNip=nipSaya();
+     if(GJ.loaded && GJ.nip!==currentNip){
+       GJ.loaded=false;
+       GJ.gaji=null; GJ.potManual=null; GJ.absen=null; GJ.kalender=[];
+     }
+     var head='<div class="ggj-head">'
       + '<div class="ggj-eyebrow">'+esc(detail.eyebrow||'Kepegawaian')+'</div>'
       + '<div class="ggj-title">'+esc(detail.title||'Gaji Saya')+'</div>'
       + '<div class="ggj-sub">'+esc(namaSaya())+(nipSaya()?(' &middot; NIP '+esc(nipSaya())):'')+'</div>'
@@ -9581,8 +9741,12 @@ animateContent();
       + '<button class="ggj-nav" onclick="zGaji.geserBulan(1)">&#8250;</button>'
       + '</div>';
 
-    h+='<div class="ggj-big"><small>Gaji Bersih '+esc(labelBulan)+'</small><b>'+rp(k.bersih)+'</b>'
-      + '<span>Pokok + tunjangan dikurangi potongan absensi</span></div>';
+     h+='<div class="ggj-big"><small>Gaji Bersih '+esc(labelBulan)+'</small><b>'+rp(k.bersih)+'</b>'
+       + '<span>Pokok + tunjangan dikurangi potongan absensi</span></div>';
+
+     if(GJ.gaji&&GJ.gaji.belumDiatur){
+       h+='<div class="ggj-galat">Data gaji pokok dan tunjangan untuk NIP '+esc(nipSaya())+' belum diatur di web admin.</div>';
+     }
 
     h+='<div class="ggj-rows">'
       + '<div class="ggj-r"><span>Gaji Pokok</span><b>'+rp(k.pokok)+'</b></div>'
