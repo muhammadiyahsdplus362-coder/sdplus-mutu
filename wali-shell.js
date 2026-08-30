@@ -1083,77 +1083,7 @@ function renderHome() {
       <!-- JADWAL HARI INI -->
       <div id="waliJadwalHariIni">${renderJadwalHariIniCard()}</div>
 
-      <!-- RECAP -->
-      <div class="lux-section-head"><span>Rekap pekan ini</span></div>
-      <div class="lux-recap">
-        <button type="button" class="lux-stat" data-module-route="module:absensi-anak">
-          <span class="lux-stat-val grad-aqua">${appState.homeAttendanceRate}%</span>
-          <span class="lux-stat-lbl">Kehadiran</span>
-        </button>
-        <button type="button" class="lux-stat" data-module-route="mutabaah">
-          <span class="lux-stat-val grad-emerald">${appState.homeMutabaahProgress}%</span>
-          <span class="lux-stat-lbl">Mutabaah</span>
-        </button>
-      </div>
-
-      ${(function(){
-        var sm = appState.supabaseModules || {};
-        var updates = [];
-        function pushFrom(arr, area, tone){
-          (arr || []).slice(0, 3).forEach(function(r){
-            var dt = r.tanggal || r.tgl || r.created_at || r.updated_at || r.waktu_submit || r.waktu_submit_wali || '';
-            var isTahfidzSchool = area === 'Mutabaah Tahfidz Sekolah';
-            var isTilawahSchool = isTahfidzSchool && /tilawah/i.test(String(r.kategori || ''));
-            var tt = isTahfidzSchool ? (r.kategori || 'Setoran Tahfidz') : (r.surah_nama || r.surat || r.judul || r.title || r.lomba || r.kegiatan || r.perihal || r.tilawah_rumah || r.materi || '');
-            if (!tt && area === 'Mutabaah Tahfidz Sekolah') tt = r.kategori || 'Setoran Tahfidz';
-            if (!tt && area === 'Karakter') {
-              var ks = [r.disiplin,r.sopan,r.jujur,r.kerja_keras,r.tanggung_jawab].filter(Boolean);
-              tt = r.semester ? r.semester : '';
-              if (ks.length) tt += (tt ? ' - ' : '') + ks.join(', ');
-            }
-            if (!tt && area === 'Mutabaah Rumah') {
-              var shalatCount = r.shalat_count;
-              if (shalatCount === undefined || shalatCount === null || shalatCount === '') {
-                shalatCount = ['subuh','dzuhur','ashar','maghrib','isya'].reduce(function(total, key){
-                  var value = r['shalat_' + key];
-                  return total + ((value === true || value === 1 || value === '1' || /^ya|true$/i.test(String(value || ''))) ? 1 : 0);
-                }, 0);
-              }
-              // Mutabaah Rumah tidak memiliki field sunnah. Jangan tampilkan
-              // angka 0 dari skema ibadah lama seolah-olah itu nilai wali.
-              tt = 'Shalat ' + Number(shalatCount || 0) + '/5';
-            }
-            if (!tt) tt = area + ' anak';
-            var mt = isTilawahSchool
-              ? [
-                  (r.surah_nama || (function(){ var m=String(r.catatan||'').match(/\[?(At-Tanzil\s+[^\]]+)/i); return m ? m[1] : ''; })()),
-                  r.progres != null ? ('Progres ' + r.progres + '%') : '',
-                ].filter(Boolean).join(' · ')
-              : isTahfidzSchool
-                ? [r.surah_nama || (r.surah_no ? ('Surah ' + r.surah_no) : ''), r.ayat ? ('Ayat ' + r.ayat) : '', r.progres != null ? ('Progres ' + r.progres + '%') : ''].filter(Boolean).join(' · ')
-              : (r.progres ? ('Progres ' + r.progres) : (r.nilai ? ('Nilai ' + r.nilai) : (r.juz ? ('Juz ' + r.juz) : (r.kategori || r.status_review || r.keterangan_guru || r.kendala_wali || '-'))));
-            updates.push({
-              time: String(dt).slice(0,10) || area, area: area,
-              title: tt,
-              meta: mt,
-              status: r.nilai || r.status || r.status_review || 'Update', tone: tone
-            });
-          });
-        }
-        pushFrom(sm.mutabaahTahfidzSekolah, 'Mutabaah Tahfidz Sekolah', 'green');
-        updates.sort(function(a,b){ return String(b.time).localeCompare(String(a.time)); });
-        updates = updates.slice(0, 5);
-        if (!updates.length) return '';
-        return '<div class="lux-section-head"><span>Update perkembangan</span><span class="lux-link" data-module-route="module:perkembangan-anak">Lihat semua</span></div>' +
-          '<div class="lux-timeline">' +
-          updates.map(function(u){
-            return `<div class="lux-tl-item"><span class="lux-tl-dot ${u.tone}"></span>
-              <div class="lux-tl-body"><span class="lux-tl-title">${u.title}</span><span class="lux-tl-meta">${u.meta || u.area} &middot; ${u.time}</span></div>
-              <span class="lux-tl-pill ${u.tone}">${u.status}</span></div>`;
-          }).join('') + '</div>';
-      })()}
-
-      <div style="height:140px"></div>
+       <div style="height:140px"></div>
     </div>
   `;
 }
@@ -3747,6 +3677,7 @@ var waliBarisBaru = [];
 var _waliLoadedDetail = {};
 var _waliDetailLoading = {};
 var _waliDetailKeys = {
+  'mutabaah': ['mutabaahTahfidzSekolah','mutabaahTahfidzRingkas'],
   'module:perkembangan-anak': ['perkembangan'],
   'module:catatan-anak': ['catatan'],
   'module:surat-wali': ['surat'],
@@ -3780,6 +3711,9 @@ async function ensureWaliDetailLoaded(route){
     var sm = appState.supabaseModules || {};
     if(keys.indexOf('perkembangan') !== -1){
       ['ibadah','karakter','prestasi','pelanggaran','ekskul'].forEach(function(k){ if(data && Array.isArray(data[k])) sm[k] = data[k]; });
+    } else if(keys.indexOf('mutabaahTahfidzSekolah') !== -1){
+      if(data && Array.isArray(data.mutabaahTahfidzSekolah)) sm.mutabaahTahfidzSekolah = data.mutabaahTahfidzSekolah;
+      if(data && Array.isArray(data.mutabaahTahfidzRingkas)) sm.mutabaahTahfidzRingkas = data.mutabaahTahfidzRingkas;
     } else if(keys.indexOf('nilai') !== -1 && data && Array.isArray(data.nilai)) sm.nilai = data.nilai;
     else if(keys.indexOf('catatan') !== -1 && data && Array.isArray(data.catatan)) sm.catatan = data.catatan;
     else if(keys.indexOf('surat') !== -1 && data && Array.isArray(data.surat)) sm.surat = data.surat;
@@ -3856,7 +3790,9 @@ async function hydrateWaliFromSupabase() {
     appState.unreadAnnouncements = 0;
     appState.unreadNotes = 0;
     var _startupWaliData = await window.ZymataMobileSupabase.loadWaliModuleData(ctx, {
-      only: ['absensi','mutabaahTahfidzSekolah','mutabaahTahfidzRingkas','keuangan','pengumuman'],
+      // Mutabaah Tahfidz dimuat khusus saat modulnya dibuka, bukan saat
+      // startup hanya untuk mengisi Dashboard.
+      only: ['absensi','keuangan','pengumuman'],
       badges: true
     });
     appState.supabaseModules = filterWaliPengumuman(_startupWaliData);
