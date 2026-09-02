@@ -2521,6 +2521,46 @@ function nhStore(){ if(!appState.nilaiNhStore) appState.nilaiNhStore={}; return 
 function nhGet(nis,f){ var k=nhKey(nis,f); if(!nhStore()[k]) nhStore()[k]={nh:[0,0,0,0,0,0],catatan:'',kkm:0}; var r=nhStore()[k]; if(!Array.isArray(r.nh)){r.nh=[r.nilai||0,0,0,0,0,0];} while(r.nh.length<6)r.nh.push(0); return r; }
 function nhAvgVal(nhArr){ var fil=nhArr.filter(function(v){return v>0;}); if(!fil.length)return 0; return Math.round(fil.reduce(function(a,b){return a+b;},0)/fil.length); }
 function nhFilled(nis,f){ var r=nhStore()[nhKey(nis,f)]; if(!r)return false; return (Array.isArray(r.nh)&&r.nh.some(function(v){return v>0;}))||!!(r.catatan); }
+var nilaiRemoteState = { key:'', loading:false, loaded:false, error:'' };
+async function loadNilaiRemote(nf){
+  nf = nf || getNilaiState();
+  if(!nf.kelas || !nf.mapel) return false;
+  var key = [nf.kelas,nf.mapel,nf.semester,nf.jenis].join('|');
+  if(nilaiRemoteState.key === key && (nilaiRemoteState.loading || nilaiRemoteState.loaded)) return nilaiRemoteState.loaded;
+  nilaiRemoteState = { key:key, loading:true, loaded:false, error:'' };
+  try {
+    var bridge = window.ZymataMobileSupabase || window.db;
+    var client = bridge && typeof bridge.getClient === 'function' ? bridge.getClient() : null;
+    if(!client || !client.from) throw new Error('Supabase client tidak siap');
+    var res = await client.from('nilai_siswa')
+      .select('siswa_id,nis,nama_siswa,kelas,mapel,semester,jenis,nilai_tugas,nilai_ujian,nilai_akhir,catatan,created_at')
+      .eq('kelas', nf.kelas)
+      .eq('mapel', nf.mapel)
+      .eq('semester', nf.semester)
+      .eq('jenis', nf.jenis)
+      .order('created_at', { ascending:false })
+      .limit(500);
+    if(res && res.error) throw res.error;
+    (Array.isArray(res && res.data) ? res.data : []).forEach(function(row){
+      var siswa = (SISWA_PER_KELAS[nf.kelas] || []).find(function(s){
+        return String(s.id||s._id||s.siswa_id||'') === String(row.siswa_id||'') || String(s.nis||'') === String(row.nis||'');
+      });
+      var nis = String((siswa && siswa.nis) || row.nis || '');
+      if(!nis) return;
+      var r = nhGet(nis, nf);
+      r.nh = [Number(row.nilai_tugas)||0, Number(row.nilai_ujian)||0, 0, 0, 0, 0];
+      r.nilai = Number(row.nilai_akhir)||nhAvgVal(r.nh);
+      r.catatan = String(row.catatan||'');
+    });
+    nilaiRemoteState.loaded = true;
+    return true;
+  } catch(e){
+    nilaiRemoteState.error = e && e.message ? e.message : String(e);
+    return false;
+  } finally {
+    nilaiRemoteState.loading = false;
+  }
+}
 // Simpan nilai ke Supabase tabel nilai_siswa agar web admin bisa membaca.
 // Schema nilai_siswa: siswa_id=text, kelas=text, mapel=text, semester=text,
 //   nilai_tugas=smallint, nilai_ujian=smallint, nilai_akhir=numeric, catatan=text, jenis=text
@@ -2604,6 +2644,17 @@ function moduleScanBlock(moduleId){
 
 function renderScoreModule(detail) {
   const f = getNilaiState();
+  if(f.kelas && f.mapel){
+    var remoteKey = [f.kelas,f.mapel,f.semester,f.jenis].join('|');
+    if(nilaiRemoteState.key !== remoteKey || (!nilaiRemoteState.loaded && !nilaiRemoteState.loading && !nilaiRemoteState.error)){
+      loadNilaiRemote(f).then(function(){
+        if(appState.activeTab === 'module:nilai'){
+          var now = getNilaiState();
+          if([now.kelas,now.mapel,now.semester,now.jenis].join('|') === remoteKey) render();
+        }
+      });
+    }
+  }
   const kelasList = (appState.guruKelasList && appState.guruKelasList.length) ? appState.guruKelasList
                   : (typeof KELAS_LIST!=='undefined' ? KELAS_LIST : []);
   const siswaList = f.kelas ? (SISWA_PER_KELAS[f.kelas] || []).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'id')) : [];
