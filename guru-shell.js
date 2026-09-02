@@ -2363,7 +2363,7 @@ function guruMapelOpts(){
     return list;
   } catch(e) { return MAPEL_LIST; }
 }
-const NILAI_JENIS = ['Ulangan Harian','PTS','PAS','Tugas','Praktik'];
+const NILAI_JENIS = ['Ulangan Harian','Ujian Semester','PTS','PAS','Tugas','Praktik'];
 const NILAI_SEMESTER = ['Ganjil','Genap'];
 
 // �����─ UI helpers ──────────────��───────────────────────���────────────────���─────
@@ -2521,6 +2521,11 @@ function nhStore(){ if(!appState.nilaiNhStore) appState.nilaiNhStore={}; return 
 function nhGet(nis,f){ var k=nhKey(nis,f); if(!nhStore()[k]) nhStore()[k]={nh:[0,0,0,0,0,0],catatan:'',kkm:0}; var r=nhStore()[k]; if(!Array.isArray(r.nh)){r.nh=[r.nilai||0,0,0,0,0,0];} while(r.nh.length<6)r.nh.push(0); return r; }
 function nhAvgVal(nhArr){ var fil=nhArr.filter(function(v){return v>0;}); if(!fil.length)return 0; return Math.round(fil.reduce(function(a,b){return a+b;},0)/fil.length); }
 function nhFilled(nis,f){ var r=nhStore()[nhKey(nis,f)]; if(!r)return false; return (Array.isArray(r.nh)&&r.nh.some(function(v){return v>0;}))||!!(r.catatan); }
+function nilaiPayloadObject(value){
+  if(!value) return {};
+  if(typeof value === 'object') return value;
+  try { var parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {}; } catch(e){ return {}; }
+}
 var nilaiRemoteState = { key:'', loading:false, loaded:false, error:'' };
 async function loadNilaiRemote(nf){
   nf = nf || getNilaiState();
@@ -2533,7 +2538,7 @@ async function loadNilaiRemote(nf){
     var client = bridge && typeof bridge.getClient === 'function' ? bridge.getClient() : null;
     if(!client || !client.from) throw new Error('Supabase client tidak siap');
     var res = await client.from('nilai_siswa')
-      .select('siswa_id,nis,nama_siswa,kelas,mapel,semester,jenis,nilai_tugas,nilai_ujian,nilai_akhir,catatan,created_at')
+      .select('siswa_id,nis,nama_siswa,kelas,mapel,semester,jenis,nilai_tugas,nilai_ujian,nilai_akhir,catatan,payload,created_at')
       .eq('kelas', nf.kelas)
       .eq('mapel', nf.mapel)
       .eq('semester', nf.semester)
@@ -2548,7 +2553,12 @@ async function loadNilaiRemote(nf){
       var nis = String((siswa && siswa.nis) || row.nis || '');
       if(!nis) return;
       var r = nhGet(nis, nf);
-      r.nh = [Number(row.nilai_tugas)||0, Number(row.nilai_ujian)||0, 0, 0, 0, 0];
+      var savedPayload = nilaiPayloadObject(row.payload);
+      var savedNh = Array.isArray(savedPayload.nh_values) ? savedPayload.nh_values.map(function(v){ return Number(v)||0; }) : [];
+      while(savedNh.length < 6) savedNh.push(0);
+      r.nh = /ulangan\s*harian/i.test(String(nf.jenis||''))
+        ? (savedNh.some(function(v){ return v > 0; }) ? savedNh.slice(0,6) : [Number(row.nilai_tugas)||0, Number(row.nilai_ujian)||0, 0, 0, 0, 0])
+        : [Number(row.nilai_ujian)||Number(row.nilai_tugas)||0, 0, 0, 0, 0, 0];
       r.nilai = Number(row.nilai_akhir)||nhAvgVal(r.nh);
       r.catatan = String(row.catatan||'');
     });
@@ -2570,6 +2580,8 @@ async function saveNilaiSiswa(nf, nhStoreData, siswaList) {
   var client = typeof bridge.getClient === 'function' ? bridge.getClient() : null;
   if (!client || !client.from) throw new Error('Supabase client tidak siap');
   var rows = [];
+  var isUlanganHarian = /ulangan\s*harian/i.test(String(nf.jenis||''));
+  var isUjian = /ujian|pts|pas/i.test(String(nf.jenis||''));
   (siswaList || []).forEach(function(s) {
     // siswa_id di DB adalah TEXT — kirim sebagai string
     var siswa_id = String(s._id || s.id || s.siswa_id || s.nis || '').trim();
@@ -2581,19 +2593,23 @@ async function saveNilaiSiswa(nf, nhStoreData, siswaList) {
     var filled = nh.filter(function(v){ return v > 0; });
     if (!filled.length && !nd.catatan) return; // skip siswa yang belum diisi sama sekali
     var avg = filled.length ? Math.round(filled.reduce(function(a,b){return a+b;},0)/filled.length) : 0;
+    var nilaiUtama = isUlanganHarian ? (Number(nh[0]) || 0) : (Number(nh[0]) || 0);
+    var nilaiTugas = isUlanganHarian || !isUjian ? nilaiUtama : 0;
+    var nilaiUjian = isUjian ? nilaiUtama : 0;
     rows.push({
       siswa_id:    siswa_id,                        // text
       kelas:       String(nf.kelas    || ''),        // text, NOT NULL
       mapel:       String(nf.mapel    || ''),        // text, NOT NULL
       semester:    String(nf.semester || 'Ganjil'),  // text, NOT NULL, default 'Ganjil'
       jenis:       String(nf.jenis    || ''),        // text
-      nilai_tugas: Math.round(Number(nh[0]) || 0),  // smallint
-      nilai_ujian: Math.round(Number(nh[1]) || 0),  // smallint
+      nilai_tugas: Math.round(nilaiTugas),           // NH-1 untuk Ulangan Harian
+      nilai_ujian: Math.round(nilaiUjian),           // hanya Ujian/PTS/PAS
       nilai_akhir: avg,                              // numeric
       catatan:     String(nd.catatan  || ''),        // text
       nis:         String(s.nis       || ''),        // text (opsional tapi berguna)
       nama_siswa:  String(s.name || s.nama || ''),  // text (opsional)
-      client_key:  'default'                         // WAJIB: web admin filter WHERE client_key='default'
+      client_key:  'default',                        // WAJIB: web admin filter WHERE client_key='default'
+      payload: isUlanganHarian ? { mode:'ulangan_harian', nh_values: nh.slice(0,6) } : { mode:isUjian?'ujian':'nilai_tugas' }
     });
   });
   if (!rows.length) return { saved: 0, total: 0, errors: ['0 baris diproses — ' + (siswaList||[]).length + ' siswa, mapel=' + (nf.mapel||'-') + ' sem=' + (nf.semester||'-')] };
@@ -2606,6 +2622,7 @@ async function saveNilaiSiswa(nf, nhStoreData, siswaList) {
         .eq('siswa_id', rows[i].siswa_id)
         .eq('mapel',    rows[i].mapel)
         .eq('semester', rows[i].semester)
+        .eq('jenis',    rows[i].jenis)
         .limit(1);
       var existId = existing && !existing.error && existing.data && existing.data[0] ? existing.data[0].id : null;
       var res;
