@@ -252,7 +252,7 @@
 <script src="chat-mobile.js"></script>
 <script src="native-enhance.js"></script>
 <script src="native-pro.js"></script>
-<script src="guru-shell.js?v=20260902-nilai-remote-1"></script>
+<script src="guru-shell.js?v=20260902-nilai-mode-2"></script>
   <script>
   /* Transisi halaman guru: bottom-nav = sheet (naik dari bawah), lainnya = fade+zoom.
      UI murni \u2014 membungkus animateContent tanpa mengubah logika app. */
@@ -290,7 +290,7 @@
         window.location.reload();
       });
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('./guru-sw.js?v=20260902-nilai-remote-1').then(function (registration) {
+        navigator.serviceWorker.register('./guru-sw.js?v=20260902-nilai-mode-2').then(function (registration) {
           registration.update().catch(function () {});
           if (registration.waiting) registration.waiting.postMessage('SKIP_WAITING');
         }).catch(function () {});
