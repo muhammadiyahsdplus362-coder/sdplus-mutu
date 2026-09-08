@@ -127,12 +127,15 @@
            kolom tanggalnya kosong bisa memakan seluruh kuota `limit` dan menyingkirkan
            data nyata. Dengan nullsFirst:false, baris kosong pindah ke belakang.
            Pemanggil yang tidak menyetel opsi ini sama sekali tidak berubah. */
-        if(options.order){
-          var _ordOpt = { ascending: options.ascending !== false };
-          if(options.nullsFirst !== undefined) _ordOpt.nullsFirst = !!options.nullsFirst;
-          q = q.order(options.order, _ordOpt);
-        }
-        if(options.limit) q = q.limit(options.limit);
+         if(options.order){
+           var _ordOpt = { ascending: options.ascending !== false };
+           if(options.nullsFirst !== undefined) _ordOpt.nullsFirst = !!options.nullsFirst;
+           q = q.order(options.order, _ordOpt);
+         }
+         if(options.offset !== undefined && options.limit){
+           var _offset = Math.max(0, Number(options.offset) || 0);
+           q = q.range(_offset, _offset + Number(options.limit) - 1);
+         } else if(options.limit) q = q.limit(options.limit);
         return q;
       };
       var res = await _buildQ();
@@ -163,6 +166,43 @@
       if(res && res.error) return { error: res.error };
       const row = Array.isArray(res && res.data) ? res.data[0] : (res && res.data);
       return { data: row || null, error: null };
+    } catch(error) { return { data: null, error: error }; }
+  }
+
+  async function getWaliSppSummary(siswaId, nis){
+    try {
+      const res = await getClient().rpc('get_wali_spp_summary', {
+        p_siswa_id: clean(siswaId || ''),
+        p_nis: clean(nis || '')
+      });
+      if(res && res.error) return { data: null, error: res.error };
+      const row = Array.isArray(res && res.data) ? (res.data[0] || null) : (res && res.data);
+      return { data: row, error: null };
+    } catch(error) { return { data: null, error: error }; }
+  }
+
+  async function getWaliAbsensiSummary(siswaId, nis, tanggal){
+    try {
+      const res = await getClient().rpc('get_wali_absensi_summary', {
+        p_siswa_id: clean(siswaId || ''),
+        p_nis: clean(nis || ''),
+        p_tanggal: tanggal || new Date().toISOString().slice(0, 10)
+      });
+      if(res && res.error) return { data: null, error: res.error };
+      const row = Array.isArray(res && res.data) ? (res.data[0] || null) : (res && res.data);
+      return { data: row, error: null };
+    } catch(error) { return { data: null, error: error }; }
+  }
+
+  async function getWaliBadgeSummary(siswaId, nis){
+    try {
+      const res = await getClient().rpc('get_wali_badge_summary', {
+        p_siswa_id: clean(siswaId || ''),
+        p_nis: clean(nis || '')
+      });
+      if(res && res.error) return { data: null, error: res.error };
+      const row = Array.isArray(res && res.data) ? (res.data[0] || null) : (res && res.data);
+      return { data: row, error: null };
     } catch(error) { return { data: null, error: error }; }
   }
 
@@ -689,7 +729,8 @@
     'tanggal,status,catatan,created_at,jenis,debit,kredit,saldo,keterangan,petugas,metode,nis,nominal';
   var _KOL_W_TABUNGAN_UMUM = 'id,siswa_id,nis,nama_siswa,kelas,nama_wali,jenis,nominal,debit,' +
     'kredit,saldo,keterangan,tanggal,petugas,metode,created_at';
-  var _KOL_W_PAYMENTS = 'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at';
+   var _KOL_W_PAYMENTS = 'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,base_amount,fee_amount,payment_method,status,checkout_url,expires_at,paid_at,created_at';
+  var _KOL_W_PAYMENT_ITEMS = 'id,transaction_id,tagihan_id,amount,status,paid_at,created_at';
   var _KOL_W_TAHFIDZ_SEKOLAH = 'id,siswa_id,nis,nama_siswa,kelas,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tanggal,tahun_ajaran,semester,guru_nip,guru_nama,created_at';
   var _KOL_W_TAHFIDZ_RINGKAS = 'id,siswa_id,nis,nama_siswa,kelas,konteks,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tahun_ajaran,semester,updated_at';
 
@@ -812,8 +853,9 @@
     const _mkOpt = function(eq, batched){
       const o = { eq: eq, limit: batched ? _lim : _baseLim };
       if(opts.select) o.select = opts.select;
-      if(opts.gte) o.gte = opts.gte;
-      if(opts.lte) o.lte = opts.lte;
+       if(opts.gte) o.gte = opts.gte;
+       if(opts.lte) o.lte = opts.lte;
+       if(opts.offset !== undefined) o.offset = opts.offset;
       if(opts.order){
         o.order = opts.order;
         o.ascending = (opts.ascending === true);
@@ -1612,7 +1654,7 @@
       _presensiOpts.gte = { tanggal: _pToday };
       _presensiOpts.lte = { tanggal: _pToday };
     }
-    return {
+      return {
       __loadedKeys: _loadedKeys,
       presensiGuru: _want('presensiGuru') && nip ? await tryFilteredList('absensi_guru', [{ nip }], 90, _presensiOpts) : [],
       // Absensi jauh lebih besar daripada tabel modul lain. Tetap gunakan batas
@@ -1775,32 +1817,107 @@
        baris tabel" bila anak ini belum punya data — jaring anti-kebocoran jalur wali.
        Hasil setiap pemanggilan tetap disaring filterMine/belongsToChild. */
     const _urutW = function(kolTgl){ return { order: kolTgl, ascending: false, nullsFirst: false }; };
-    const _w = function(table, select, kolTgl, pakaiNama){
-      const o = Object.assign({ strict: true, select: select }, _urutW(kolTgl || 'tanggal'));
-      const or = _orWali(table, nis, siswaId, namaSiswa, kelas, pakaiNama === true);
-      if(or) o.or = or;
-      return o;
-    };
-    var _badgeCatatan = [];
-    var _badgeCalistung = [];
-    if(options.badges){
-      _badgeCatatan = filterMine(await tryFilteredList('jurnal_siswa', filters, 200, _w(
-        'jurnal_siswa',
-        'id,tanggal,siswa_id,siswa_nis,nis,kelas,status_visibilitas,created_at',
-        'tanggal'
-      )));
-      if(nis){
-        _badgeCalistung = await safeList('calistung', {
-          eq: { nis: nis },
-          select: 'id,row_uid,tanggal,updated_at',
-          order: 'tanggal', ascending: false, limit: 200
-        });
+     const _w = function(table, select, kolTgl, pakaiNama){
+       const o = Object.assign({ strict: true, select: select }, _urutW(kolTgl || 'tanggal'));
+       const or = _orWali(table, nis, siswaId, namaSiswa, kelas, pakaiNama === true);
+       if(or) o.or = or;
+       return o;
+     };
+      var _absensiRows = [];
+      var _absensiHasMore = false;
+      var _absensiMonth = '';
+      if((_want('absensi') || _want('absensiDetail')) && options.absensiSummaryOnly !== true){
+        var _absensiLimit = Number(options.absensiLimit) > 0 ? Number(options.absensiLimit) : 30;
+        var _absensiOffset = Number(options.absensiOffset) > 0 ? Number(options.absensiOffset) : 0;
+        var _absensiNow = new Date();
+        _absensiMonth = clean(options.absensiMonth || '') || (_absensiNow.getFullYear() + '-' + String(_absensiNow.getMonth() + 1).padStart(2, '0'));
+        var _absensiParts = _absensiMonth.split('-');
+        var _absensiYear = Number(_absensiParts[0]), _absensiMonthNo = Number(_absensiParts[1]);
+        var _absensiLast = new Date(_absensiYear, _absensiMonthNo, 0).getDate();
+        var _absensiOpts = _w('absensi_siswa', _KOL_W_ABSENSI, 'tanggal');
+        _absensiOpts.offset = _absensiOffset;
+        _absensiOpts.gte = { tanggal: _absensiMonth + '-01' };
+        _absensiOpts.lte = { tanggal: _absensiMonth + '-' + String(_absensiLast).padStart(2, '0') };
+        var _absensiRaw = await tryFilteredList('absensi_siswa', filters, _absensiLimit, _absensiOpts);
+        _absensiRows = filterMine(mobile.absensi.concat(Array.isArray(_absensiRaw) ? _absensiRaw : []));
+        _absensiHasMore = Array.isArray(_absensiRaw) && _absensiRaw.length >= _absensiLimit;
       }
+      var _mutabaahRumahRows = [];
+      var _mutabaahRumahHasMore = false;
+      var _mutabaahRumahMonth = '';
+      if(_want('mutabaahRumah')){
+        var _mutabaahLimit = Number(options.mutabaahLimit) > 0 ? Number(options.mutabaahLimit) : 30;
+        var _mutabaahOffset = Number(options.mutabaahOffset) > 0 ? Number(options.mutabaahOffset) : 0;
+        var _mutabaahMonth = clean(options.mutabaahMonth || '');
+        if(!_mutabaahMonth){
+          var _mutabaahNow = new Date();
+          _mutabaahMonth = _mutabaahNow.getFullYear() + '-' + String(_mutabaahNow.getMonth() + 1).padStart(2, '0');
+        }
+        var _mutabaahRange = function(month){
+          var p = String(month || '').split('-');
+          var y = Number(p[0]), m = Number(p[1]);
+          if(!y || !m || m < 1 || m > 12) return {};
+          var last = new Date(y, m, 0).getDate();
+          return { gte: { tanggal: y + '-' + String(m).padStart(2, '0') + '-01' }, lte: { tanggal: y + '-' + String(m).padStart(2, '0') + '-' + String(last).padStart(2, '0') } };
+        };
+        var _mutabaahFetch = async function(month, offset, limit){
+          var range = _mutabaahRange(month);
+          return await tryFilteredList(
+          'mutabaah_rumah',
+          filters,
+          limit,
+          Object.assign(_w('mutabaah_rumah', 'id,siswa_id,nis,siswa_nis,nama_siswa,kelas,tanggal,belajar,shalat_subuh,shalat_dzuhur,shalat_ashar,shalat_maghrib,shalat_isya,shalat_count,akhlak,kendala_wali,keterangan_guru,konfirmasi_wali,status_review,catatan', 'tanggal'), {
+            offset: offset,
+            gte: range.gte,
+            lte: range.lte
+          })
+          );
+        };
+        var _mutabaahRaw = await _mutabaahFetch(_mutabaahMonth, _mutabaahOffset, _mutabaahLimit);
+        // Bila bulan berjalan kosong, cari bulan terakhir yang memiliki data lalu ambil
+        // hanya bulan tersebut. Ini menjaga layar tidak kosong pada awal tahun ajaran.
+        if(!_mutabaahRaw.length && !_mutabaahOffset && !clean(options.mutabaahMonth || '')){
+          var _latestMutabaah = await tryFilteredList('mutabaah_rumah', filters, 1, _w(
+            'mutabaah_rumah', 'id,tanggal', 'tanggal'
+          ));
+          var _latestDate = _latestMutabaah && _latestMutabaah[0] && String(_latestMutabaah[0].tanggal || '').slice(0, 7);
+          if(_latestDate && _latestDate !== _mutabaahMonth){
+            _mutabaahMonth = _latestDate;
+            _mutabaahRaw = await _mutabaahFetch(_mutabaahMonth, _mutabaahOffset, _mutabaahLimit);
+          }
+        }
+        _mutabaahRumahMonth = _mutabaahMonth;
+        _mutabaahRumahRows = filterMine((mobile.mutabaahRumah||[]).concat(Array.isArray(_mutabaahRaw) ? _mutabaahRaw : []));
+        _mutabaahRumahHasMore = Array.isArray(_mutabaahRaw) && _mutabaahRaw.length >= _mutabaahLimit;
+      }
+     var _sppPaymentRows = (_want('keuangan') || _want('paymentsDetail') || _want('keuanganSpp')) && options.sppSummaryOnly !== true
+       ? await safeList('payment_transactions', { eq: { siswa_id: siswaId }, select:_KOL_W_PAYMENTS, order:'created_at', ascending:false, limit:30 }) : [];
+     var _sppPaymentItems = [];
+     if(_sppPaymentRows.length){
+       var _sppTransactionIds = _sppPaymentRows.map(function(row){ return row && row.id; }).filter(Boolean);
+       _sppPaymentItems = await safeList('payment_transaction_items', { in: { transaction_id: _sppTransactionIds }, select:_KOL_W_PAYMENT_ITEMS, order:'created_at', ascending:false, limit:100 });
+     }
+     var _badgeCatatan = [];
+     var _badgeCalistung = [];
+       if(options.badges){
+         var _badgeSummary = await getWaliBadgeSummary(siswaId, nis);
+         if(_badgeSummary && _badgeSummary.data){
+           _badgeCatatan = { count: Number(_badgeSummary.data.catatan_count || 0), ids: _badgeSummary.data.catatan_ids || [] };
+           _badgeCalistung = { count: Number(_badgeSummary.data.calistung_count || 0), ids: _badgeSummary.data.calistung_ids || [] };
+         }
     }
     return {
-       badgeCatatan: _badgeCatatan,
-       badgeCalistung: _badgeCalistung,
-       absensi: _want('absensi') ? filterMine(mobile.absensi.concat(await tryFilteredList('absensi_siswa', filters, 80, _w('absensi_siswa', _KOL_W_ABSENSI)))) : [],
+        badgeCatatan: _badgeCatatan,
+        badgeCalistung: _badgeCalistung,
+        badgeSummary: {
+          catatan_count: _badgeCatatan && !Array.isArray(_badgeCatatan) ? _badgeCatatan.count : 0,
+          catatan_ids: _badgeCatatan && !Array.isArray(_badgeCatatan) ? _badgeCatatan.ids : [],
+          calistung_count: _badgeCalistung && !Array.isArray(_badgeCalistung) ? _badgeCalistung.count : 0,
+          calistung_ids: _badgeCalistung && !Array.isArray(_badgeCalistung) ? _badgeCalistung.ids : []
+        },
+       absensi: _absensiRows,
+       absensiHasMore: _absensiHasMore,
+       absensiMonth: _absensiMonth,
        nilai: _want('nilai') ? filterMine(mobile.nilai
          // nilai_siswa TIDAK punya kolom `tanggal` (sudah diperiksa ke server) -> urut created_at.
          .concat(await tryFilteredList('nilai_siswa', nilaiFilters, 80, _w('nilai_siswa', _KOL_W_NILAI, 'created_at', true)))
@@ -1821,7 +1938,9 @@
          (baris 2031) dihitung lalu dibuang tanpa pernah dirender. Tidak ada `sm.membaca_quran`
          di mana pun, dan 'membaca_quran' bukan dataKey mana pun di waliModuleDataKey(). */
       membaca_quran: mobile.membaca_quran,
-       mutabaahRumah: _want('mutabaahRumah') ? filterMine((mobile.mutabaahRumah||[]).concat(await tryFilteredList('mutabaah_rumah', filters, 50, _w('mutabaah_rumah', _KOL_W_MUTABAAH_RUMAH)))) : [],
+       mutabaahRumah: _mutabaahRumahRows,
+       mutabaahRumahHasMore: _mutabaahRumahHasMore,
+       mutabaahRumahMonth: _mutabaahRumahMonth,
       /* [EGRESS TABEL HANTU] Tabel `mutabaah_quran` TIDAK ADA di database (REST balas
          HTTP 404 PGRST205 "Could not find the table"). Dari log edge 24 jam: 10.229
          request/hari dari app wali ke tabel ini, SEMUANYA 404, plus preflight OPTIONS-nya.
@@ -1836,17 +1955,17 @@
        prestasi: _want('perkembangan') ? filterMine(await tryFilteredList('prestasi', filters, 50, _w('prestasi', _KOL_W_PRESTASI))) : [],
        pelanggaran: _want('perkembangan') ? filterMine(await tryFilteredList('pelanggaran_siswa', filters, 50, _w('pelanggaran_siswa', _KOL_W_PELANGGARAN))) : [],
        surat: _want('surat') ? filterMine(mobile.surat.concat(await tryFilteredList('surat', filters, 50, _w('surat', _KOL_W_SURAT)))) : [],
-       keuangan: _want('keuangan') ? filterMine(
-         mobile.keuangan
-           // tagihan_spp juga tidak punya kolom `tanggal`.
-           .concat((await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at'))).map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }))
-           .concat((await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))).map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }))
-        ) : [],
-       payments: _want('keuangan') ? await safeList('payment_transactions', { select:_KOL_W_PAYMENTS, order:'created_at', ascending:false, limit:50 }) : [],
-       tabungan: _want('keuangan') ? filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 90, _w('tabungan_siswa', _KOL_W_TABUNGAN)))) : [],
-       tabunganUmum: _want('keuangan') ? filterMine(await tryFilteredList('tabungan_umum', filters, 90, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))) : [],
+        tagihanSpp: (_want('keuangan') || _want('keuanganSpp') || _want('keuanganDetail')) && options.sppSummaryOnly !== true ? filterMine(await tryFilteredList('tagihan_spp', filters, 30, _w('tagihan_spp', _KOL_W_TAGIHAN, 'created_at'))).map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }) : [],
+         keuangan: (_want('keuangan') || _want('keuanganDetail')) && options.sppSummaryOnly !== true ? filterMine(
+          mobile.keuangan
+            .concat((await tryFilteredList('keuangan', filters, 30, _w('keuangan', _KOL_W_KEUANGAN))).map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }))
+         ) : [],
+        payments: _sppPaymentRows,
+        paymentItems: _sppPaymentItems,
+         tabungan: (_want('keuangan') || _want('keuanganDetail') || _want('tabunganDetail')) && options.financeSummaryOnly !== true ? filterMine(mobile.tabungan.concat(await tryFilteredList('tabungan_siswa', filters, 30, _w('tabungan_siswa', _KOL_W_TABUNGAN)))) : [],
+         tabunganUmum: (_want('keuangan') || _want('keuanganDetail') || _want('tabunganUmumDetail')) && options.financeSummaryOnly !== true ? filterMine(await tryFilteredList('tabungan_umum', filters, 30, _w('tabungan_umum', _KOL_W_TABUNGAN_UMUM))) : [],
        ekskul: _want('perkembangan') ? await safeList('ekskul', { select: _KOL_EKSKUL_WALI, limit: 50 }) : [],
-       pengumuman: _want('pengumuman') ? mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: 30 }))) : []
+        pengumuman: (_want('pengumuman') || _want('pengumumanDetail')) ? mobile.pengumuman.concat(_rapikanPengumuman(await safeList('pengumuman', { select: _KOL_PENGUMUMAN, order: 'created_at', ascending: false, limit: Number(options.announcementLimit) > 0 ? Number(options.announcementLimit) : 30 }))) : []
     };
   }
 
@@ -2016,7 +2135,7 @@
     signIn, signOut, readSession, saveSession, clearSession,
     getDeviceId, registerActiveSession, checkActiveSession,
     routeForRole, roleKey, loadGuruContext, loadWaliContext, loadGuruModuleData, loadWaliModuleData,
-    MODULE_FORM_SCHEMA, saveDeviceToken,
+    MODULE_FORM_SCHEMA, saveDeviceToken, getWaliSppSummary, getWaliAbsensiSummary, getWaliBadgeSummary,
     uploadPdfFile, storage,
     getActiveChildId, setActiveChildId, loadWaliChildren
   };
