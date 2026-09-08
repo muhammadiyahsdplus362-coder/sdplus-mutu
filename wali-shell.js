@@ -1,7 +1,6 @@
 const STORAGE_KEY = 'zymata-wali-shell-v1';
 const ROLE_CHOOSER_PATH = 'index.html?choose=1';
-// Ubah ke true hanya setelah QRIS production DOKU berstatus ACTIVE.
-const QRIS_PAYMENT_ENABLED = false;
+// Status metode pembayaran dibaca dari Edge Function DOKU. Secret tetap di server.
 
 (function guardWaliShellRole(){
   try {
@@ -42,6 +41,7 @@ const appState = {
   financeStatus: 'belum',        // 'lunas' | 'belum' | 'terlambat'
   financeBulan: 0,               // [LABEL TAGIHAN SPP] jumlah bulan belum lunas
   financeNote: '-',              // [LABEL TAGIHAN SPP] keterangan bawah kartu
+  _waliSppSummary: null,
   infaqAmount: 10000,            // Prototype UI saja; belum membuat transaksi
   infaqPreviewOpen: false,
   tabunganSaldo: 'Rp0',
@@ -57,6 +57,8 @@ const appState = {
   todayAttendance: 'belum',      // 'hadir' | 'izin' | 'sakit' | 'alpa' | 'belum'
   todayCheckIn: '',
   todayCheckInIsDefault: false,
+  _waliAbsensiSummary: null,
+  _waliBadgeSummary: null,
   // Hafalan
   hafalanSurah: '-',
   hafalanProgress: '',
@@ -180,7 +182,7 @@ const mutabaahModules = [
 ];
 
 const moreModules = [
-  { id: 'keuangan',       icon: ICONS.keuangan,   title: 'Keuangan',    meta: 'SPP, tabungan, dan tagihan lain',    route: 'module:keuangan',      group: 'Administrasi' },
+  { id: 'keuangan',       icon: ICONS.keuangan,   title: 'SPP Anak',    meta: 'Tagihan, status, dan jatuh tempo SPP', route: 'module:keuangan',      group: 'Administrasi' },
   { id: 'pengumuman-wali',icon: ICONS.pengumuman, title: 'Pengumuman',  meta: 'Info sekolah dan agenda penting',    route: 'module:pengumuman-wali',group: 'Informasi'   },
   { id: 'program-kegiatan',icon: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14"/><path d="M7 2v3"/><path d="M13 2v3"/></svg>`, title: 'Program Kegiatan', meta: 'Agenda & kegiatan sekolah', route: 'module:program-kegiatan', group: 'Informasi' },
   { id: 'surat-wali',     icon: ICONS.surat,      title: 'Surat/Izin',  meta: 'Ajukan izin dan cek status surat',   route: 'module:surat-wali',    group: 'Administrasi' },
@@ -248,8 +250,8 @@ const moduleDetails = {
   },
   keuangan: {
     eyebrow: 'Administrasi',
-    title: 'Keuangan',
-    subtitle: 'SPP, tabungan, dan tagihan lain dibuat ringkas agar wali cepat paham status dan jatuh tempo.',
+    title: 'SPP Anak',
+    subtitle: 'Daftar tagihan SPP anak beserta status lunas, belum lunas, dan jatuh tempo.',
     stats: [["Belum", "0"]],
     focus: []
   },
@@ -397,6 +399,9 @@ function saveWaliDataCache() {
       childNis: appState.childNis,
       waliTitle: appState.waliTitle,
       childProfile: childProfile,
+      sppSummary: appState._waliSppSummary,
+      absensiSummary: appState._waliAbsensiSummary,
+      badgeSummary: appState._waliBadgeSummary,
       supabaseModules: appState.supabaseModules,
       announcements: announcements,
       waliCalistungRows: appState.waliCalistungRows
@@ -418,11 +423,14 @@ function loadWaliDataCache() {
     if (c.childName) appState.childName = c.childName;
     if (c.childClass) appState.childClass = c.childClass;
     if (c.childNis) appState.childNis = c.childNis;
-    if (c.waliTitle) appState.waliTitle = c.waliTitle;
+     if (c.waliTitle) appState.waliTitle = c.waliTitle;
+     if (c.sppSummary && typeof c.sppSummary === 'object') appState._waliSppSummary = c.sppSummary;
+     if (c.absensiSummary && typeof c.absensiSummary === 'object') appState._waliAbsensiSummary = c.absensiSummary;
+     if (c.badgeSummary && typeof c.badgeSummary === 'object') appState._waliBadgeSummary = c.badgeSummary;
     if (c.childProfile && typeof c.childProfile === 'object') {
       Object.keys(c.childProfile).forEach(function(k){ if (c.childProfile[k] != null && c.childProfile[k] !== '') childProfile[k] = c.childProfile[k]; });
     }
-    if (Array.isArray(c.announcements)) { announcements.splice(0, announcements.length); c.announcements.forEach(function(a){ announcements.push(a); }); }
+     if (Array.isArray(c.announcements)) { announcements.splice(0, announcements.length); c.announcements.forEach(function(a){ announcements.push(a); }); }
     if (Array.isArray(c.waliCalistungRows)) appState.waliCalistungRows = c.waliCalistungRows;
     try { computeWaliRecap(); } catch (_e) {}
     try { syncWaliFinanceState(); } catch (_e) {}
@@ -468,6 +476,7 @@ function markWaliSeen(kind) {
       appState.unreadAnnouncements = 0;
     } else if (kind === 'catatan') {
       var keysC = (sm.catatan || []).map(waliItemKey);
+      if(!keysC.length && appState._waliBadgeSummary && Array.isArray(appState._waliBadgeSummary.catatan_ids)) keysC = appState._waliBadgeSummary.catatan_ids.slice();
       appState.seenNotes = Array.from(new Set((appState.seenNotes || []).concat(keysC)));
       appState.unreadNotes = 0;
     }
@@ -505,6 +514,10 @@ function recomputeWaliModuleBadges() {
       var rows = waliModuleRows(mod);
       var n = 0;
       rows.forEach(function(r){ if (seen.indexOf(waliItemKey(r)) === -1) n++; });
+      if(mod === 'calistung' && appState._waliBadgeSummary){
+        var calIds = Array.isArray(appState._waliBadgeSummary.calistung_ids) ? appState._waliBadgeSummary.calistung_ids : [];
+        n = calIds.length ? calIds.filter(function(id){ return seen.indexOf(String(id)) === -1; }).length : Number(appState._waliBadgeSummary.calistung_count || 0);
+      }
       appState.unreadModules[mod] = n;
     });
   } catch (_) {}
@@ -755,6 +768,7 @@ function syncWaliFinanceState(){
   if(!tagihanList.length){ try { var rawTag = localStorage.getItem('zymata_tagihan_spp_v1'); if(rawTag){ var arrTg = JSON.parse(rawTag); if(Array.isArray(arrTg)) tagihanList = arrTg; } } catch(e){} }
   if(!tabData.length){ try { var rawTab = localStorage.getItem('sdplus_tabungan_v1'); if(rawTab){ var arrTb = JSON.parse(rawTab); if(Array.isArray(arrTb)) tabData = arrTb; } } catch(e){} }
   var tagihanAnak = tagihanList.filter(waliRowMilikAnak); // [KUNCI NIS KARTU KEUANGAN]
+  var sppSummary = appState._waliSppSummary;
   var tabAnak = tabData.filter(waliRowMilikAnak);         // [KUNCI NIS KARTU KEUANGAN]
   var belumBayar = tagihanAnak.filter(function(t){ return !waliSppLunas(t); });
   var totalTagihan = belumBayar.reduce(function(s,t){ return s + Number(t.nominal||0); }, 0);
@@ -775,7 +789,18 @@ function syncWaliFinanceState(){
     saldoUmum=Number(rpc.saldo_tabungan_umum||0);
   }
   if(appState.syncMode === 'supabase-empty') return;
-  if(tagihanAnak.length > 0){
+  if(sppSummary && typeof sppSummary === 'object'){
+    var _sppCount = Number(sppSummary.jumlah_belum_lunas || 0);
+    var _sppTotal = Number(sppSummary.total_belum_lunas || 0);
+    appState.financeAmount = 'Rp ' + _sppTotal.toLocaleString('id-ID');
+    appState.financeDue = sppSummary.jatuh_tempo_terdekat || '-';
+    appState.financeStatus = String(sppSummary.status || (_sppCount ? 'belum' : 'lunas'));
+    appState.financeBulan = _sppCount;
+    appState.financeNote = _sppCount > 1
+      ? (_sppCount + ' bulan belum lunas')
+      : (_sppCount === 1 ? ('Jatuh tempo ' + (appState.financeDue || '-')) : 'Semua lunas');
+  }
+  if(tagihanAnak.length > 0 && !sppSummary){
     appState.financeAmount = 'Rp ' + Number(totalTagihan).toLocaleString('id-ID');
     appState.financeDue = belumBayar.length ? (waliSppJatuhTempo(belumBayar[0]) || '-') : '-';
     appState.financeStatus = belumBayar.length ? 'belum' : 'lunas';
@@ -866,8 +891,8 @@ function waliIstirahatAntar(prev, cur, labels){
 
 function renderJadwalHariIniCard() {
   var kelasNow = String(childProfile.className || appState.childClass || '').replace(/^kelas\s+/i, '').trim();
-  if (!appState.waliJadwalLoaded || appState.waliJadwalKelas !== kelasNow) {
-    loadWaliJadwal().then(function(){ if (appState.activeTab === 'home') render(); });
+  if (!appState.waliJadwalLoaded || appState.waliJadwalKelas !== kelasNow || appState.waliJadwalScope !== 'today') {
+    loadWaliJadwal(true).then(function(){ if (appState.activeTab === 'home') render(); });
     return '<div class="lux-section-head"><span>Jadwal hari ini</span></div>' +
       '<div class="lux-timeline"><div class="lux-tl-item"><span class="lux-tl-dot blue"></span>' +
       '<div class="lux-tl-body"><span class="lux-tl-title">Memuat jadwal\u2026</span><span class="lux-tl-meta">Kelas ' + (kelasNow || '-') + '</span></div></div></div>';
@@ -1263,8 +1288,8 @@ function renderMore() {
           <span class="wfi-label">Infaq Subuh</span>
           <strong class="wfi-amount">Sukarela</strong>
           <div class="wfi-status">
-            <span class="wfi-badge blue">Segera hadir</span>
-            <span class="wfi-due">Aktivasi DOKU berlangsung</span>
+            <span class="wfi-badge green">Aktif</span>
+            <span class="wfi-due">Pembayaran melalui DOKU Checkout</span>
           </div>
         </button>
       </div>
@@ -1349,6 +1374,7 @@ function waliModuleDataKey(moduleId) {
     'perkembangan-anak': 'catatan',
     'mutabaah-rumah': 'mutabaahRumah',
     'keuangan': 'keuangan',
+    'keuangan-spp': 'tagihanSpp',
     'pengumuman-wali': 'pengumuman',
     'surat-wali': 'surat'
   };
@@ -1709,16 +1735,20 @@ function waliRiwayatFilterUI(title, dates){
 // [RIWAYAT SEBULAN PENUH] Penyaring bulan saja, tanpa dropdown tanggal.
 // Seluruh tanggal dalam bulan terpilih ditampilkan sekaligus (dikelompokkan per
 // tanggal), sedangkan antar bulan tetap dipisah lewat dropdown Bulan.
-function waliRiwayatFilterBulanUI(title, dates){
+function waliRiwayatFilterBulanUI(title, dates, extraMonths){
   try { ensureWaliRiwayatFilterStyles(); } catch(e){ console.warn('[RIWAYAT SEBULAN PENUH] gagal pasang gaya', e); }
   var kunci = waliKunciRiwayat(title);
   appState.waliRiwayatBulan = appState.waliRiwayatBulan || {};
   var bulanIsi = {}, bulanUrut = [];
-  (dates || []).forEach(function(d){
-    var b = waliBulanDariTgl(d);
-    if (!bulanIsi[b]) { bulanIsi[b] = []; bulanUrut.push(b); }
-    bulanIsi[b].push(d);
-  });
+   (dates || []).forEach(function(d){
+     var b = waliBulanDariTgl(d);
+     if (!bulanIsi[b]) { bulanIsi[b] = []; bulanUrut.push(b); }
+     bulanIsi[b].push(d);
+   });
+   (extraMonths || []).forEach(function(b){
+     b = String(b || '').slice(0, 7);
+     if (/^\d{4}-\d{2}$/.test(b) && !bulanIsi[b]) { bulanIsi[b] = []; bulanUrut.push(b); }
+   });
   bulanUrut.sort().reverse();
   var bulanIni = waliBulanDariTgl(waliHariIniISO());
   var bulan = appState.waliRiwayatBulan[kunci];
@@ -1747,7 +1777,9 @@ function renderWaliRiwayatList(title, arr, dateOf, itemOf, emptyTitle, emptyMeta
       + '</div></div></details></section>';
   }
   var groups = {}, noDate = [];
-  arr = arr.slice().sort(function(a,b){ return String(dateOf(b)||'').slice(0,10).localeCompare(String(dateOf(a)||'').slice(0,10)); });
+  arr = arr.slice().sort(function(a,b){
+    return String(dateOf(b)||'').localeCompare(String(dateOf(a)||''));
+  });
   arr.forEach(function(r){ var d=String(dateOf(r)||'').slice(0,10); if(d && d!=='-'){ (groups[d]=groups[d]||[]).push(r); } else { noDate.push(r); } });
   var dates = Object.keys(groups).sort().reverse();
   // [RIWAYAT SEBULAN PENUH] Pilih bulan saja; semua tanggal di bulan itu langsung tampil.
@@ -1832,7 +1864,13 @@ function renderWaliMutabaahRumahRiwayat(list){
   // [RIWAYAT BULAN] Bulan dulu, baru tanggal.
   var _adaTgl = {};
   sorted.forEach(function(r){ var d=String(r.tanggal||r.tgl||'').slice(0,10); if(d) _adaTgl[d]=true; });
-  var _ui = waliRiwayatFilterBulanUI('Mutabaah Rumah', Object.keys(_adaTgl).sort().reverse());
+   var _knownMonths = [];
+   var _monthCursor = new Date();
+   for(var _mi = 0; _mi < 24; _mi++){
+     _knownMonths.push(_monthCursor.getFullYear() + '-' + String(_monthCursor.getMonth() + 1).padStart(2, '0'));
+     _monthCursor.setMonth(_monthCursor.getMonth() - 1);
+   }
+   var _ui = waliRiwayatFilterBulanUI('Mutabaah Rumah', Object.keys(_adaTgl).sort().reverse(), _knownMonths);
   var _tglSet = {};
   (_ui.tglBulan || []).forEach(function(d){ _tglSet[d] = 1; });
   var _pilih = sorted.filter(function(r){ return !!_tglSet[String(r.tanggal||r.tgl||'').slice(0,10)]; });
@@ -1859,8 +1897,11 @@ function renderWaliMutabaahRumahRiwayat(list){
        + (String(r.catatan||'').trim() ? '<p class="card-meta" style="margin:2px 0"><b>Keterangan:</b> '+esc(r.catatan)+'</p>' : '')
        + kendalaHtml + guruNoteHtml
       + '</article>';
-  }).join('');
-  return '<section class="section"><details class="riwayat-absen-toggle" open style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
+     }).join('');
+   if(_waliMutabaahPage.hasMore){
+      cards += '<button type="button" class="field-chip" data-action="loadMoreWaliMutabaah" style="width:100%;margin-top:10px;justify-content:center">Muat 30 riwayat lagi</button>';
+   }
+   return '<section class="section"><details class="riwayat-absen-toggle" open style="border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px;background:#fff">'
     + sumOpen + '<span class="riwayat-absen-title">'+head+'</span><span class="riwayat-absen-hint" style="font-size:11px;color:#94a3b8;font-weight:700">'+arr.length+' entri \u203A</span></summary>'
     + '<div class="riwayat-absen-body" style="padding-top:8px">'+cards+'</div></details></section>';
 }
@@ -1897,8 +1938,9 @@ function renderSupabaseWaliFormModule(detail, rows, moduleId, crudKey) {
   `;
 }
 
-async function loadWaliJadwal() {
+async function loadWaliJadwal(todayOnly) {
   appState.waliJadwalLoaded = false;
+  appState.waliJadwalScope = todayOnly ? 'today' : 'week';
   var helper = window.ZymataMobileSupabase;
   var raw = String(childProfile.className || appState.childClass || '').trim();
   var stripped = raw.replace(/^kelas\s+/i, '').trim();
@@ -1911,6 +1953,13 @@ async function loadWaliJadwal() {
   var tries = [];
   [stripped, 'Kelas ' + stripped, raw].forEach(function(v){ v = String(v || '').trim(); if (v && tries.indexOf(v) === -1) tries.push(v); });
   var rows = [];
+  var jsDay = new Date().getDay();
+  var todayHari = jsDay === 0 ? -1 : jsDay - 1;
+  if(todayOnly && todayHari < 0){
+    appState.waliJadwal = [];
+    appState.waliJadwalLoaded = true;
+    return;
+  }
   // [EGRESS KOLOM WALI] renderJadwalAnak hanya memakai: hari_index, jam_index,
   // jam_label/jam (lihat waliJamJadwal), mapel, guru. Tabel jadwal_pelajaran punya
   // 19 kolom termasuk `payload` yang tidak dipakai sama sekali di aplikasi wali.
@@ -1918,7 +1967,9 @@ async function loadWaliJadwal() {
   var _KOL_JADWAL = 'hari_index,jam_index,jam_label,jam,mapel,guru';
   for (var i = 0; i < tries.length; i++) {
     try {
-      var res = await helper.select('jadwal_pelajaran', { eq: { kelas: tries[i] }, select: _KOL_JADWAL, limit: 300 });
+      var _jadwalOpt = { eq: { kelas: tries[i] }, select: _KOL_JADWAL, limit: todayOnly ? 30 : 300 };
+      if(todayOnly) _jadwalOpt.eq.hari_index = todayHari;
+      var res = await helper.select('jadwal_pelajaran', _jadwalOpt);
       var rws = Array.isArray(res && res.data) ? res.data : (Array.isArray(res) ? res : []);
       if (rws.length) { rows = rws; break; }
     } catch (e) { console.warn('[Jadwal Wali] gagal load:', e); }
@@ -1929,8 +1980,8 @@ async function loadWaliJadwal() {
 
 function renderJadwalAnak(detail) {
   var kelasNow = String(childProfile.className || appState.childClass || '').replace(/^kelas\s+/i, '').trim();
-  if (!appState.waliJadwalLoaded || appState.waliJadwalKelas !== kelasNow) {
-    loadWaliJadwal().then(function(){ if (appState.activeTab === 'module:jadwal-anak') render(); });
+  if (!appState.waliJadwalLoaded || appState.waliJadwalKelas !== kelasNow || appState.waliJadwalScope !== 'week') {
+    loadWaliJadwal(false).then(function(){ if (appState.activeTab === 'module:jadwal-anak') render(); });
     return `
       ${moduleIntro(detail, moduleParentTab('jadwal-anak'))}
       <section class="section">
@@ -2058,6 +2109,65 @@ function renderProgramKegiatanWali(detail) {
 }
 
 var dokuPaymentBusy = false;
+var WALI_PAYMENT_METHODS = [
+  { code:'QRIS', label:'QRIS', fee:'0,7%', percent:0.7, logo:'https://upload.wikimedia.org/wikipedia/commons/a/a2/Logo_QRIS.svg' },
+  { code:'VIRTUAL_ACCOUNT_BRI', label:'VA BRI', fee:'Rp4.000', feeValue:4000, logo:'https://upload.wikimedia.org/wikipedia/commons/f/f5/BANK_BRI_logo_%28vertical%29.svg' },
+  { code:'VIRTUAL_ACCOUNT_BNI', label:'VA BNI', fee:'Rp4.000', feeValue:4000, logo:'https://upload.wikimedia.org/wikipedia/commons/f/f0/Bank_Negara_Indonesia_logo_%282004%29.svg' },
+  { code:'VIRTUAL_ACCOUNT_BANK_MANDIRI', label:'VA Mandiri', fee:'Rp4.000', feeValue:4000, logo:'https://upload.wikimedia.org/wikipedia/commons/a/ad/Bank_Mandiri_logo_2016.svg' },
+  { code:'VIRTUAL_ACCOUNT_BANK_CIMB', label:'VA CIMB Niaga', fee:'Rp4.000', feeValue:4000, logo:'https://upload.wikimedia.org/wikipedia/commons/3/38/CIMB_Niaga_logo.svg' },
+  { code:'VIRTUAL_ACCOUNT_BANK_SYARIAH_MANDIRI', label:'VA BSI', fee:'Rp4.000', feeValue:4000, logo:'https://www.bsi.co.id/favicon.ico' },
+  { code:'VIRTUAL_ACCOUNT_DOKU', label:'VA Bank Lain', fee:'Rp4.000', feeValue:4000, logo:'https://www.doku.com/favicon.ico' },
+  { code:'ONLINE_TO_OFFLINE_ALFA', label:'Alfamart', fee:'Rp5.000', feeValue:5000, logo:'https://upload.wikimedia.org/wikipedia/commons/8/86/Alfamart_logo.svg' },
+  { code:'ONLINE_TO_OFFLINE_INDOMARET', label:'Indomaret', fee:'Rp6.500', feeValue:6500, logo:'https://upload.wikimedia.org/wikipedia/commons/4/44/Indomaret.svg' },
+  { code:'EMONEY_DOKU', label:'E-wallet DOKU', fee:'1,5%', percent:1.5, logo:'https://www.doku.com/favicon.ico' },
+];
+function waliPaymentMethodByCode(code){ return WALI_PAYMENT_METHODS.find(function(m){ return m.code === String(code || ''); }) || WALI_PAYMENT_METHODS[0]; }
+function waliPaymentFee(code, baseAmount){
+  var method=waliPaymentMethodByCode(code), base=Math.max(0,Math.floor(Number(baseAmount)||0));
+  return method.percent ? Math.ceil(base*method.percent/100) : Number(method.feeValue||0);
+}
+function waliPaymentMethodOptions(selected){
+  return WALI_PAYMENT_METHODS.map(function(m){ return '<option value="'+waliPaymentEsc(m.code)+'"'+(m.code===selected?' selected':'')+'>'+waliPaymentEsc(m.label)+'</option>'; }).join('');
+}
+function waliPaymentLogo(method){
+  var initial=String(method.label||'').replace(/^VA\s+/i,'').charAt(0).toUpperCase()||'P';
+  return '<span class="wali-method-icon"><img src="'+waliPaymentEsc(method.logo||'')+'" alt="" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><span class="wali-method-fallback">'+waliPaymentEsc(initial)+'</span></span>';
+}
+function waliClosePaymentMethodModal(){
+  var modal=document.getElementById('wali-payment-method-modal');
+  if(modal) modal.remove();
+}
+function waliOpenPaymentMethodModal(options){
+  options=options||{};
+  waliClosePaymentMethodModal();
+  var modal=document.createElement('div');
+  modal.id='wali-payment-method-modal';
+  modal.innerHTML='<style>'
+    +'.wali-method-backdrop{position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.48);display:flex;align-items:flex-end;justify-content:center;padding:14px}'
+    +'.wali-method-sheet{width:min(480px,100%);max-height:86vh;overflow:auto;background:#fff;border-radius:20px;padding:18px;box-shadow:0 24px 80px rgba(15,23,42,.28)}'
+    +'.wali-method-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}'
+    +'.wali-method-head h3{margin:0;color:#172033;font-size:17px}.wali-method-head p{margin:4px 0 0;color:#64748b;font-size:12px;line-height:1.45}'
+    +'.wali-method-close{width:32px;height:32px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#64748b;font-size:20px;line-height:1;cursor:pointer}'
+    +'.wali-method-list{display:grid;gap:8px}.wali-method-choice{display:flex;align-items:center;gap:12px;width:100%;min-height:54px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;color:#172033;text-align:left;cursor:pointer;font:600 13px/1.2 inherit}.wali-method-choice:hover{border-color:#f97316;background:#fff7ed}.wali-method-icon{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:#f1f5f9;color:#475569;flex:none;overflow:hidden}.wali-method-icon img{display:block;width:26px;height:26px;object-fit:contain}.wali-method-fallback{display:none;align-items:center;justify-content:center;width:100%;height:100%;font-size:14px;font-weight:800}.wali-method-choice span:last-child{flex:1}.wali-method-foot{margin-top:14px;color:#94a3b8;font-size:11px;text-align:center;line-height:1.45}'
+    +'</style><div class="wali-method-backdrop" data-payment-method-close><div class="wali-method-sheet" role="dialog" aria-modal="true" aria-label="Pilih metode pembayaran">'
+    +'<div class="wali-method-head"><div><h3>Pilih metode pembayaran</h3><p>Metode yang dipilih akan diproses melalui DOKU Checkout.</p></div><button type="button" class="wali-method-close" data-payment-method-close aria-label="Tutup">&times;</button></div>'
+    +'<div class="wali-method-list">'+WALI_PAYMENT_METHODS.map(function(m){ return '<button type="button" class="wali-method-choice" data-payment-method-choice="'+waliPaymentEsc(m.code)+'">'+waliPaymentLogo(m)+'<span>'+waliPaymentEsc(m.label)+'</span><span aria-hidden="true">&#8250;</span></button>'; }).join('')+'</div>'
+    +'<p class="wali-method-foot">Total pembayaran akan disesuaikan otomatis berdasarkan metode yang dipilih.</p></div></div>';
+  document.body.appendChild(modal);
+  modal.addEventListener('click',function(event){
+    if(event.target.closest('[data-payment-method-close]') && !event.target.closest('.wali-method-sheet')) waliClosePaymentMethodModal();
+    if(event.target.closest('.wali-method-close')) waliClosePaymentMethodModal();
+    var choice=event.target.closest('[data-payment-method-choice]');
+    if(!choice) return;
+    var method=choice.getAttribute('data-payment-method-choice');
+    waliClosePaymentMethodModal();
+    var pendingAmount=options.amount == null ? null : Number(options.amount||0);
+    var pending=waliPendingPayment(options.paymentType,pendingAmount,options.referenceId||null,method);
+    if(options.paymentType==='spp_batch') pending=waliPendingPayment('spp_batch',pendingAmount,null,method);
+    if(pending) waliResumeDokuPayment(pending,options.button);
+    else waliStartDokuPayment(Object.assign({},options,{paymentMethod:method}),options.button);
+  });
+}
 function waliPaymentEsc(value){
   return String(value == null ? '' : value).replace(/[&<>"']/g, function(char){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char];
@@ -2069,11 +2179,38 @@ function waliDokuCheckoutUrlAllowed(value){
     return url.protocol === 'https:' && /(^|\.)doku\.com$/i.test(url.hostname);
   } catch(_) { return false; }
 }
+function waliPendingPayment(paymentType, amount, referenceId, paymentMethod){
+  var rows = ((appState.supabaseModules && appState.supabaseModules.payments) || []).filter(function(row){
+    if(!row || waliPaymentStatus(row) !== 'pending' || !row.checkout_url) return false;
+    if(row.payment_type !== paymentType) return false;
+    if(referenceId && String(row.reference_id || '') !== String(referenceId)) return false;
+    if(amount != null && Number(row.base_amount || row.amount || 0) !== Number(amount || 0)) return false;
+    if(paymentMethod && String(row.payment_method || '') !== String(paymentMethod)) return false;
+    return true;
+  }).sort(function(a,b){ return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+  return rows[0] || null;
+}
+function waliPaymentStatus(payment){
+  if(!payment) return '';
+  var status = String(payment.status || '').trim().toLowerCase();
+  if(status === 'pending' && payment.expires_at){
+    var expiresAt = new Date(payment.expires_at).getTime();
+    if(!isNaN(expiresAt) && expiresAt <= Date.now()) return 'expired';
+  }
+  return status;
+}
+function waliResumeDokuPayment(payment, button){
+  var checkoutUrl = payment && payment.checkout_url;
+  if(!waliDokuCheckoutUrlAllowed(checkoutUrl)) { waliShowSaveError('Checkout sudah kedaluwarsa. Silakan buat pembayaran baru.'); return; }
+  if(typeof window.loadJokulCheckout !== 'function') { waliShowSaveError('Komponen DOKU Checkout gagal dimuat.'); return; }
+  window.loadJokulCheckout(checkoutUrl);
+  waliShowSaveOk('Melanjutkan Checkout DOKU yang masih aktif.');
+}
 async function waliStartDokuPayment(options, button){
   if(dokuPaymentBusy) return;
   dokuPaymentBusy = true;
   var oldText = button ? button.textContent : '';
-  if(button){ button.disabled=true; button.textContent='Menyiapkan QRIS...'; button.setAttribute('aria-busy','true'); }
+  if(button){ button.disabled=true; button.textContent='Menyiapkan pembayaran...'; button.setAttribute('aria-busy','true'); }
   try {
     if(!window.ZymataMobileSupabase) throw new Error('Koneksi pembayaran belum siap.');
     var client = window.ZymataMobileSupabase.getClient();
@@ -2091,22 +2228,23 @@ async function waliStartDokuPayment(options, button){
         'x-device-id':window.ZymataMobileSupabase.getDeviceId()
       },
       body:JSON.stringify({
-        paymentType:options.paymentType,
-        siswaId:siswaId,
-        referenceId:options.referenceId || null,
-        amount:options.amount || null
+         paymentType:options.paymentType,
+         paymentMethod:options.paymentMethod || null,
+         siswaId:siswaId,
+         referenceId:options.referenceId || null,
+         referenceIds:Array.isArray(options.referenceIds) ? options.referenceIds : null,
+         amount:options.amount || null
       })
     });
     var data = await response.json().catch(function(){ return {}; });
-    if(!response.ok || !data.ok) {
-      if(data && data.code === 'QRIS_CHANNEL_INACTIVE') throw new Error('QRIS sandbox belum diaktifkan di akun DOKU. Aktifkan kanal QRIS pada DOKU Back Office.');
+     if(!response.ok || !data.ok) {
       throw new Error((data && data.error) || ('Gagal menyiapkan pembayaran ('+response.status+').'));
     }
     var checkoutUrl = data && data.transaction && data.transaction.checkout_url;
     if(!waliDokuCheckoutUrlAllowed(checkoutUrl)) throw new Error('URL Checkout DOKU tidak valid.');
     if(typeof window.loadJokulCheckout !== 'function') throw new Error('Komponen DOKU Checkout gagal dimuat. Periksa koneksi internet.');
     window.loadJokulCheckout(checkoutUrl);
-    waliShowSaveOk('DOKU Checkout dibuka. Selesaikan pembayaran melalui QRIS.');
+    waliShowSaveOk('DOKU Checkout dibuka. Selesaikan pembayaran.');
   } catch(error) {
     waliShowSaveError(error && error.message ? error.message : String(error));
   } finally {
@@ -2114,28 +2252,123 @@ async function waliStartDokuPayment(options, button){
     if(button && button.isConnected){ button.disabled=false; button.textContent=oldText; button.removeAttribute('aria-busy'); }
   }
 }
+async function waliSyncPendingPayments(){
+  try{
+    if(window.__waliPaymentSyncBusy) return;
+    window.__waliPaymentSyncBusy=true;
+    if(!window.ZymataMobileSupabase) return;
+    var client=window.ZymataMobileSupabase.getClient(), sessionResult=await client.auth.getSession();
+    var session=sessionResult&&sessionResult.data&&sessionResult.data.session;
+    if(!session||!session.access_token) return;
+    var rows=((appState.supabaseModules&&appState.supabaseModules.payments)||[]).filter(function(row){ return row&&row.status==='pending'&&row.invoice_number; });
+    if(!rows.length) return;
+    var changed=false;
+    for(var i=0;i<rows.length;i++){
+      var response=await fetch('https://hhcawtwbgfhivwfofdhx.functions.supabase.co/doku-payment/sync-status',{method:'POST',headers:{'Authorization':'Bearer '+session.access_token,'Content-Type':'application/json','x-device-id':window.ZymataMobileSupabase.getDeviceId()},body:JSON.stringify({invoiceNumber:rows[i].invoice_number})});
+      var data=await response.json().catch(function(){return {};});
+      if(response.ok&&data&&data.status==='paid') changed=true;
+    }
+    if(changed){
+      try{ if(typeof window.zmClearCache==='function') window.zmClearCache('tagihan_spp'); }catch(_e){}
+      await hydrateWaliFromSupabase();
+    }
+  }catch(error){ console.warn('[WaliPayment] sync status gagal:',error&&error.message?error.message:error); }
+  finally{ window.__waliPaymentSyncBusy=false; }
+}
 
 function renderWaliSppPayableList(rows){
   rows = (Array.isArray(rows) ? rows : []).filter(function(row){
     return row && row._zymata_source === 'tagihan_spp' && !waliSppLunas(row) && Number(row.nominal || 0) >= 1000 && row.id;
   });
   if(!rows.length) return '';
+  var selectedRows = rows;
+  var selectedTotal = selectedRows.reduce(function(total, row){ return total + Number(row.nominal || 0); }, 0);
+   var batchBar = '<div class="spp-batch-bar">'
+     +'<div class="spp-batch-summary"><span>'+selectedRows.length+' tagihan belum lunas · total tagihan</span><b>Rp '+selectedTotal.toLocaleString('id-ID')+'</b></div>'
+     +'<button type="button" class="payment-primary-button spp-batch-button" data-action="paySppSelected">Bayar</button>'
+     +'</div>';
   var lockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>';
-  return '<section class="section spp-payment-section"><div class="spp-pay-head"><div><span class="card-label">Pembayaran SPP</span><h3>Tagihan yang belum lunas</h3><p>Pilih tagihan lalu selesaikan melalui QRIS.</p></div><span class="status-pill orange">'+rows.length+' aktif</span></div>'
+   return '<section class="section spp-payment-section"><div class="spp-pay-head"><div><span class="card-label">Pembayaran SPP</span><h3>Tagihan yang belum lunas</h3><p>Pilih metode pembayaran yang paling nyaman.</p></div><span class="status-pill orange">'+rows.length+' aktif</span></div>'
+     + batchBar
+     + '<div class="payment-security-note">'+lockIcon+'<span>Pembayaran diproses aman melalui DOKU Checkout</span></div>'
     + '<div class="spp-pay-list">' + rows.map(function(row){
       var title = (row.keterangan || row.deskripsi || ('SPP '+(row.bulan||'')+' '+(row.tahun||''))).trim();
       var due = waliSppJatuhTempo(row) || '-';
-      return '<article class="spp-pay-item">'
+       return '<article class="spp-pay-item">'
         + '<div class="spp-pay-main"><span class="spp-pay-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-3-2-2 2-2-2-2 2-2-2-3 2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span>'
         + '<div class="spp-pay-copy"><strong>'+waliPaymentEsc(title)+'</strong><span>Jatuh tempo '+waliPaymentEsc(due)+'</span></div>'
-        + '<span class="spp-pay-status">Belum lunas</span></div>'
-        + '<div class="spp-pay-total"><span>Total pembayaran</span><b>Rp '+Number(row.nominal||0).toLocaleString('id-ID')+'</b></div>'
-        + (QRIS_PAYMENT_ENABLED
-          ? '<button type="button" class="payment-primary-button" data-doku-spp="'+waliPaymentEsc(row.id)+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3"/></svg><span>Bayar dengan QRIS</span></button>'
-          : '<button type="button" class="payment-primary-button is-locked" disabled aria-disabled="true">'+lockIcon+'<span>QRIS dalam proses aktivasi</span></button>')
-        + '<div class="payment-security-note">'+lockIcon+'<span>'+(QRIS_PAYMENT_ENABLED?'Diproses aman oleh DOKU':'Pendaftaran merchant DOKU sedang berlangsung')+'</span></div>'
-        + '</article>';
+         + '<span class="spp-pay-status">Belum lunas</span></div>'
+          + '<div class="spp-pay-total"><span>Nominal tagihan SPP</span><b>Rp '+Number(row.nominal||0).toLocaleString('id-ID')+'</b></div>'
+         + '</article>';
     }).join('') + '</div></section>';
+}
+
+function waliSppPaymentForBill(bill){
+  var payments = ((appState.supabaseModules && appState.supabaseModules.payments) || []).filter(function(payment){
+    return payment && (payment.payment_type === 'spp' || payment.payment_type === 'spp_batch') && String(payment.reference_id || '') === String(bill && bill.id || '');
+  }).sort(function(a,b){ return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+  if(payments[0]) return payments[0];
+  var paymentMap = {};
+  ((appState.supabaseModules && appState.supabaseModules.payments) || []).forEach(function(payment){ if(payment && payment.id) paymentMap[String(payment.id)] = payment; });
+  var items = ((appState.supabaseModules && appState.supabaseModules.paymentItems) || []).filter(function(item){ return item && String(item.tagihan_id || '') === String(bill && bill.id || ''); });
+  items.sort(function(a,b){ return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+  return items[0] && paymentMap[String(items[0].transaction_id || '')] ? paymentMap[String(items[0].transaction_id)] : null;
+}
+
+function waliSppHistoryRows(rows){
+  var bills=Array.isArray(rows) ? rows : [];
+  var payments=((appState.supabaseModules && appState.supabaseModules.payments)||[]).filter(function(p){ return p && (p.payment_type==='spp'||p.payment_type==='spp_batch'); });
+  var items=((appState.supabaseModules && appState.supabaseModules.paymentItems)||[]);
+  var out=[];
+  bills.forEach(function(row){
+    var billId=String(row&&row.id||'');
+    var attempts=payments.filter(function(p){
+      if(String(p.reference_id||'')===billId) return true;
+      if(p.payment_type!=='spp_batch') return false;
+      return items.some(function(item){ return String(item.transaction_id||'')===String(p.id||'') && String(item.tagihan_id||'')===billId; });
+    }).sort(function(a,b){ return String(a.created_at||'').localeCompare(String(b.created_at||'')); });
+    var paid=attempts.filter(function(p){ return waliPaymentStatus(p)==='paid'; }).pop();
+    if(!attempts.length || paid){
+      var item=Object.assign({},row);
+      if(paid){
+        item._doku_status='paid';
+        item._doku_date=paid.paid_at||paid.created_at||'';
+        item._doku_invoice=paid.invoice_number||'';
+        item._doku_method=paid.payment_method||'';
+        item._doku_fee=Number(paid.fee_amount||0);
+      }
+      out.push(item);
+    }
+    // Tampilkan seluruh percobaan yang belum berhasil, termasuk expired,
+    // failed, cancelled, dan pending. Transaksi paid diwakili baris SPP Lunas.
+    attempts.forEach(function(p){
+      var status=waliPaymentStatus(p)||'pending';
+      if(status==='paid') return;
+      out.push({
+        _zymata_payment_attempt:true,
+        nominal:Number(p.base_amount||p.amount||row.nominal||0),
+        bulan:row.bulan, tahun:row.tahun, nama_siswa:row.nama_siswa,
+        kelas:row.kelas, status:row.status, keterangan:'Percobaan pembayaran SPP',
+        _doku_status:status, _doku_date:p.created_at||'', _doku_invoice:p.invoice_number||'',
+        _doku_method:p.payment_method||'', _doku_fee:Number(p.fee_amount||0),
+        _doku_total:Number(p.amount||0)
+      });
+    });
+  });
+  return out.sort(function(a,b){
+    return String(b._doku_date||b.tanggal_bayar||b.created_at||'').localeCompare(String(a._doku_date||a.tanggal_bayar||a.created_at||''));
+  });
+}
+
+function waliSppHistoryItem(row){
+  var status = String(row._doku_status || '').toLowerCase();
+  var lunas = row._zymata_payment_attempt ? status === 'paid' : waliSppLunas(row);
+  var label = lunas ? 'Lunas' : status === 'paid' ? 'Berhasil' : status === 'pending' ? 'Menunggu' : status === 'failed' ? 'Gagal' : status === 'expired' ? 'Kedaluwarsa' : status === 'cancelled' ? 'Dibatalkan' : 'Belum';
+  var tone = lunas || status === 'paid' ? 'green' : status === 'pending' ? 'orange' : status ? 'red' : 'orange';
+  var title=row._zymata_payment_attempt ? ('Percobaan pembayaran SPP '+(row.bulan||'')+' '+(row.tahun||'')) : ((row.keterangan || row.deskripsi || 'SPP') + ' - Rp' + Number(row.nominal || 0).toLocaleString('id-ID'));
+  var method=row._doku_method ? ' · '+String(row._doku_method).replace(/^VIRTUAL_ACCOUNT_/,'VA ').replace(/^ONLINE_TO_OFFLINE_/,'') : '';
+  var fee=row._zymata_payment_attempt && row._doku_fee ? ' · Fee Rp'+Number(row._doku_fee).toLocaleString('id-ID') : '';
+  return { time: row._doku_date || waliSppTanggal(row) || '-', title: title, meta: (appState.childName || '') + (row.kelas ? ' · ' + row.kelas : '') + method + fee + (row._doku_invoice ? ' · DOKU ' + row._doku_invoice : ''), status: label, tone: tone };
 }
 
 function renderInfaqSubuhWali(detail) {
@@ -2149,26 +2382,24 @@ function renderInfaqSubuhWali(detail) {
   var paymentRows = ((appState.supabaseModules && appState.supabaseModules.payments) || []).filter(function(row){
     return row && row.payment_type === 'infaq_subuh' && String(row.siswa_id || '') === String((window.__zymataWaliCtx && window.__zymataWaliCtx.siswa && window.__zymataWaliCtx.siswa.id) || appState.activeChildId || '');
   });
-  var preview = appState.infaqPreviewOpen ? `
+   var preview = appState.infaqPreviewOpen ? `
     <section class="section infaq-checkout-preview" aria-live="polite">
       <div class="infaq-checkout-head">
         <div>
-          <span class="card-label">DOKU Checkout · Sandbox</span>
+          <span class="card-label">DOKU Checkout</span>
           <h3>Ringkasan pembayaran</h3>
         </div>
-        <span class="status-pill orange">Sandbox</span>
+        <span class="status-pill orange">Aman</span>
       </div>
       <div class="infaq-checkout-row"><span>Tujuan</span><strong>Infaq Subuh</strong></div>
       <div class="infaq-checkout-row"><span>Atas nama</span><strong>${childProfile.fullName || appState.childName || 'Wali murid'}</strong></div>
-      <div class="infaq-checkout-row total"><span>Total</span><strong>Rp ${amount.toLocaleString('id-ID')}</strong></div>
-      <div class="infaq-doku-note">
+       <div class="infaq-checkout-row"><span>Nominal infaq</span><strong>Rp ${amount.toLocaleString('id-ID')}</strong></div>
+       <div class="infaq-doku-note">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01"/><circle cx="12" cy="12" r="9"/></svg>
-        <span>DOKU akan membuat transaksi sandbox dan menampilkan QRIS pada popup Checkout resmi. Pembayaran ini tidak memengaruhi tagihan SPP.</span>
+         <span>DOKU akan membuka Checkout resmi sesuai metode yang dipilih. Pembayaran ini tidak memengaruhi tagihan SPP.</span>
       </div>
-      ${QRIS_PAYMENT_ENABLED
-        ? '<button type="button" class="payment-primary-button" data-action="startDokuInfaq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3"/></svg><span>Bayar dengan QRIS</span></button>'
-        : '<button type="button" class="payment-primary-button is-locked" disabled aria-disabled="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>QRIS dalam proses aktivasi</span></button>'}
-      <div class="payment-security-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Checkout aman melalui DOKU</span></div>
+         <button type="button" class="payment-primary-button" data-action="startDokuInfaq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>Lanjut ke pembayaran</span></button>
+       <div class="payment-security-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Checkout aman melalui DOKU</span></div>
       <button type="button" class="infaq-secondary" data-action="closeInfaqPreview">Ubah nominal</button>
     </section>` : '';
   return `
@@ -2194,19 +2425,17 @@ function renderInfaqSubuhWali(detail) {
       </div>
       <div class="infaq-panel">
         <h3 class="infaq-panel-title">Pilih nominal infaq</h3>
-        <p class="infaq-panel-copy">Pembayaran diproses melalui QRIS DOKU Checkout sandbox.</p>
+         <p class="infaq-panel-copy">Pilih metode pembayaran yang paling nyaman.</p>
         <div class="infaq-amount-grid">${choiceHtml}</div>
         <div class="infaq-custom-wrap"><label for="infaqCustomAmount">Nominal lainnya</label><input id="infaqCustomAmount" class="infaq-custom" data-infaq-custom type="number" min="1000" step="1000" inputmode="numeric" placeholder="Masukkan nominal" value="${choices.indexOf(amount) < 0 ? amount : ''}"></div>
-        <div class="infaq-summary"><span>Total infaq</span><strong>Rp ${amount.toLocaleString('id-ID')}</strong></div>
-        ${QRIS_PAYMENT_ENABLED
-          ? '<button type="button" class="payment-primary-button payment-preview-button" data-action="previewInfaqCheckout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>Lanjut ke pembayaran</span></button>'
-          : '<button type="button" class="payment-primary-button is-locked" disabled aria-disabled="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>QRIS dalam proses aktivasi</span></button>'}
-        <div class="infaq-safe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>${QRIS_PAYMENT_ENABLED?'Kredensial DOKU tetap berada di server. Aplikasi hanya menerima URL Checkout yang aman.':'Pembayaran akan dibuka setelah proses pendaftaran DOKU selesai.'}</span></div>
+         <div class="infaq-summary"><span>Total infaq</span><strong>Rp ${amount.toLocaleString('id-ID')}</strong></div>
+          <button type="button" class="payment-primary-button payment-preview-button" data-action="previewInfaqCheckout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>Lanjut ke pembayaran</span></button>
+        <div class="infaq-safe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Kredensial DOKU tetap berada di server. Aplikasi hanya menerima Checkout yang aman.</span></div>
       </div>
     </section>
     ${preview}
     ${renderWaliRiwayatList('Infaq Subuh', paymentRows, function(row){ return row.paid_at || row.created_at || ''; }, function(row){
-      var status = String(row.status || 'pending').toLowerCase();
+       var status = waliPaymentStatus(row) || 'pending';
       var label = status === 'paid' ? 'Berhasil' : status === 'pending' ? 'Menunggu' : status === 'expired' ? 'Kedaluwarsa' : status === 'cancelled' ? 'Dibatalkan' : 'Gagal';
       var tone = status === 'paid' ? 'green' : status === 'pending' ? 'orange' : 'red';
       return { time:String(row.paid_at || row.created_at || '').slice(0,10) || '-', title:'Infaq Subuh - Rp'+Number(row.amount||0).toLocaleString('id-ID'), meta:'DOKU Checkout · '+String(row.invoice_number||'-'), status:label, tone:tone };
@@ -2228,7 +2457,7 @@ function renderModule(moduleId) {
   // Modul write wali (form input) tidak boleh ke-render read-only/empty generic; harus jatuh ke blok custom yang punya form.
   var __waliWriteModules = ['surat-wali','mutabaah-rumah'];
   var __isWaliWrite = __waliWriteModules.indexOf(moduleId) !== -1;
-  if (appState.syncMode === 'supabase-live' && dataKey && moduleId !== 'keuangan' && moduleId !== 'perkembangan-anak' && !__isWaliWrite) return renderSupabaseWaliDataModule(detail, appState.supabaseModules && appState.supabaseModules[dataKey]);
+  if (appState.syncMode === 'supabase-live' && dataKey && moduleId !== 'absensi-anak' && moduleId !== 'keuangan' && moduleId !== 'keuangan-spp' && moduleId !== 'perkembangan-anak' && !__isWaliWrite) return renderSupabaseWaliDataModule(detail, appState.supabaseModules && appState.supabaseModules[dataKey]);
   if (appState.syncMode === 'supabase-empty' && !__isWaliWrite) return renderSupabaseEmptyWaliModule(detail);
 
   if (moduleId === 'absensi-anak') {
@@ -2245,7 +2474,13 @@ function renderModule(moduleId) {
     var _absDates = [], _absSeen = {};
     absRows.forEach(function(r){ var d=_absDate(r); if(d && !_absSeen[d]){ _absSeen[d]=1; _absDates.push(d); } });
     _absDates.sort().reverse();
-    var _uiA = waliRiwayatFilterBulanUI('Absensi Anak', _absDates);
+  var _absMonths = [];
+    var _absMonthCursor = new Date();
+    for(var _ami = 0; _ami < 24; _ami++){
+      _absMonths.push(_absMonthCursor.getFullYear() + '-' + String(_absMonthCursor.getMonth() + 1).padStart(2, '0'));
+      _absMonthCursor.setMonth(_absMonthCursor.getMonth() - 1);
+    }
+    var _uiA = waliRiwayatFilterBulanUI('Absensi Anak', _absDates, _absMonths);
     var _absSetBulan = {};
     (_uiA.tglBulan || []).forEach(function(d){ _absSetBulan[d] = 1; });
     var _absPilih = absRows.filter(function(r){ return !!_absSetBulan[_absDate(r)]; });
@@ -2293,6 +2528,7 @@ function renderModule(moduleId) {
               }).join('')
             : scheduleCard({ time: 'Info', title: (_absDates.length ? 'Tidak ada absensi pada bulan ini' : 'Belum ada data absensi'), meta: (_absDates.length ? 'Pilih bulan lain di atas.' : 'Data kehadiran akan muncul setelah sekolah input absensi.'), status: 'Kosong', tone: 'blue' })
           }
+          ${_waliAbsensiPage.hasMore ? '<button type="button" class="field-chip" data-action="loadMoreWaliAbsensi" style="width:100%;margin-top:10px;justify-content:center">Muat 30 riwayat lagi</button>' : ''}
         </div>
       </section>
     `;
@@ -2439,7 +2675,9 @@ function renderModule(moduleId) {
   if (moduleId === 'keuangan' || moduleId === 'keuangan-spp' || moduleId === 'keuangan-tabungan' || moduleId === 'keuangan-umum') {
     // Utamakan data Supabase (sudah difilter per anak); fallback ke localStorage
     var _smK = appState.supabaseModules || {};
-    var tagihanList = Array.isArray(_smK.keuangan) ? _smK.keuangan.slice() : [];
+  var tagihanList = (moduleId === 'keuangan' || moduleId === 'keuangan-spp')
+    ? (Array.isArray(_smK.tagihanSpp) ? _smK.tagihanSpp.slice() : [])
+    : (Array.isArray(_smK.keuangan) ? _smK.keuangan.slice() : []);
     var tabData = Array.isArray(_smK.tabungan) ? _smK.tabungan.slice() : [];
     if(!tagihanList.length){ try { var rawTag = localStorage.getItem('zymata_tagihan_spp_v1'); if(rawTag){ var aTg = JSON.parse(rawTag); if(Array.isArray(aTg)) tagihanList = aTg; } } catch(e){} }
     if(!tabData.length){ try { var rawTab = localStorage.getItem('sdplus_tabungan_v1'); if(rawTab){ var aTb = JSON.parse(rawTab); if(Array.isArray(aTb)) tabData = aTb; } } catch(e){} }
@@ -2486,22 +2724,23 @@ function renderModule(moduleId) {
       saldoTab=Number(_rpcSaldo.saldo_tabungan_siswa||0);
       saldoUmum=Number(_rpcSaldo.saldo_tabungan_umum||0);
     }
-    var jatuhTempo = belumBayar.length ? (waliSppJatuhTempo(belumBayar[0]) || '-') : '-';
-    if (moduleId === 'keuangan-spp') {
-      return `
-        ${moduleIntro(detail, moduleParentTab(moduleId))}
-        ${waliSppWarningBanner(belumBayar)}
-        <section class="section">
-          <div class="module-stat-grid" style="grid-template-columns:1fr 1fr;">
-            ${statCard('Tagihan SPP', 'Rp ' + Number(totalTagihan).toLocaleString('id-ID'), belumBayar.length + ' belum lunas', totalTagihan > 0 ? 'orange' : 'green')}
-            ${statCard('Jatuh Tempo', jatuhTempo, 'Tagihan terdekat', 'blue')}
+     var jatuhTempo = belumBayar.length ? (waliSppJatuhTempo(belumBayar[0]) || '-') : '-';
+    if (moduleId === 'keuangan' || moduleId === 'keuangan-spp') {
+       var _sppSummaryDetail = appState._waliSppSummary;
+       var _sppDetailCount = _sppSummaryDetail ? Number(_sppSummaryDetail.jumlah_belum_lunas || 0) : belumBayar.length;
+       var _sppDetailTotal = _sppSummaryDetail ? Number(_sppSummaryDetail.total_belum_lunas || 0) : totalTagihan;
+       var _sppDetailDue = _sppSummaryDetail ? (_sppSummaryDetail.jatuh_tempo_terdekat || '-') : jatuhTempo;
+       return `
+         ${moduleIntro(detail, moduleParentTab(moduleId))}
+         ${waliSppWarningBanner(belumBayar)}
+         <section class="section">
+           <div class="module-stat-grid" style="grid-template-columns:1fr 1fr;">
+             ${statCard('Tagihan SPP', 'Rp ' + _sppDetailTotal.toLocaleString('id-ID'), _sppDetailCount + ' belum lunas', _sppDetailTotal > 0 ? 'orange' : 'green')}
+             ${statCard('Jatuh Tempo', _sppDetailDue, 'Tagihan terdekat', 'blue')}
           </div>
         </section>
-        ${renderWaliSppPayableList(belumBayar)}
-        ${renderWaliRiwayatList('Tagihan SPP', tagihanAnak, function(t){ return waliSppTanggal(t) || ''; }, function(t){
-          var lunas = waliSppLunas(t);
-          return { time: waliSppTanggal(t) || '-', title: (t.keterangan || t.deskripsi || 'SPP') + ' - Rp' + Number(t.nominal||0).toLocaleString('id-ID'), meta: (appState.childName || '') + (t.kelas ? ' \u00b7 ' + t.kelas : '') + (t.tahun_ajaran ? ' \u00b7 ' + t.tahun_ajaran : ''), status: lunas ? 'Lunas' : 'Belum', tone: lunas ? 'green' : 'orange' };
-        }, 'Belum ada tagihan', 'Tagihan SPP akan muncul setelah diinput oleh sekolah.')}
+         ${renderWaliSppPayableList(belumBayar)}
+          ${renderWaliRiwayatList('Tagihan SPP', waliSppHistoryRows(tagihanAnak), function(t){ return t._doku_date || waliSppTanggal(t) || ''; }, waliSppHistoryItem, 'Belum ada tagihan', 'Tagihan SPP akan muncul setelah diinput oleh sekolah.')}
       `;
     }
     if (moduleId === 'keuangan-tabungan') {
@@ -2548,16 +2787,7 @@ function renderModule(moduleId) {
           ${statCard('Saldo Tabungan Umum', 'Rp ' + Number(saldoUmum).toLocaleString('id-ID'), tabUmumAnak.length + ' mutasi', 'green')}
         </div>
       </section>
-      <div id="fin-sec-spp">${renderWaliRiwayatList('Tagihan SPP', tagihanAnak, function(t){ return waliSppTanggal(t) || ''; }, function(t){
-        var lunas = waliSppLunas(t);
-        return {
-          time: waliSppTanggal(t) || '-',
-          title: (t.keterangan || t.deskripsi || 'SPP') + ' - Rp' + Number(t.nominal||0).toLocaleString('id-ID'),
-          meta: (appState.childName || '') + (t.kelas ? ' · ' + t.kelas : '') + (t.tahun_ajaran ? ' · ' + t.tahun_ajaran : ''),
-          status: lunas ? 'Lunas' : 'Belum',
-          tone: lunas ? 'green' : 'orange'
-        };
-      }, 'Belum ada tagihan', 'Tagihan SPP akan muncul setelah diinput oleh sekolah.')}</div>
+       <div id="fin-sec-spp">${renderWaliRiwayatList('Tagihan SPP', waliSppHistoryRows(tagihanAnak), function(t){ return t._doku_date || waliSppTanggal(t) || ''; }, waliSppHistoryItem, 'Belum ada tagihan', 'Tagihan SPP akan muncul setelah diinput oleh sekolah.')}</div>
       <div id="fin-sec-tab">${renderWaliRiwayatList('Mutasi Tabungan', tabAnak, function(t){ return t.tanggal || t.tgl || ''; }, function(t){
         var isIn = /setor|masuk/i.test(t.jenis||'');
         return {
@@ -3029,6 +3259,22 @@ function bindActions() {
   actionsBound = true;
 
   document.addEventListener('change', async (event) => {
+    var paymentMethod = event.target.closest && event.target.closest('[data-payment-method]');
+    if (paymentMethod) {
+      appState.waliPaymentMethod = paymentMethod.value || WALI_PAYMENT_METHODS[0].code;
+      try { saveState(); } catch (_) {}
+      var methodBox = paymentMethod.closest('.wali-payment-method-wrap');
+      var amountText = methodBox && methodBox.querySelector('.wali-payment-fee:first-of-type b');
+      var baseAmount = amountText ? Number(String(amountText.textContent || '').replace(/[^0-9]/g, '')) : 0;
+      if (methodBox && baseAmount) {
+        var fee = waliPaymentFee(appState.waliPaymentMethod, baseAmount);
+        var feeText = methodBox.querySelectorAll('.wali-payment-fee b')[1];
+        var totalText = methodBox.querySelectorAll('.wali-payment-fee b')[2];
+        if (feeText) feeText.textContent = 'Rp '+fee.toLocaleString('id-ID');
+        if (totalText) totalText.textContent = 'Rp '+(baseAmount+fee).toLocaleString('id-ID');
+      } else render();
+      return;
+    }
     const childSelect = event.target.closest && event.target.closest('[data-action="selectChildDropdown"]');
     if (childSelect) {
       var cid = childSelect.value || '';
@@ -3085,11 +3331,29 @@ function bindActions() {
     }
     // [RIWAYAT BULAN] Dropdown bulan & tanggal pada semua panel riwayat wali.
     var rwBulan = event.target && event.target.closest && event.target.closest('select[data-select="wali-riwayat-bulan"]');
-    if (rwBulan) {
+     if (rwBulan) {
       var kb = rwBulan.getAttribute('data-wali-kunci') || '';
       appState.waliRiwayatBulan = appState.waliRiwayatBulan || {};
       appState.waliRiwayatTgl = appState.waliRiwayatTgl || {};
       if (kb) { appState.waliRiwayatBulan[kb] = rwBulan.value; appState.waliRiwayatTgl[kb] = ''; }
+      if (kb === waliKunciRiwayat('Mutabaah Rumah')) {
+        var _mutabaahKey = (_waliDetailKeys['module:mutabaah-rumah'] || []).join(',');
+        _waliLoadedDetail[_mutabaahKey] = false;
+        _waliMutabaahPage = { offset: 0, hasMore: false, loading: false, month: rwBulan.value || '' };
+        if (appState.supabaseModules) appState.supabaseModules.mutabaahRumah = [];
+        render();
+        ensureWaliDetailLoaded('module:mutabaah-rumah');
+        return;
+      }
+      if (kb === waliKunciRiwayat('Absensi Anak')) {
+        var _absensiKey = (_waliDetailKeys['module:absensi-anak'] || []).join(',');
+        _waliLoadedDetail[_absensiKey] = false;
+        _waliAbsensiPage = { offset: 0, hasMore: false, loading: false, month: rwBulan.value || '' };
+        if (appState.supabaseModules) appState.supabaseModules.absensi = [];
+        render();
+        ensureWaliDetailLoaded('module:absensi-anak');
+        return;
+      }
       render();
       return;
     }
@@ -3108,12 +3372,26 @@ function bindActions() {
     }
   });
 
-  document.addEventListener('click', async (event) => {
-    var sppPayButton = event.target && event.target.closest && event.target.closest('[data-doku-spp]');
-    if (sppPayButton) {
-      await waliStartDokuPayment({ paymentType:'spp', referenceId:sppPayButton.getAttribute('data-doku-spp') }, sppPayButton);
-      return;
-    }
+   document.addEventListener('click', async (event) => {
+     var loadMoreAbsensi = event.target && event.target.closest && event.target.closest('[data-action="loadMoreWaliAbsensi"]');
+     if (loadMoreAbsensi) {
+       await loadMoreWaliAbsensi();
+       return;
+     }
+     var loadMoreMutabaah = event.target && event.target.closest && event.target.closest('[data-action="loadMoreWaliMutabaah"]');
+     if (loadMoreMutabaah) {
+       await loadMoreWaliMutabaahRumah();
+       return;
+     }
+     var paySppSelected = event.target && event.target.closest && event.target.closest('[data-action="paySppSelected"]');
+     if (paySppSelected) {
+        var payableRows = appState.supabaseModules && appState.supabaseModules.tagihanSpp;
+        var batchIds = (Array.isArray(payableRows) ? payableRows : []).filter(function(row){ return row && row.id && !waliSppLunas(row) && Number(row.nominal || 0) >= 1000; }).map(function(row){ return String(row.id); });
+        if (!batchIds.length) { waliShowSaveError('Tidak ada tagihan SPP yang dapat dibayar.'); return; }
+        var payableAmount = (Array.isArray(payableRows) ? payableRows : []).filter(function(row){ return row && row.id && !waliSppLunas(row) && Number(row.nominal || 0) >= 1000; }).reduce(function(total,row){ return total + Number(row.nominal || 0); },0);
+        waliOpenPaymentMethodModal({ paymentType:batchIds.length===1?'spp':'spp_batch', referenceId:batchIds.length===1?batchIds[0]:null, referenceIds:batchIds.length>1?batchIds:null, amount:payableAmount, button:paySppSelected });
+        return;
+     }
     var infaqAmountButton = event.target && event.target.closest && event.target.closest('[data-infaq-amount]');
     if (infaqAmountButton) {
       var presetAmount = Number(infaqAmountButton.getAttribute('data-infaq-amount') || 0);
@@ -3208,7 +3486,7 @@ function bindActions() {
         return;
       }
       if (target === 'startDokuInfaq') {
-        await waliStartDokuPayment({ paymentType:'infaq_subuh', amount:Number(appState.infaqAmount || 0) }, actionButton);
+        waliOpenPaymentMethodModal({ paymentType:'infaq_subuh', amount:Number(appState.infaqAmount || 0), button:actionButton });
         return;
       }
       if (target === 'closeInfaqPreview') {
@@ -3596,6 +3874,20 @@ function computeWaliRecap(){
     else { appState.todayCheckIn = '--:--'; appState.todayCheckInIsDefault = false; }
   }
   else { appState.todayAttendance='belum'; appState.todayCheckIn='--:--'; }
+  var absSummary = appState._waliAbsensiSummary;
+  if(absSummary && typeof absSummary === 'object'){
+    appState.waliAbsRekap = {
+      hadir: Number(absSummary.hadir || 0),
+      izin: Number(absSummary.izin || 0),
+      sakit: Number(absSummary.sakit || 0),
+      alpa: Number(absSummary.alpa || 0),
+      total: Number(absSummary.total || 0)
+    };
+    appState.homeAttendanceRate = Number(absSummary.attendance_rate || 0);
+    appState.todayAttendance = String(absSummary.today_status || 'belum');
+    appState.todayCheckIn = absSummary.today_check_in || (appState.todayAttendance === 'hadir' ? '07:00' : '--:--');
+    appState.todayCheckInIsDefault = !absSummary.today_check_in && appState.todayAttendance === 'hadir';
+  }
   var nilai = Array.isArray(sm.nilai) ? sm.nilai : [];
   var sum=0, cnt=0;
   nilai.forEach(function(r){ var n=Number(r.nilai||r.nilai_akhir||r.nilai_rapor||r.nilai_angka||r.rata_rata||r.skor||r.nilai_ujian||r.nilai_tugas||0); if(n>0){ sum+=n; cnt++; } });
@@ -3676,14 +3968,23 @@ function hideSyncIndicator() {
 var waliBarisBaru = [];
 var _waliLoadedDetail = {};
 var _waliDetailLoading = {};
-var _waliDetailKeys = {
+  var _waliDetailKeys = {
   'mutabaah': ['mutabaahTahfidzSekolah','mutabaahTahfidzRingkas'],
   'module:perkembangan-anak': ['perkembangan'],
   'module:catatan-anak': ['catatan'],
+  'module:absensi-anak': ['absensiDetail'],
+  'module:pengumuman-wali': ['pengumumanDetail'],
   'module:surat-wali': ['surat'],
   'module:nilai-anak': ['nilai'],
-  'module:mutabaah-rumah': ['mutabaahRumah']
+  'module:mutabaah-rumah': ['mutabaahRumah'],
+  'module:keuangan': ['keuanganSpp'],
+  'module:keuangan-spp': ['keuanganSpp'],
+  'module:keuangan-tabungan': ['tabunganDetail'],
+  'module:keuangan-umum': ['tabunganUmumDetail'],
+  'module:infaq-subuh': ['paymentsDetail']
 };
+var _waliAbsensiPage = { offset: 0, hasMore: false, loading: false, month: '' };
+var _waliMutabaahPage = { offset: 0, hasMore: false, loading: false, month: '' };
 function waliSisipBarisBaru() {
   appState.supabaseModules = appState.supabaseModules || {};
   waliBarisBaru = waliBarisBaru.filter(function(x){ return x && (Date.now() - x.ts) < 600000; });
@@ -3707,7 +4008,20 @@ async function ensureWaliDetailLoaded(route){
   if(_waliLoadedDetail[key]) return;
   if(_waliDetailLoading[key]) return _waliDetailLoading[key];
   _waliDetailLoading[key] = (async function(){
-    var data = await window.ZymataMobileSupabase.loadWaliModuleData(window.__zymataWaliCtx, { only: keys });
+    var loadOptions = { only: keys };
+    if(keys.indexOf('mutabaahRumah') !== -1){
+      _waliMutabaahPage = { offset: 0, hasMore: false, loading: false, month: (appState.waliRiwayatBulan || {})[waliKunciRiwayat('Mutabaah Rumah')] || '' };
+      loadOptions.mutabaahLimit = 30;
+      loadOptions.mutabaahOffset = 0;
+      if(_waliMutabaahPage.month) loadOptions.mutabaahMonth = _waliMutabaahPage.month;
+    }
+    if(keys.indexOf('absensiDetail') !== -1){
+      _waliAbsensiPage = { offset: 0, hasMore: false, loading: false, month: (appState.waliRiwayatBulan || {})[waliKunciRiwayat('Absensi Anak')] || waliBulanDariTgl(waliHariIniISO()) };
+      loadOptions.absensiLimit = 30;
+      loadOptions.absensiOffset = 0;
+      loadOptions.absensiMonth = _waliAbsensiPage.month;
+    }
+    var data = await window.ZymataMobileSupabase.loadWaliModuleData(window.__zymataWaliCtx, loadOptions);
     var sm = appState.supabaseModules || {};
     if(keys.indexOf('perkembangan') !== -1){
       ['ibadah','karakter','prestasi','pelanggaran','ekskul'].forEach(function(k){ if(data && Array.isArray(data[k])) sm[k] = data[k]; });
@@ -3717,8 +4031,38 @@ async function ensureWaliDetailLoaded(route){
     } else if(keys.indexOf('nilai') !== -1 && data && Array.isArray(data.nilai)) sm.nilai = data.nilai;
     else if(keys.indexOf('catatan') !== -1 && data && Array.isArray(data.catatan)) sm.catatan = data.catatan;
     else if(keys.indexOf('surat') !== -1 && data && Array.isArray(data.surat)) sm.surat = data.surat;
-    else if(keys.indexOf('mutabaahRumah') !== -1 && data && Array.isArray(data.mutabaahRumah)) sm.mutabaahRumah = data.mutabaahRumah;
-    appState.supabaseModules = filterWaliPengumuman(sm);
+     else if(keys.indexOf('mutabaahRumah') !== -1 && data && Array.isArray(data.mutabaahRumah)) {
+      sm.mutabaahRumah = data.mutabaahRumah;
+      _waliMutabaahPage.hasMore = data.mutabaahRumahHasMore === true;
+      _waliMutabaahPage.month = data.mutabaahRumahMonth || _waliMutabaahPage.month;
+      if(_waliMutabaahPage.month){
+        appState.waliRiwayatBulan = appState.waliRiwayatBulan || {};
+         appState.waliRiwayatBulan[waliKunciRiwayat('Mutabaah Rumah')] = _waliMutabaahPage.month;
+       }
+      } else if(keys.indexOf('pengumumanDetail') !== -1 && data && Array.isArray(data.pengumuman)) {
+        sm.pengumuman = data.pengumuman;
+      } else if(keys.indexOf('keuanganDetail') !== -1 && data) {
+       sm.tagihanSpp = Array.isArray(data.tagihanSpp) ? data.tagihanSpp : [];
+       sm.keuangan = [].concat(sm.tagihanSpp, Array.isArray(data.keuangan) ? data.keuangan : []);
+       if(Array.isArray(data.tabungan)) sm.tabungan = data.tabungan;
+       if(Array.isArray(data.tabunganUmum)) sm.tabunganUmum = data.tabunganUmum;
+      } else if(keys.indexOf('keuanganSpp') !== -1 && data && Array.isArray(data.tagihanSpp)) {
+       sm.tagihanSpp = data.tagihanSpp;
+       if(Array.isArray(data.payments)) sm.payments = data.payments;
+       if(Array.isArray(data.paymentItems)) sm.paymentItems = data.paymentItems;
+     } else if(keys.indexOf('tabunganDetail') !== -1 && data && Array.isArray(data.tabungan)) {
+       sm.tabungan = data.tabungan;
+     } else if(keys.indexOf('tabunganUmumDetail') !== -1 && data && Array.isArray(data.tabunganUmum)) {
+       sm.tabunganUmum = data.tabunganUmum;
+     } else if(keys.indexOf('absensiDetail') !== -1 && data && Array.isArray(data.absensi)) {
+       sm.absensi = data.absensi;
+       _waliAbsensiPage.hasMore = data.absensiHasMore === true;
+       _waliAbsensiPage.month = data.absensiMonth || _waliAbsensiPage.month;
+     } else if(keys.indexOf('paymentsDetail') !== -1 && data && Array.isArray(data.payments)) {
+       sm.payments = data.payments;
+     }
+     appState.supabaseModules = filterWaliPengumuman(sm);
+     if(keys.indexOf('keuanganSpp') !== -1 || keys.indexOf('paymentsDetail') !== -1) waliSyncPendingPayments();
     _waliLoadedDetail[key] = true;
     if(String(appState.activeTab || '') === route) render();
   })().catch(function(error){
@@ -3728,6 +4072,72 @@ async function ensureWaliDetailLoaded(route){
   })
     .finally(function(){ delete _waliDetailLoading[key]; });
   return _waliDetailLoading[key];
+}
+
+async function loadMoreWaliMutabaahRumah(){
+  if(_waliMutabaahPage.loading || !_waliMutabaahPage.hasMore) return;
+  if(!window.ZymataMobileSupabase || !window.__zymataWaliCtx || !window.__zymataWaliCtx.siswa) return;
+  _waliMutabaahPage.loading = true;
+  try {
+    var data = await window.ZymataMobileSupabase.loadWaliModuleData(window.__zymataWaliCtx, {
+      only: ['mutabaahRumah'],
+      mutabaahLimit: 30,
+      mutabaahOffset: _waliMutabaahPage.offset + 30,
+      mutabaahMonth: _waliMutabaahPage.month
+    });
+    var nextRows = data && Array.isArray(data.mutabaahRumah) ? data.mutabaahRumah : [];
+    var current = appState.supabaseModules || {};
+    var existing = Array.isArray(current.mutabaahRumah) ? current.mutabaahRumah : [];
+    var seen = {};
+    existing.forEach(function(r){ if(r && r.id != null) seen[String(r.id)] = true; });
+    nextRows.forEach(function(r){
+      var id = r && r.id != null ? String(r.id) : '';
+      if(!id || !seen[id]){ existing.push(r); if(id) seen[id] = true; }
+    });
+    current.mutabaahRumah = existing;
+    appState.supabaseModules = filterWaliPengumuman(current);
+    _waliMutabaahPage.offset += 30;
+    _waliMutabaahPage.hasMore = data && data.mutabaahRumahHasMore === true;
+    saveWaliDataCache();
+    if(String(appState.activeTab || '') === 'module:mutabaah-rumah') render();
+  } catch(error){
+    console.warn('[WaliMutabaah] muat riwayat berikutnya gagal:', error && error.message ? error.message : error);
+  } finally {
+    _waliMutabaahPage.loading = false;
+  }
+}
+
+async function loadMoreWaliAbsensi(){
+  if(_waliAbsensiPage.loading || !_waliAbsensiPage.hasMore) return;
+  if(!window.ZymataMobileSupabase || !window.__zymataWaliCtx || !window.__zymataWaliCtx.siswa) return;
+  _waliAbsensiPage.loading = true;
+  try {
+    var data = await window.ZymataMobileSupabase.loadWaliModuleData(window.__zymataWaliCtx, {
+      only: ['absensiDetail'],
+      absensiLimit: 30,
+      absensiOffset: _waliAbsensiPage.offset + 30,
+      absensiMonth: _waliAbsensiPage.month
+    });
+    var nextRows = data && Array.isArray(data.absensi) ? data.absensi : [];
+    var current = appState.supabaseModules || {};
+    var existing = Array.isArray(current.absensi) ? current.absensi : [];
+    var seen = {};
+    existing.forEach(function(r){ if(r && r.id != null) seen[String(r.id)] = true; });
+    nextRows.forEach(function(r){
+      var id = r && r.id != null ? String(r.id) : '';
+      if(!id || !seen[id]){ existing.push(r); if(id) seen[id] = true; }
+    });
+    current.absensi = existing;
+    appState.supabaseModules = current;
+    _waliAbsensiPage.offset += 30;
+    _waliAbsensiPage.hasMore = data && data.absensiHasMore === true;
+    saveWaliDataCache();
+    if(String(appState.activeTab || '') === 'module:absensi-anak') render();
+  } catch(error){
+    console.warn('[WaliAbsensi] muat riwayat berikutnya gagal:', error && error.message ? error.message : error);
+  } finally {
+    _waliAbsensiPage.loading = false;
+  }
 }
 
 async function hydrateWaliFromSupabase() {
@@ -3787,17 +4197,40 @@ async function hydrateWaliFromSupabase() {
     childProfile.emergency = siswa.kontak_darurat || '-';
     childProfile.photoUrl = String(siswa.foto || siswa.foto_siswa || siswa.pas_foto || siswa.photo || siswa.foto_url || siswa.photo_url || siswa.avatar || siswa.avatar_url || siswa.url_foto || siswa.foto_anak || '').trim();
 
-    appState.unreadAnnouncements = 0;
-    appState.unreadNotes = 0;
-    var _startupWaliData = await window.ZymataMobileSupabase.loadWaliModuleData(ctx, {
+     appState.unreadAnnouncements = 0;
+     appState.unreadNotes = 0;
+     appState._waliSppSummary = null;
+     appState._waliAbsensiSummary = null;
+     try {
+       var _sppSummaryRes = await window.ZymataMobileSupabase.getWaliSppSummary(
+         String(siswa.id || ''), String(siswa.nis || '')
+       );
+       if(_sppSummaryRes && _sppSummaryRes.data) appState._waliSppSummary = _sppSummaryRes.data;
+     } catch(_sppErr) {}
+     try {
+       var _absensiSummaryRes = await window.ZymataMobileSupabase.getWaliAbsensiSummary(
+         String(siswa.id || ''), String(siswa.nis || ''), waliHariIniISO()
+       );
+       if(_absensiSummaryRes && _absensiSummaryRes.data) appState._waliAbsensiSummary = _absensiSummaryRes.data;
+     } catch(_absensiErr) {}
+     var _startupWaliData = await window.ZymataMobileSupabase.loadWaliModuleData(ctx, {
       // Mutabaah Tahfidz dimuat khusus saat modulnya dibuka, bukan saat
       // startup hanya untuk mengisi Dashboard.
       only: ['absensi','keuangan','pengumuman'],
-      badges: true
+      sppSummaryOnly: true,
+      financeSummaryOnly: true,
+      absensiSummaryOnly: true,
+      badges: true,
+      announcementLimit: 8
     });
     appState.supabaseModules = filterWaliPengumuman(_startupWaliData);
-    appState.waliCalistungRows = Array.isArray(_startupWaliData && _startupWaliData.badgeCalistung)
-      ? _startupWaliData.badgeCalistung : [];
+    waliSyncPendingPayments();
+     appState.waliCalistungRows = Array.isArray(_startupWaliData && _startupWaliData.badgeCalistung)
+       ? _startupWaliData.badgeCalistung : [];
+     if(_startupWaliData && _startupWaliData.badgeSummary){
+       appState._waliBadgeSummary = _startupWaliData.badgeSummary;
+       appState.waliCalistungRows = [];
+     }
     _waliLoadedDetail = {};
     // [RIWAYAT LANGSUNG TAMPIL] Pastikan kiriman baru tidak hilang setelah penyegaran.
     try { waliSisipBarisBaru(); } catch(_e) { console.warn('[RIWAYAT LANGSUNG TAMPIL] gagal sisip ulang', _e); }
@@ -3808,11 +4241,19 @@ async function hydrateWaliFromSupabase() {
       var _seenN = appState.seenNotes || [];
       var _seenA = appState.seenAnnouncements || [];
        var _badgeNotes = Array.isArray(_startupWaliData && _startupWaliData.badgeCatatan) ? _startupWaliData.badgeCatatan : (sm.catatan || []);
-       appState.unreadNotes = _badgeNotes.filter(function(r){ var st = String(r.status||'').toLowerCase(); var fresh = !st || /baru|belum|aktif|terkirim/.test(st); return fresh && _seenN.indexOf(waliItemKey(r)) === -1; }).length;
+       if(_startupWaliData && _startupWaliData.badgeSummary) _badgeNotes = { count: _startupWaliData.badgeSummary.catatan_count, ids: _startupWaliData.badgeSummary.catatan_ids };
+       if(_badgeNotes && !Array.isArray(_badgeNotes) && typeof _badgeNotes === 'object'){
+         appState._waliBadgeSummary = appState._waliBadgeSummary || {};
+         appState._waliBadgeSummary.catatan_ids = Array.isArray(_badgeNotes.ids) ? _badgeNotes.ids : [];
+         appState._waliBadgeSummary.catatan_count = Number(_badgeNotes.count || 0);
+         appState.unreadNotes = appState._waliBadgeSummary.catatan_ids.filter(function(id){ return _seenN.indexOf(String(id)) === -1; }).length;
+       } else {
+         appState.unreadNotes = _badgeNotes.filter(function(r){ var st = String(r.status||'').toLowerCase(); var fresh = !st || /baru|belum|aktif|terkirim/.test(st); return fresh && _seenN.indexOf(waliItemKey(r)) === -1; }).length;
+       }
       appState.unreadAnnouncements = (sm.pengumuman || []).filter(function(r){ return _seenA.indexOf(waliItemKey(r)) === -1; }).length;
       // Isi panel lonceng & daftar pengumuman dari Supabase (focus modul = referensi array yg sama)
       announcements.splice(0, announcements.length);
-      (sm.pengumuman || []).slice(0, 8).forEach(function(r){
+       (sm.pengumuman || []).slice(0, 8).forEach(function(r){
         var _tgl = String(r.tanggal || r.created_at || r.waktu || r.tgl || '').slice(0,10);
         announcements.push({
           time: _tgl || 'Terbaru',
@@ -3870,15 +4311,15 @@ animateWaliContent();
   function refreshNow(){
     // [SESI TUNGGAL] Cek lebih dulu sebelum throttle, agar tetap jalan tiap resume.
     try { if(window.ZymataMobileSupabase && window.ZymataMobileSupabase.checkActiveSession) window.ZymataMobileSupabase.checkActiveSession(); } catch(_){}
-    if(_busy) return;
+    if(_busy || window.__zymataWaliRefreshBusy) return;
     if(Date.now() - _last < 3000) return; // throttle 3 detik
     // Hemat beban server: lewati refresh berat bila data baru saja disegarkan (< 90 detik).
     // Data keuangan (SPP/tabungan) tetap diperbarui oleh finance poll terpisah.
     if(Date.now() - (appState._waliLastHydrateTs || 0) < 90000) return;
-    _busy = true; _last = Date.now();
+    _busy = true; _last = Date.now(); window.__zymataWaliRefreshBusy = true;
     Promise.resolve(hydrateWaliFromSupabase())
       .catch(function(){})
-      .then(function(){ _busy = false; });
+      .then(function(){ _busy = false; window.__zymataWaliRefreshBusy = false; });
   }
   document.addEventListener('visibilitychange', function(){
     if(document.visibilityState === 'visible') refreshNow();
@@ -3901,6 +4342,8 @@ animateWaliContent();
   async function pollFinance(){
     if(!window.ZymataMobileSupabase) return;
     if(!appState.syncMode || appState.syncMode === 'supabase-empty') return;
+    if(window.__zymataWaliRefreshBusy) return;
+    window.__zymataWaliRefreshBusy = true;
     try {
       const session = window.ZymataMobileSupabase.readSession();
       if(!session) return;
@@ -3916,21 +4359,8 @@ animateWaliContent();
       if(!filters.length) { _last = Date.now(); return; }
       var _smF = appState.supabaseModules || {};
       // Ambil data finance langsung dari Supabase
-      var tagihanRows = await window.ZymataMobileSupabase.tryFilteredList('tagihan_spp', filters, 20, { strict: true });
-      var keuRows = await window.ZymataMobileSupabase.tryFilteredList('keuangan', filters, 20, { strict: true });
-       var tabRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_siswa', filters, 90, { strict: true });
-       var tabUmumRows = await window.ZymataMobileSupabase.tryFilteredList('tabungan_umum', filters, 90, { strict: true });
-      var payRes = await window.ZymataMobileSupabase.select('payment_transactions', { eq:{ siswa_id:siswaId }, select:'id,siswa_id,nis,payment_type,reference_id,invoice_number,amount,status,expires_at,paid_at,created_at', order:'created_at', ascending:false, limit:30 });
-      // Update module cache hanya untuk finance
-      if(Array.isArray(tagihanRows) || Array.isArray(keuRows)) {
-        _smF.keuangan = [].concat(
-          Array.isArray(tagihanRows) ? tagihanRows.map(function(r){ return Object.assign({_zymata_source:'tagihan_spp'},r); }) : [],
-          Array.isArray(keuRows) ? keuRows.map(function(r){ return Object.assign({_zymata_source:'keuangan'},r); }) : []
-        );
-      }
-      if(Array.isArray(tabRows)) _smF.tabungan = tabRows;
-      if(Array.isArray(tabUmumRows)) _smF.tabunganUmum = tabUmumRows;
-      if(payRes && !payRes.error && Array.isArray(payRes.data)) _smF.payments = payRes.data;
+        var sppSummaryRes = await window.ZymataMobileSupabase.getWaliSppSummary(siswaId, nis);
+        if(sppSummaryRes && sppSummaryRes.data) appState._waliSppSummary = sppSummaryRes.data;
       appState.supabaseModules = _smF;
       await refreshWaliTabunganSaldo(ctx);
       syncWaliFinanceState();
@@ -3942,7 +4372,7 @@ animateWaliContent();
         try { return (Array.isArray(arr) ? arr : []).map(function(r){ return JSON.stringify(r); }).sort().join('|'); }
         catch(_e){ return ''; }
       }
-      var _sig = _finSig(_smF.keuangan) + '#' + _finSig(_smF.tabungan) + '#' + _finSig(_smF.tabunganUmum) + '#' + _finSig(_smF.payments);
+      var _sig = JSON.stringify(appState._waliSppSummary || {}) + '#' + JSON.stringify(appState._waliTabunganSaldoRpc || {});
       if(_lastSig === ''){
         // Poll pertama: set baseline saja, JANGAN render (data sudah tampil dari load awal).
         _lastSig = _sig;
@@ -3951,6 +4381,7 @@ animateWaliContent();
         if(appState.activeTab === 'home' || appState.activeTab === 'more' || /^module:(keuangan|infaq-subuh)/.test(appState.activeTab)) render();
       }
     } catch(_){}
+    finally { window.__zymataWaliRefreshBusy = false; }
     _last = Date.now();
   }
   // EGRESS: poll berkala DIMATIKAN. Dulu tiap 60 detik = 1.440 tarikan/hari
