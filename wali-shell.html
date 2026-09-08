@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
-  <link rel="stylesheet" href="guru-shell.css?v=20260822-wali-catatan-date" />
+  <link rel="stylesheet" href="guru-shell.css?v=20260904-resume-payment-1" />
 
 <style id="desktop-mockup">
 @media (min-width: 480px) {
@@ -887,12 +887,12 @@ body.wali-shell .toggle.on{ background:linear-gradient(135deg,#FE8118,#F95E08) !
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-mobile.js?v=20260826-wali-tahfidz-final"></script>
+  <script src="supabase-mobile.js?v=20260908-payment-history-3"></script>
 <script src="chat-mobile.js"></script>
 <script src="native-enhance.js"></script>
 <script src="native-pro.js"></script>
-<script src="https://sandbox.doku.com/jokul-checkout-js/v1/jokul-checkout-1.0.0.js"></script>
-<script src="wali-shell.js?v=20260826-wali-tahfidz-final"></script>
+ <script src="https://jokul.doku.com/jokul-checkout-js/v1/jokul-checkout-1.0.0.js"></script>
+    <script src="wali-shell.js?v=20260908-payment-history-3"></script>
   <script>
   /* Transisi halaman wali: bottom-nav = sheet (naik dari bawah), lainnya = fade+zoom.
      UI murni — membungkus animateWaliContent tanpa mengubah logika app. */
@@ -924,7 +924,7 @@ body.wali-shell .toggle.on{ background:linear-gradient(135deg,#FE8118,#F95E08) !
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('./guru-sw.js').catch(function () {});
+        navigator.serviceWorker.register('./guru-sw.js?v=20260906-expired-status-1').catch(function () {});
       });
     }
   </script>
