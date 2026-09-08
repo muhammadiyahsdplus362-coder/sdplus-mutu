@@ -479,7 +479,7 @@ function renderHeader() {
 }
 
 // ─── Absensi Guru constants ────────�����───────────────────────────────
-const AG_CUTOFF = '06:55'; // batas tepat waktu
+const AG_CUTOFF = '06:45'; // batas tepat waktu
 const AG_RADIUS_M = 75;
 const AG_MAX_ACCURACY_M = 100;
 const AG_LOKASI_KEY = 'sdplus_absensi_guru_lokasi_sekolah_v1';
@@ -9440,13 +9440,15 @@ animateContent();
    var T_KAL='kalender_events';
    var T_SYS='pengaturan_sistem';
 
-  var POT_ALPA_BAWAAN=15000, POT_IZIN_BAWAAN=0, POT_TERLAMBAT_BAWAAN=0;
+   var POT_ALPA_BAWAAN=15000, POT_IZIN_BAWAAN=0, POT_TERLAMBAT_BAWAAN=0;
+   var AG_CUTOFF_0645_MULAI='2026-09-10';
 
    var LIBUR={'2024-01-01':1,'2024-03-29':1,'2024-04-10':1,'2024-04-11':1,'2024-05-01':1,'2024-08-17':1,'2024-12-25':1,'2025-01-01':1,'2025-05-01':1,'2025-08-17':1,'2025-12-25':1,'2026-01-01':1,'2026-05-01':1,'2026-08-17':1,'2026-08-25':1,'2026-12-25':1};
 
   var BULAN=['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
-   var GJ={ loaded:false, loading:false, retryTimer:null, nip:'', bulan:'', gaji:null, pot:null, potManual:null, absen:null, kalender:[], hariKerja:null, galat:'' };
+  var GJ={ loaded:false, loading:false, retryTimer:null, nip:'', bulan:'', gaji:null, pot:null, potManual:null, absen:null, kalender:[], hariKerja:null, galat:'' };
+  var GJ_SCHOOL_KEY='sdplus_pengaturan_v1';
 
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function SB(){ return window.ZymataMobileSupabase; }
@@ -9472,9 +9474,34 @@ animateContent();
      var raw=String(v==null?'':v).trim(), key=nipKey(raw), stripped=key.replace(/^0+(?=\d)/,'');
      return Array.from(new Set([raw,key,stripped].filter(Boolean)));
    }
-   function namaSama(a,b){
-     return String(a==null?'':a).replace(/\s+/g,' ').trim().toLowerCase()===String(b==null?'':b).replace(/\s+/g,' ').trim().toLowerCase();
-   }
+  function namaSama(a,b){
+    return String(a==null?'':a).replace(/\s+/g,' ').trim().toLowerCase()===String(b==null?'':b).replace(/\s+/g,' ').trim().toLowerCase();
+  }
+  function schoolInfo(){
+    var p=window.pengaturanSekolah||{};
+    try{
+      var raw=localStorage.getItem(GJ_SCHOOL_KEY);
+      if(raw) p=Object.assign({},JSON.parse(raw)||{},p);
+    }catch(_e){}
+    return {
+      nama:p.namaSekolah||p.nama_sekolah||'Sekolah',
+      kota:p.kota||'',
+      kepsek:p.kepsek||'..........................'
+    };
+  }
+  function loadSchoolInfo(){
+    var api=SB();
+    if(!api||typeof api.select!=='function') return Promise.resolve(schoolInfo());
+    return api.select('pengaturan_sekolah',{eq:{client_key:'default'},limit:1}).then(function(res){
+      var row=res&&Array.isArray(res.data)?res.data[0]:null;
+      if(row){
+        var p={namaSekolah:row.nama_sekolah||row.namaSekolah||'',kota:row.kota||'',kepsek:row.kepsek||''};
+        window.pengaturanSekolah=Object.assign({},window.pengaturanSekolah||{},p);
+        try{ localStorage.setItem(GJ_SCHOOL_KEY,JSON.stringify(Object.assign({},schoolInfo(),p))); }catch(_e){}
+      }
+      return schoolInfo();
+    }).catch(function(){ return schoolInfo(); });
+  }
    function hariKerja(iso){
      if(LIBUR[iso]) return false;
      var dow=new Date(iso+'T00:00:00').getDay();
@@ -9528,19 +9555,23 @@ animateContent();
      return days.indexOf(dow===0?6:dow-1)>=0;
    }
 
-   function statusEfektif(row){
+    function batasMenitUntukTanggal(tgl){ return String(tgl||'').slice(0,10)>=AG_CUTOFF_0645_MULAI ? (6*60+45) : (6*60+55); }
+    function statusEfektif(row, tgl){
      var st=String(row&&row.status||'hadir').trim().toLowerCase();
      if(st==='alpha'||st==='alfa'||st==='tanpa') return 'alpa';
-     if(st==='izin'||st==='sakit'||st==='terlambat'||st==='alpa') return st;
-     if(st!=='hadir'&&st!=='dinas') return st;
-     var ket=String(row&&(row.keterangan||row.ket||row.catatan)||'');
-     if(/terlambat|late/i.test(ket)) return 'terlambat';
-     if(/tepat waktu|sebelum batas|terisi dari jadwal/i.test(ket)) return st;
-     var candidates=[row&&row.jam_masuk,row&&row.jamMasuk,row&&row.check_in,row&&row.checkIn,row&&row.masuk,row&&row.jam,row&&row.waktu_masuk];
-     return candidates.some(function(v){
-       var m=String(v==null?'':v).replace('.',':').match(/(\d{1,2}):(\d{2})/);
-       return m && (parseInt(m[1],10)*60+parseInt(m[2],10))>(6*60+55);
-     }) ? 'terlambat' : st;
+      if(st==='izin'||st==='sakit'||st==='terlambat'||st==='alpa') return st;
+      if(st!=='hadir'&&st!=='dinas') return st;
+      var ket=String(row&&(row.keterangan||row.ket||row.catatan)||'');
+      if(/terlambat|late/i.test(ket)) return 'terlambat';
+      var candidates=[row&&row.jam_masuk,row&&row.jamMasuk,row&&row.check_in,row&&row.checkIn,row&&row.masuk,row&&row.jam,row&&row.waktu_masuk];
+      var hasTime=false, late=candidates.some(function(v){
+        var m=String(v==null?'':v).replace('.',':').match(/(\d{1,2}):(\d{2})/);
+        if(m) hasTime=true;
+        return m && (parseInt(m[1],10)*60+parseInt(m[2],10))>batasMenitUntukTanggal(tgl);
+      });
+      if(late) return 'terlambat';
+      if(/tepat waktu|sebelum batas|terisi dari jadwal/i.test(ket) || hasTime) return st;
+      return st;
    }
 
   /* ---------------- muat data ---------------- */
@@ -9666,8 +9697,8 @@ animateContent();
        var tgl=String(r.tanggal||'').slice(0,10);
        if(tgl.indexOf(ym)!==0) return;
        if(hariLibur(tgl)) return;
-       if(!hariKerjaGuru(tgl) && statusEfektif(r)==='alpa') return;
-        var st=statusEfektif(r);
+        if(!hariKerjaGuru(tgl) && statusEfektif(r,tgl)==='alpa') return;
+         var st=statusEfektif(r,tgl);
         var ket=String(r.keterangan||r.ket||'');
        /* Satu tanggal dapat memiliki beberapa sesi. Prioritaskan status
           pemotong agar hasilnya sama dengan rekap admin. */
@@ -9761,6 +9792,66 @@ animateContent();
       + '</style>';
   }
 
+  function slipSafeFileName(value){
+    return String(value||'guru').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')||'guru';
+  }
+  function slipDateID(){
+    return new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'});
+  }
+  function slipRupiah(value){
+    return 'Rp '+(Number(value)||0).toLocaleString('id-ID');
+  }
+  function slipLine(doc,label,value,y,options){
+    options=options||{};
+    doc.setFont('helvetica',options.bold?'bold':'normal');
+    doc.setFontSize(options.size||10.5);
+    doc.setTextColor.apply(doc,options.color||[17,17,17]);
+    doc.text(String(label||''),options.x||20,y);
+    doc.text(String(value||''),options.right||190,y,{align:'right'});
+  }
+  async function downloadSlipPDF(){
+    if(!GJ.loaded){ toast('Data gaji belum selesai dimuat','error','&#9888;'); return; }
+    var PDF=window.jspdf&&window.jspdf.jsPDF;
+    if(typeof PDF!=='function'){ toast('Komponen PDF belum siap. Periksa koneksi lalu coba lagi.','error','&#9888;'); return; }
+    var ym=GJ.bulan||bulanIni(), parts=ym.split('-');
+    var label=BULAN[parseInt(parts[1],10)]+' '+parts[0], k=rekap(ym), school=await loadSchoolInfo();
+    var doc=new PDF({unit:'mm',format:'a4',orientation:'portrait'});
+    var W=210, right=190, y=20;
+    doc.setTextColor(26,92,53); doc.setFont('helvetica','bold'); doc.setFontSize(16);
+    doc.text(school.nama,W/2,y,{align:'center'});
+    y+=6; doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(85,85,85);
+    doc.text('Slip Gaji Pegawai',W/2,y,{align:'center'});
+    if(school.kota){ y+=5; doc.text(school.kota,W/2,y,{align:'center'}); }
+    y+=5; doc.setDrawColor(26,92,53); doc.setLineWidth(0.8); doc.line(20,y,190,y);
+    y+=13; doc.setTextColor(17,17,17); doc.setFont('helvetica','bold'); doc.setFontSize(13);
+    doc.text('SLIP GAJI - '+label.toUpperCase(),W/2,y,{align:'center'});
+    y+=13;
+    slipLine(doc,'Nama',namaSaya(),y,{bold:false}); y+=6;
+    slipLine(doc,'NIP',nipSaya()||'-',y); y+=6;
+    slipLine(doc,'Jabatan',appState.teacherJabatan||appState.teacherRoleLabel||'Guru',y); y+=10;
+    doc.setFillColor(243,244,246); doc.rect(20,y-5,170,8,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(17,17,17); doc.text('Komponen',24,y); doc.text('Jumlah',right,y,{align:'right'}); y+=8;
+    doc.setDrawColor(190,190,190); doc.line(20,y-3,190,y-3);
+    slipLine(doc,'Gaji Pokok',slipRupiah(k.pokok),y); y+=7;
+    slipLine(doc,'Tunjangan',slipRupiah(k.tunjangan),y); y+=7;
+    slipLine(doc,'Total Penghasilan',slipRupiah(k.pokok+k.tunjangan),y,{bold:true}); y+=10;
+    if(k.adaManual){
+      slipLine(doc,'Potongan (kebijakan sekolah)','- '+slipRupiah(k.potong),y); y+=8;
+    }else{
+      slipLine(doc,'Potongan Alpa ('+k.alpa+' hari x '+slipRupiah((GJ.pot||{}).alpa||0)+')','- '+slipRupiah(k.alpa*((GJ.pot||{}).alpa||0)),y); y+=7;
+      if(k.izin && (GJ.pot||{}).izin>0){ slipLine(doc,'Potongan Izin ('+k.izin+' hari x '+slipRupiah((GJ.pot||{}).izin)+')','- '+slipRupiah(k.izin*(GJ.pot||{}).izin),y); y+=7; }
+      if(k.terlambat && (GJ.pot||{}).terlambat>0){ slipLine(doc,'Potongan Terlambat ('+k.terlambat+' hari x '+slipRupiah((GJ.pot||{}).terlambat)+')','- '+slipRupiah(k.terlambat*(GJ.pot||{}).terlambat),y); y+=7; }
+    }
+    doc.setFillColor(249,250,251); doc.rect(20,y-5,170,10,'F');
+    slipLine(doc,'Gaji Bersih Diterima',slipRupiah(k.bersih),y+1,{bold:true,size:11}); y+=28;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(17,17,17);
+    doc.text('Mengetahui,',24,y); doc.text((school.kota||'..................')+', '+slipDateID(),right,y,{align:'right'}); y+=6;
+    doc.text('Kepala Sekolah',24,y); doc.text('Penerima,',right,y,{align:'right'}); y+=25;
+    doc.setFont('helvetica','bold'); doc.text(school.kepsek,24,y); doc.text(namaSaya(),right,y,{align:'right'});
+    doc.save('Slip_Gaji_'+slipSafeFileName(namaSaya())+'_'+slipSafeFileName(label)+'.pdf');
+    toast('Slip gaji '+label+' berhasil diunduh','success','&#10003;');
+  }
+
   /* ---------------- handler ---------------- */
   window.zGaji={
     geserBulan: function(delta){
@@ -9771,7 +9862,8 @@ animateContent();
       GJ.bulan=y+'-'+pad2(m);
       if(typeof render==='function') render();
     },
-    muatUlang: function(){ GJ.loaded=false; loadGJ(); if(typeof render==='function') render(); }
+     muatUlang: function(){ GJ.loaded=false; loadGJ(); if(typeof render==='function') render(); },
+     downloadSlipPDF: downloadSlipPDF
   };
 
   /* ---------------- renderer modul ---------------- */
@@ -9842,7 +9934,10 @@ animateContent();
           : ('Hitungan otomatis dari absensi: '+k.alpa+' alpa, '+k.izin+' izin, '+k.terlambat+' terlambat = <b>'+rp(k.potongAuto)+'</b>.<br/>'))
       + '</div>';   /* [GAJI GURU HP] catatan aturan izin/hari kerja & catatan web dihapus atas permintaan */
 
-    h+='<div style="margin-top:10px"><button class="ggj-btn" onclick="zGaji.muatUlang()">Muat ulang data</button></div>';
+     h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'
+       + '<button class="ggj-btn" onclick="zGaji.downloadSlipPDF()">Download Slip PDF</button>'
+       + '<button class="ggj-btn" onclick="zGaji.muatUlang()">Muat ulang data</button>'
+       + '</div>';
 
     h+='</div></section>';
     return h;
