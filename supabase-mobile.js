@@ -27,6 +27,42 @@
     return window.__ZYMATA_MOBILE_SUPA__;
   }
 
+  var _authRefreshPromise = null;
+  var AUTH_REFRESH_SKEW = 120;
+  async function ensureAuthSession(forceRefresh){
+    var client = getClient();
+    try {
+      var current = await client.auth.getSession();
+      var session = current && current.data && current.data.session;
+      var exp = session && Number(session.expires_at || 0);
+      if(!forceRefresh && session && (!exp || exp > Math.floor(Date.now()/1000) + AUTH_REFRESH_SKEW)) return session;
+    } catch(_) {}
+    if(_authRefreshPromise) return await _authRefreshPromise;
+    _authRefreshPromise = (async function(){
+      try {
+        var refreshed = await client.auth.refreshSession();
+        return refreshed && refreshed.data && refreshed.data.session ? refreshed.data.session : null;
+      } catch(_) { return null; }
+    })().finally(function(){ _authRefreshPromise = null; });
+    return await _authRefreshPromise;
+  }
+  function isAuthRpcError(result){
+    var e=result&&result.error;
+    if(!e) return false;
+    return String(e.code||'')==='42501' || Number(e.status)===401 || /permission denied|jwt|unauthorized/i.test(String(e.message||e));
+  }
+  async function waliRpc(name, args){
+    var session=await ensureAuthSession(false);
+    if(!session) return { data:null, error:{ code:'AUTH_SESSION_INVALID', message:'Sesi login tidak tersedia' } };
+    var result=await getClient().rpc(name,args);
+    if(isAuthRpcError(result)){
+      session=await ensureAuthSession(true);
+      if(!session) return result;
+      result=await getClient().rpc(name,args);
+    }
+    return result;
+  }
+
   // [EGRESS CACHE HP] Penghemat kuota untuk aplikasi guru & wali.
   //  (a) Gabung permintaan kembar: bila beberapa modul meminta tabel yang sama
   //      pada saat bersamaan (sering terjadi saat login, karena semua modul
@@ -159,7 +195,7 @@
 
   async function getWaliTabunganSaldo(siswaId, nis){
     try {
-      const res = await getClient().rpc('get_wali_tabungan_saldo', {
+      const res = await waliRpc('get_wali_tabungan_saldo', {
         p_siswa_id: clean(siswaId || ''),
         p_nis: clean(nis || '')
       });
@@ -171,7 +207,7 @@
 
   async function getWaliSppSummary(siswaId, nis){
     try {
-      const res = await getClient().rpc('get_wali_spp_summary', {
+      const res = await waliRpc('get_wali_spp_summary', {
         p_siswa_id: clean(siswaId || ''),
         p_nis: clean(nis || '')
       });
@@ -183,7 +219,7 @@
 
   async function getWaliAbsensiSummary(siswaId, nis, tanggal){
     try {
-      const res = await getClient().rpc('get_wali_absensi_summary', {
+      const res = await waliRpc('get_wali_absensi_summary', {
         p_siswa_id: clean(siswaId || ''),
         p_nis: clean(nis || ''),
         p_tanggal: tanggal || new Date().toISOString().slice(0, 10)
@@ -196,7 +232,7 @@
 
   async function getWaliBadgeSummary(siswaId, nis){
     try {
-      const res = await getClient().rpc('get_wali_badge_summary', {
+      const res = await waliRpc('get_wali_badge_summary', {
         p_siswa_id: clean(siswaId || ''),
         p_nis: clean(nis || '')
       });
