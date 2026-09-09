@@ -9848,8 +9848,16 @@ animateContent();
     doc.text('Mengetahui,',24,y); doc.text((school.kota||'..................')+', '+slipDateID(),right,y,{align:'right'}); y+=6;
     doc.text('Kepala Sekolah',24,y); doc.text('Penerima,',right,y,{align:'right'}); y+=25;
     doc.setFont('helvetica','bold'); doc.text(school.kepsek,24,y); doc.text(namaSaya(),right,y,{align:'right'});
-    doc.save('Slip_Gaji_'+slipSafeFileName(namaSaya())+'_'+slipSafeFileName(label)+'.pdf');
-    toast('Slip gaji '+label+' berhasil diunduh','success','&#10003;');
+     var slipFilename='Slip_Gaji_'+slipSafeFileName(namaSaya())+'_'+slipSafeFileName(label)+'.pdf';
+     var Cap=window.Capacitor;
+     var nativeApp=!!((Cap&&typeof Cap.isNativePlatform==='function'&&Cap.isNativePlatform())||(Cap&&Cap.isNative)||window.cordova);
+     if(nativeApp&&typeof window.zSaveFile==='function'){
+       var saved=await window.zSaveFile(doc.output('datauristring'),slipFilename);
+       if(saved) toast('Slip gaji '+label+' tersimpan di perangkat','success','&#10003;');
+     }else{
+       doc.save(slipFilename);
+       toast('Slip gaji '+label+' berhasil diunduh','success','&#10003;');
+     }
   }
 
   /* ---------------- handler ---------------- */
