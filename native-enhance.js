@@ -382,7 +382,7 @@
     var Filesystem = plugin('Filesystem');
     var Share = plugin('Share');
     // Bukan di aplikasi native (browser biasa) -> biar browser yang tangani
-    if (!isNative() || !Filesystem) { try { window.open(url, '_blank'); } catch (e) {} return; }
+    if (!isNative() || !Filesystem) { try { window.open(url, '_blank'); } catch (e) {} return false; }
     try {
       window.zToast && window.zToast('Menyimpan ' + filename + '\u2026', 'success');
       var fileUri = null;
@@ -413,9 +413,11 @@
       } else {
         window.zToast && window.zToast('Tersimpan: ' + filename, 'success');
       }
+      return true;
     } catch (e) {
       try { window.open(url, '_blank'); } catch (e2) {}
       window.zToast && window.zToast('Gagal menyimpan, dibuka di browser', 'error');
+      return false;
     }
   };
 
