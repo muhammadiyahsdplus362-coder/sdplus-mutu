@@ -4566,7 +4566,7 @@ animateWaliContent();
   }
 
   // [LEMBAR 1 BULAN WALI] lembarBulan = bulan lembar yang sedang dilihat, 'YYYY-MM'
-  var WT = { tab:'wali_murid', wali:{}, sekolah:{}, riwayat:[], riwayatSekolah:[], loading:false, loadedNis:null, tgl:todayStr(), cleared:false, draft:{}, lembarBulan:'' };
+  var WT = { tab:'wali_murid', wali:{}, sekolah:{}, riwayat:[], riwayatSekolah:[], loading:false, loadedNis:null, tgl:todayStr(), cleared:false, draft:{}, lembarBulan:'', rwCache:{ wali_murid:{}, sekolah:{} }, rwLoading:{} };
 
   // Isi form mengikuti TANGGAL yang dipilih: kalau tanggal itu belum ada setoran,
   // form dibiarkan kosong supaya wali tidak menyimpan ulang data lama.
@@ -4649,21 +4649,105 @@ animateWaliContent();
     return false;
   }
 
+  /* [EGRESS PER BULAN] Dulu SATU kali buka modul menarik SELURUH riwayat anak
+     (limit 800 per konteks, select=*) lalu menyaring satu bulan di HP. Sekarang
+     hanya bulan yang benar-benar ditampilkan yang diambil, kolom dibatasi, dan
+     bulan yang sudah dibuka diambil dari cache HP.
+     Kenapa: nama kunci JSON terulang di SETIAP baris, jadi membuang kolom yang
+     tak dipakai memotong egress jauh lebih besar daripada memotong baris. */
+  var RW_KOLOM = 'id,konteks,siswa_id,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tanggal,tahun_ajaran,semester';
+  var RW_KOLOM_RINGKAS = 'kategori,konteks,surah_no,surah_nama,ayat,juz,progres,catatan,tahun_ajaran,semester';
+  var RW_LIMIT = 500; // pengaman; terbanyak terukur 264 baris/bulan/anak
+
+  function zlbBulanDariTgl(t){ return String(t||todayStr()).slice(0,7) || zlbBulanIni(); }
+  function zlbRentangBulan(ym){
+    var a=String(ym||zlbBulanIni()).split('-');
+    var y=parseInt(a[0],10)||new Date().getFullYear(), m=parseInt(a[1],10)||(new Date().getMonth()+1);
+    var fix=y+'-'+zlbPad2(m);
+    return { ym:fix, gte:fix+'-01', lte:fix+'-'+zlbPad2(zlbJmlHari(fix)) };
+  }
+  function zlbRiwayatBox(){ if(!WT.rwCache) WT.rwCache={ wali_murid:{}, sekolah:{} }; if(!WT.rwLoading) WT.rwLoading={}; return WT.rwCache; }
+  function zlbBustRiwayat(){ WT.rwCache={ wali_murid:{}, sekolah:{} }; WT.rwLoading={}; }
+  // Ambil riwayat SATU BULAN untuk satu konteks. Hasil disimpan di WT.rwCache
+  // supaya geser bulan bolak-balik tidak menembak server lagi.
+  async function loadRiwayatBulan(nis, konteks, ym){
+    var api=SB(); if(!api||!nis) return [];
+    var rg=zlbRentangBulan(ym); ym=rg.ym;
+    var box=zlbRiwayatBox();
+    if(!box[konteks]) box[konteks]={};
+    if(box[konteks][ym]) return box[konteks][ym];
+    var k=konteks+'|'+ym;
+    if(WT.rwLoading[k]) return await WT.rwLoading[k];
+    var jalan=(async function(){
+      try{
+        var res=await api.select('mutabaah_tahfidz_riwayat',{
+          select:RW_KOLOM,
+          eq:{ siswa_id:String(nis), konteks:konteks },
+          gte:{ tanggal:rg.gte }, lte:{ tanggal:rg.lte },
+          order:'tanggal', ascending:false, nullsFirst:false, limit:RW_LIMIT
+        });
+        var rows=(res&&res.data)?res.data:[];
+        box[konteks][ym]=rows;
+        return rows;
+      }catch(e){ return []; } // galat: JANGAN di-cache, biar percobaan berikutnya mengulang
+    })();
+    WT.rwLoading[k]=jalan;
+    try{ return await jalan; } finally { try{ delete WT.rwLoading[k]; }catch(e2){} }
+  }
+  // Ambil beberapa bulan sekaligus (dua konteks) tanpa duplikasi query.
+  async function zlbPastikanBulan(nis, months){
+    if(!nis) return;
+    var tugas=[];
+    for(var i=0;i<months.length;i++){
+      tugas.push(loadRiwayatBulan(nis,'wali_murid',months[i]));
+      tugas.push(loadRiwayatBulan(nis,'sekolah',months[i]));
+    }
+    await Promise.all(tugas);
+  }
+  // Susun WT.riwayat/WT.riwayatSekolah dari cache: bulan lembar + bulan tanggal form.
+  function zlbSusunRiwayat(){
+    var box=zlbRiwayatBox();
+    var mSheet=WT.lembarBulan||zlbBulanIni(), mTgl=zlbBulanDariTgl(WT.tgl);
+    var months=[mSheet]; if(mTgl!==mSheet) months.push(mTgl);
+    var ambil=function(konteks){
+      var out=[], bag=box[konteks]||{};
+      for(var i=0;i<months.length;i++){ if(bag[months[i]]) out=out.concat(bag[months[i]]); }
+      return out;
+    };
+    WT.riwayat=ambil('wali_murid');
+    WT.riwayatSekolah=ambil('sekolah');
+  }
+
   async function loadTahfidz(nis){
     if(WT.loading) return;
     WT.loading=true; WT.loadedNis=nis;
     try{
-      var api=SB(); var rows=[];
-      if(api && nis){ var res=await api.select('mutabaah_tahfidz',{ eq:{ siswa_id:String(nis) }, limit:400 }); rows=(res&&res.data)?res.data:[]; }
-      var ta=curTA(), sem=curSemester(), dw={}, dsk={};
+      var api=SB();
+      // Ringkasan form: saring tahun ajaran/semester di SERVER (dulu tarik 400
+      // baris semua kolom lalu buang di HP) + kolom minimal.
+      var rows=[];
+      if(api && nis){
+        var res=await api.select('mutabaah_tahfidz',{
+          select:RW_KOLOM_RINGKAS,
+          eq:{ siswa_id:String(nis), tahun_ajaran:String(curTA()), semester:String(curSemester()) },
+          limit:60
+        });
+        rows=(res&&res.data)?res.data:[];
+      }
+      var ta=String(curTA()), sem=String(curSemester()), dw={}, dsk={};
       rows.forEach(function(r){
         if(String(r.tahun_ajaran||'')!==ta||String(r.semester||'')!==sem) return;
         var rec={ surah:r.surah_no, ayat:r.ayat, catatan:r.catatan, juz:r.juz, progres:r.progres, surah_nama:r.surah_nama };
         if(String(r.konteks||'')==='wali_murid') dw[r.kategori]=rec; else if(String(r.konteks||'')==='sekolah') dsk[r.kategori]=rec;
       });
       WT.wali=dw; WT.sekolah=dsk;
-      try{ if(api&&nis){ var rr=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'wali_murid' }, order:'tanggal', ascending:false, limit:800 }); WT.riwayat=(rr&&rr.data)?rr.data:[]; } else { WT.riwayat=[]; } }catch(e){ WT.riwayat=[]; }
-      try{ if(api&&nis){ var rs=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, limit:800 }); WT.riwayatSekolah=(rs&&rs.data)?rs.data:[]; } else { WT.riwayatSekolah=[]; } }catch(e){ WT.riwayatSekolah=[]; }
+      if(api && nis){
+        var mSheet=WT.lembarBulan||zlbBulanIni(); WT.lembarBulan=mSheet;
+        var mTgl=zlbBulanDariTgl(WT.tgl);
+        var months=[mSheet]; if(mTgl!==mSheet) months.push(mTgl);
+        await zlbPastikanBulan(nis, months);
+        zlbSusunRiwayat();
+      } else { WT.riwayat=[]; WT.riwayatSekolah=[]; }
     }catch(e){ WT.wali={}; WT.sekolah={}; WT.riwayat=[]; WT.riwayatSekolah=[]; }
     WT.loading=false;
     if(activeTahfidz()) render();
@@ -4671,14 +4755,32 @@ animateWaliContent();
 
   window.zwTf = {
     setTab: function(t){ WT.tab=(t==='sekolah')?'sekolah':'wali_murid'; render(); },
-    // [LEMBAR 1 BULAN WALI] geser bulan lembar
-    geserLembarBulan: function(delta){
+    // [LEMBAR 1 BULAN WALI] geser bulan lembar — ambil bulan itu kalau belum ada
+    geserLembarBulan: async function(delta){
       var ym=WT.lembarBulan||zlbBulanIni(); var a=String(ym).split('-');
       var y=parseInt(a[0],10), m=parseInt(a[1],10)+(parseInt(delta,10)||0);
       if(m<1){ m=12; y--; } if(m>12){ m=1; y++; }
-      WT.lembarBulan=y+'-'+zlbPad2(m); render();
+      var nym=y+'-'+zlbPad2(m); WT.lembarBulan=nym;
+      var nis=childNis(), box=zlbRiwayatBox();
+      if(nis && !((box.wali_murid||{})[nym] && (box.sekolah||{})[nym])){
+        WT.loading=true; render();
+        await zlbPastikanBulan(nis, [nym]);
+        WT.loading=false;
+      }
+      zlbSusunRiwayat();
+      render();
     },
-    setTanggal: function(v){ WT.tgl=String(v||'').slice(0,10)||todayStr(); WT.cleared=false; WT.draft={}; render(); },
+    setTanggal: async function(v){
+      WT.tgl=String(v||'').slice(0,10)||todayStr(); WT.cleared=false; WT.draft={};
+      var nis=childNis(), mTgl=zlbBulanDariTgl(WT.tgl), box=zlbRiwayatBox();
+      if(nis && !((box.wali_murid||{})[mTgl] && (box.sekolah||{})[mTgl])){
+        WT.loading=true; render();
+        await zlbPastikanBulan(nis, [mTgl]);
+        WT.loading=false;
+      }
+      zlbSusunRiwayat();
+      render();
+    },
     kosongkanForm: function(){ WT.cleared=true; WT.draft={}; render(); toast('Form dikosongkan.','info'); },
     hapusSetoranHariIni: async function(){
       var api=SB(), nis=childNis(), tgl=String(WT.tgl||todayStr()).slice(0,10);
@@ -4700,6 +4802,9 @@ animateWaliContent();
         // Hilangkan langsung dari layar setelah DELETE berhasil. Sinkronisasi
         // ringkasan dan pembacaan ulang tetap berjalan di belakang.
         WT.riwayat=WT.riwayat.filter(function(r){ return ids.indexOf(r.id)===-1; });
+        // Buang cache dulu supaya render() di bawah tidak memuat ulang data lama.
+        try{ if(window.zmClearCache){ window.zmClearCache('mutabaah_tahfidz_riwayat'); } }catch(_e){}
+        zlbBustRiwayat();
         WT.cleared=true; WT.draft={}; WT.loadedNis=null;
         render();
         toast('Setoran tanggal '+tgl+' dihapus','success');
@@ -4865,7 +4970,7 @@ animateWaliContent();
         // 3) Bandingkan dengan yang sudah tersimpan pada tanggal ini.
         var _updates=[];
         try{
-          var _ex=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'wali_murid', tanggal:tgl }, limit:400 });
+          var _ex=await api.select('mutabaah_tahfidz_riwayat',{ select:'id,kategori,surah_no,ayat,catatan,progres,tanggal', eq:{ siswa_id:String(nis), konteks:'wali_murid', tanggal:tgl }, limit:200 });
           if(_ex&&_ex.error) throw new Error(_ex.error.message||'gagal membaca riwayat');
           var _exRows=(_ex&&_ex.data)?_ex.data:[];
           if(_exRows.length){
@@ -4920,7 +5025,7 @@ animateWaliContent();
         if(!gagalRiwayat){
           toast(dikoreksi ? ('Tersimpan \u00b7 '+dikoreksi+' setoran dikoreksi') : ('Tersimpan '+saved+' kategori'),'success');
         }
-        WT.cleared=false; WT.draft={}; WT.loadedNis=null; loadTahfidz(nis);
+        WT.cleared=false; WT.draft={}; zlbBustRiwayat(); WT.loadedNis=null; loadTahfidz(nis);
       }
       else if(!gagalRiwayat) toast('Gagal menyimpan','error');
     }
