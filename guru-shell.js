@@ -140,6 +140,7 @@ function buildGuruModules(){
     { id: 'guru-ibadah', icon: '&#10022;', title: 'Ibadah', meta: 'Catatan ibadah siswa', route: 'module:ibadah', group: 'Perkembangan' },
     { id: 'guru-karakter', icon: '&#9671;', title: 'Karakter', meta: 'Sikap & akhlak', route: 'module:karakter', group: 'Perkembangan' },
     { id: 'guru-calistung', icon: '&#9636;', title: 'Calistung', meta: 'Literasi & numerasi siswa', route: 'module:calistung', group: 'Perkembangan' }, // [CALISTUNG GURU]
+    { id: 'guru-pengembangan', icon: '&#9997;', title: 'Pengembangan', meta: 'Rencana, capaian & kendala mingguan', route: 'module:pengembangan', group: 'Perkembangan' }, // [PENGEMBANGAN GURU]
     { id: 'guru-prestasi', icon: '&#9733;', title: 'Prestasi', meta: 'Capaian siswa', route: 'module:prestasi', group: 'Perkembangan' },
     { id: 'guru-ekskul', icon: '&#10041;', title: 'Ekstrakurikuler', meta: 'Ekskul & pembinaan', route: 'module:ekstrakurikuler', group: 'Perkembangan' },
     { id: 'guru-pelanggaran', icon: '&#33;', title: 'Pelanggaran', meta: 'Catatan disiplin', route: 'module:pelanggaran', group: 'Perkembangan' },
@@ -210,6 +211,13 @@ const modulePlaceholders = {
     eyebrow: 'Akademik',
     title: 'Kalender Akademik',
     subtitle: 'Agenda sekolah, libur, ujian, rapat, dan kegiatan kelas dalam satu timeline.',
+    stats: [],
+    focus: []
+  },
+  pengembangan: {
+    eyebrow: 'Perkembangan',
+    title: 'Pengembangan',
+    subtitle: 'Rencana, capaian, dan kendala pembelajaran mingguan per mapel.',
     stats: [],
     focus: []
   },
@@ -2062,6 +2070,7 @@ function renderModulePlaceholder(moduleId) {
   if (moduleId === 'gaji-saya') return window.renderGajiSayaGuruModule(detail); // [GAJI GURU HP]
   if (moduleId === 'perangkat-pembelajaran') return window.renderPerangkatPembelajaranGuruModule(detail);
   if (moduleId === 'calistung') return window.renderCalistungGuruModule(detail); // [CALISTUNG GURU]
+  if (moduleId === 'pengembangan') return window.renderPengembanganGuruModule(detail); // [PENGEMBANGAN GURU]
   /* [JURNAL KELAS WALI] Mode lihat saja, harus dicek SEBELUM cabang Supabase generik. */
   if (moduleId === 'jurnal-kelas-wali') return window.renderJurnalKelasWaliGuruModule(detail);
   if (moduleId === 'tabungan') return renderTabunganInputGuruModule(moduleId, detail);
@@ -7053,7 +7062,7 @@ animateContent();
   function findSiswa(key){ var a=allSiswa(); for(var i=0;i<a.length;i++){ if(_sameStudent(a[i], key)) return a[i]; } var r=rosterAll(); for(var j=0;j<r.length;j++){ if(_sameStudent(r[j], key)) return r[j]; } return null; }
 
   // [LEMBAR 1 BULAN GURU] mtfLembarBulan = bulan lembar yang sedang dilihat, 'YYYY-MM'
-  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'', riwayatBulan:'', mtfLembarBulan:'', mtfDraftTgl:'', mtfTgl:todayStr(), mtfByKat:{} };
+  var ST = { halaqah:null, halaqahLoading:false, roster:null, rosterLoading:false, addKelas:'', addGolongan:'', mtfSiswaId:'', mtfGolongan:'', mtfTab:'sekolah', mtfDraft:{}, mtfWali:{}, mtfLoading:false, riwayat:null, riwayatWali:null, riwayatLoading:false, riwayatOpen:false, riwayatTgl:'', riwayatBulan:'', mtfLembarBulan:'', mtfDraftTgl:'', mtfTgl:todayStr(), mtfByKat:{}, rwCache:{}, rwLoading:{} };
 
   // MULTI-SURAH: draft sekolah per kategori kini berupa ARRAY entri {surah,ayat,catatan}.
   function draftEntries(kat){
@@ -7119,15 +7128,96 @@ animateContent();
     if(appState.activeTab==='module:kelola-halaqah'||appState.activeTab==='module:mutabaah-tahfidz') render();
   }
 
+  /* [EGRESS PER BULAN GURU] Dulu riwayat ditarik SELURUH bulan (limit 1500 per
+     konteks, select=*) lalu disaring satu bulan di layar. Sekarang hanya bulan
+     yang ditampilkan yang diambil, kolom dibatasi, dan bulan yang sudah dibuka
+     diambil dari cache per-siswa. Nama kunci JSON terulang di tiap baris, jadi
+     membuang kolom tak terpakai memotong egress lebih besar daripada memotong baris. */
+  var GURU_RW_KOLOM = 'id,konteks,siswa_id,kategori,surah_no,surah_nama,ayat,juz,progres,catatan,tanggal,tahun_ajaran,semester';
+  var GURU_RINGKAS_KOLOM = 'kategori,konteks,surah_no,surah_nama,ayat,juz,progres,catatan,tahun_ajaran,semester';
+  var GURU_RW_LIMIT = 500; // pengaman; terbanyak terukur 264 baris/bulan/anak
+
+  function mtfKey(){ var m=memberById(ST.mtfSiswaId); return m?String(m.nis||ST.mtfSiswaId):String(ST.mtfSiswaId||''); }
+  function zlbBulanDariTgl(t){ return String(t||todayStr()).slice(0,7) || zlbBulanIni(); }
+  function zlbRentangBulan(ym){
+    var a=String(ym||zlbBulanIni()).split('-');
+    var y=parseInt(a[0],10)||new Date().getFullYear(), m=parseInt(a[1],10)||(new Date().getMonth()+1);
+    var fix=y+'-'+zlbPad2(m);
+    return { ym:fix, gte:fix+'-01', lte:fix+'-'+zlbPad2(zlbJmlHari(fix)) };
+  }
+  function zlbRiwayatBox(nis){
+    if(!ST.rwCache) ST.rwCache={};
+    if(!ST.rwLoading) ST.rwLoading={};
+    var k=String(nis||'');
+    if(!ST.rwCache[k]) ST.rwCache[k]={ sekolah:{}, wali_murid:{} };
+    return ST.rwCache[k];
+  }
+  function zlbBustRiwayat(nis){
+    if(!ST.rwCache) ST.rwCache={};
+    if(nis){ try{ delete ST.rwCache[String(nis)]; }catch(e){} } else { ST.rwCache={}; }
+    ST.rwLoading={};
+  }
+  // Ambil riwayat SATU BULAN untuk satu konteks (cache per siswa+konteks+bulan).
+  async function loadRiwayatBulan(nis, konteks, ym){
+    var api=SB(); if(!api||!nis) return [];
+    var rg=zlbRentangBulan(ym); ym=rg.ym;
+    var box=zlbRiwayatBox(nis);
+    if(!box[konteks]) box[konteks]={};
+    if(box[konteks][ym]) return box[konteks][ym];
+    var kk=String(nis)+'|'+konteks+'|'+ym;
+    if(ST.rwLoading[kk]) return await ST.rwLoading[kk];
+    var jalan=(async function(){
+      try{
+        var res=await api.select('mutabaah_tahfidz_riwayat',{
+          select:GURU_RW_KOLOM,
+          eq:{ siswa_id:String(nis), konteks:konteks },
+          gte:{ tanggal:rg.gte }, lte:{ tanggal:rg.lte },
+          order:'tanggal', ascending:false, nullsFirst:false, limit:GURU_RW_LIMIT
+        });
+        var rows=(res&&res.data)?res.data:[];
+        box[konteks][ym]=rows;
+        return rows;
+      }catch(e){ return []; } // galat: JANGAN di-cache, biar percobaan berikutnya mengulang
+    })();
+    ST.rwLoading[kk]=jalan;
+    try{ return await jalan; } finally { try{ delete ST.rwLoading[kk]; }catch(e2){} }
+  }
+  async function zlbPastikanBulan(nis, months){
+    if(!nis) return;
+    var tugas=[];
+    for(var i=0;i<months.length;i++){
+      tugas.push(loadRiwayatBulan(nis,'sekolah',months[i]));
+      tugas.push(loadRiwayatBulan(nis,'wali_murid',months[i]));
+    }
+    await Promise.all(tugas);
+  }
+  // Susun ST.riwayat (sekolah) & ST.riwayatWali dari cache: bulan lembar + bulan tanggal form.
+  function zlbSusunRiwayat(nis){
+    if(!nis){ ST.riwayat=[]; ST.riwayatWali=[]; return; }
+    var box=zlbRiwayatBox(nis);
+    var mSheet=ST.mtfLembarBulan||zlbBulanIni(), mTgl=zlbBulanDariTgl(ST.mtfTgl);
+    var months=[mSheet]; if(mTgl!==mSheet) months.push(mTgl);
+    var ambil=function(kon){
+      var out=[], bag=box[kon]||{};
+      for(var i=0;i<months.length;i++){ if(bag[months[i]]) out=out.concat(bag[months[i]]); }
+      return out;
+    };
+    ST.riwayat=ambil('sekolah');
+    ST.riwayatWali=ambil('wali_murid');
+  }
+
   async function loadMtfForSiswa(nis){
     ST.mtfLoading=true;
     if(activeMtf()) render();
     try{
       var api=SB(); var rows=[], rwRows=[];
       if(api){
-        var res=await api.select('mutabaah_tahfidz',{ eq:{ siswa_id:String(nis) }, limit:400 }); rows=(res&&res.data)?res.data:[];
-        // Ambil riwayat sekolah utk merekonstruksi MULTI-SURAH terakhir per kategori.
-        var resR=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, limit:300 }); rwRows=(resR&&resR.data)?resR.data:[];
+        // Ringkasan: saring tahun ajaran/semester di SERVER (dulu tarik 400 baris
+        // semua kolom lalu buang di HP) + kolom minimal.
+        var res=await api.select('mutabaah_tahfidz',{ select:GURU_RINGKAS_KOLOM, eq:{ siswa_id:String(nis), tahun_ajaran:String(curTA()), semester:String(curSemester()) }, limit:60 }); rows=(res&&res.data)?res.data:[];
+        // Draft (MULTI-SURAH terakhir per kategori) sengaja TETAP lintas bulan:
+        // setoran terakhir bisa ada di bulan lalu. Hanya kolomnya yang dibatasi.
+        var resR=await api.select('mutabaah_tahfidz_riwayat',{ select:GURU_RW_KOLOM, eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, nullsFirst:false, limit:300 }); rwRows=(resR&&resR.data)?resR.data:[];
       }
       var ta=curTA(), sem=curSemester(), ds={}, dw={};
       // Wali murid: tetap satu surah per kategori (read-only).
@@ -7190,16 +7280,14 @@ animateContent();
     ST.riwayatLoading=true;
     if(activeMtf()) render();
     try{
-      var api=SB(); var rows=[];
-      // [LEMBAR 1 BULAN GURU] limit dinaikkan agar lembar bulanan tidak terpotong.
-      if(api){ var res=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'sekolah' }, order:'tanggal', ascending:false, limit:1500 }); rows=(res&&res.data)?res.data:[]; }
-      ST.riwayat=rows;
-    }catch(e){ ST.riwayat=[]; }
-    try{
-      var api2=SB(); var rw=[];
-      if(api2){ var res2=await api2.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(nis), konteks:'wali_murid' }, order:'tanggal', ascending:false, limit:1500 }); rw=(res2&&res2.data)?res2.data:[]; }
-      ST.riwayatWali=rw;
-    }catch(e){ ST.riwayatWali=[]; }
+      // [EGRESS PER BULAN] Ambil bulan lembar + bulan tanggal form saja (bukan
+      // 1500 baris semua bulan), lalu susun dari cache per-siswa.
+      var mSheet=ST.mtfLembarBulan||zlbBulanIni(); ST.mtfLembarBulan=mSheet;
+      var mTgl=zlbBulanDariTgl(ST.mtfTgl);
+      var months=[mSheet]; if(mTgl!==mSheet) months.push(mTgl);
+      await zlbPastikanBulan(nis, months);
+      zlbSusunRiwayat(nis);
+    }catch(e){ ST.riwayat=[]; ST.riwayatWali=[]; }
     ST.riwayatLoading=false;
     if(activeMtf()) render();
   }
@@ -7293,7 +7381,7 @@ animateContent();
         if(!confirm('Konfirmasi terakhir: baris kembar '+nm+' akan dihapus permanen. Lanjutkan?')) return;
       }
       try{
-        var res=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:key, konteks:'sekolah' }, limit:1000 });
+        var res=await api.select('mutabaah_tahfidz_riwayat',{ select:'id,kategori,surah_no,ayat,tanggal', eq:{ siswa_id:key, konteks:'sekolah' }, limit:1000 });
         var rows=(res&&res.data)?res.data:[];
         var seen={}, hapus=[];
         rows.slice().sort(function(a,b){ return (parseInt(a.id,10)||0)-(parseInt(b.id,10)||0); }).forEach(function(r){
@@ -7307,18 +7395,26 @@ animateContent();
         var del=await client.from('mutabaah_tahfidz_riwayat').delete().in('id', hapus);
         if(del&&del.error){ showToast('Gagal menghapus: '+(del.error.message||''),'error','&#9888;'); return; }
         showToast(hapus.length+' baris kembar dihapus.','success','&#10003;');
-        loadMtfForSiswa(key); loadRiwayat(key);
+        zlbBustRiwayat(key); loadMtfForSiswa(key); loadRiwayat(key);
       }catch(e){ showToast('Gagal membersihkan riwayat.','error','&#9888;'); }
     },
     setRiwayatTgl: function(v){ ST.riwayatTgl=String(v||''); render(); },
     // [RIWAYAT BULAN] ganti bulan -> tanggal dipilih ulang di dalam bulan itu
     setRiwayatBulan: function(v){ ST.riwayatBulan=String(v||''); ST.riwayatTgl=''; render(); },
     // [LEMBAR 1 BULAN GURU] geser bulan lembar
-    geserLembarBulan: function(delta){
+    geserLembarBulan: async function(delta){
       var ym=ST.mtfLembarBulan||zlbBulanIni(); var a=ym.split('-');
       var y=parseInt(a[0],10), m=parseInt(a[1],10)+(parseInt(delta,10)||0);
       if(m<1){ m=12; y--; } if(m>12){ m=1; y++; }
-      ST.mtfLembarBulan=y+'-'+zlbPad2(m); render();
+      var nym=y+'-'+zlbPad2(m); ST.mtfLembarBulan=nym;
+      var nis=mtfKey(), box=nis?zlbRiwayatBox(nis):{ sekolah:{}, wali_murid:{} };
+      if(nis && !((box.sekolah||{})[nym] && (box.wali_murid||{})[nym])){
+        ST.riwayatLoading=true; render();
+        await zlbPastikanBulan(nis, [nym]);
+        ST.riwayatLoading=false;
+      }
+      if(nis) zlbSusunRiwayat(nis);
+      render();
     },
     setTanggal: function(v){
       syncDraftFromDOM();
@@ -7480,7 +7576,7 @@ animateContent();
         //    UPDATE bila kuncinya sama tetapi isinya berubah.
         var _updates=[];
         try{
-          var _exRes=await api.select('mutabaah_tahfidz_riwayat',{ eq:{ siswa_id:String(s.nis||ST.mtfSiswaId), konteks:'sekolah', tanggal:tgl }, limit:400 });
+          var _exRes=await api.select('mutabaah_tahfidz_riwayat',{ select:'id,kategori,surah_no,ayat,catatan,progres,tanggal', eq:{ siswa_id:String(s.nis||ST.mtfSiswaId), konteks:'sekolah', tanggal:tgl }, limit:200 });
           if(_exRes&&_exRes.error) throw new Error(_exRes.error.message||'gagal membaca riwayat');
           var _exRows=(_exRes&&_exRes.data)?_exRes.data:[];
           if(_exRows.length){
@@ -7541,6 +7637,7 @@ animateContent();
           ? ('Tersimpan \u00b7 '+dikoreksi+' setoran dikoreksi')
           : ('Tersimpan '+saved+' kategori \u00b7 '+surahCount+' surah');
         if(!gagalRiwayat) showToast(_pesan,'success','&#10003;');
+        zlbBustRiwayat(String(s.nis||ST.mtfSiswaId));
         loadMtfForSiswa(String(s.nis||ST.mtfSiswaId)); loadRiwayat(String(s.nis||ST.mtfSiswaId));
       }
       else if(!gagalRiwayat) showToast('Gagal menyimpan','error','&#9888;');
@@ -11021,4 +11118,348 @@ animateContent();
     stats:[], focus:[]
   };
   console.log('[Zymata Guru] Modul Calistung v3 aktif');   /* [CALISTUNG GURU] */
+})();
+
+/* ============ MODUL: PENGEMBANGAN (GURU MOBILE) v1 ============
+ * [PENGEMBANGAN GURU]
+ * Jurnal pengembangan mingguan per mapel:
+ *   - awal pekan  -> Rencana Pembelajaran
+ *   - akhir pekan -> Capaian Pembelajaran + Kendala Pembelajaran
+ * Tanpa pilihan kelas. Bulan mengikuti bulan berjalan.
+ * Tabel: pengembangan_guru
+ *   (lihat supabase/migrations/20260918_pengembangan_guru.sql)
+ * ============================================================= */
+(function(){
+  'use strict';
+  if(window.__ZY_PENGEMBANGAN_GURU_V1__) return;
+  window.__ZY_PENGEMBANGAN_GURU_V1__ = true;
+
+  var TABEL='pengembangan_guru';
+  var KONFLIK='guru_key,mapel,bulan,minggu';
+  var CLIENT_KEY='default';
+
+  var BULAN_NAMA=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+
+  var PG={ loaded:false, loading:false, saving:false, mapel:'', bulan:'', rows:[], draft:{}, galat:'', mapelManual:false, inited:false };
+  var PG_LS_KEY='zymataPengembanganPilihan'; // [PENGEMBANGAN TAHAN REFRESH]
+
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function SB(){ return window.ZymataMobileSupabase; }
+  function toast(m,t){ if(typeof showToast==='function') showToast(m,t||'success','&#10003;'); }
+  function pad2(n){ n=String(n); return n.length<2?('0'+n):n; }
+  function activePG(){ try{ return appState && appState.activeTab==='module:pengembangan'; }catch(e){ return false; } }
+  function namaSaya(){ try{ return String(appState.teacherName||'Guru'); }catch(e){ return 'Guru'; } }
+  function nipSaya(){ try{ return String(appState.teacherNip||'').trim(); }catch(e){ return ''; } }
+  function guruKey(){ var nip=nipSaya(); if(nip) return nip; return namaSaya().replace(/\s+/g,' ').trim().toLowerCase()||'guru'; }
+
+  function mapelOpts(){
+    var out=[];
+    try{ out=(typeof guruMapelOpts==='function')?guruMapelOpts():[]; }catch(e){ out=[]; }
+    out=(out||[]).map(function(m){ return String(m||'').trim(); }).filter(Boolean);
+    var seen={}, uniq=[];
+    out.forEach(function(m){ var k=m.toLowerCase(); if(!seen[k]){ seen[k]=1; uniq.push(m); } });
+    if(PG.mapel && uniq.map(function(m){ return m.toLowerCase(); }).indexOf(PG.mapel.toLowerCase())<0) uniq.unshift(PG.mapel);
+    return uniq;
+  }
+
+  /* [PENGEMBANGAN TAHAN REFRESH] Simpan pilihan mapel & bulan terakhir supaya
+     setelah aplikasi dimuat ulang, data yang sudah diisi tidak "hilang" hanya
+     karena dropdown mapel kembali ke mapel pertama. */
+  function bacaSimpanan(){
+    try{ return JSON.parse(localStorage.getItem(PG_LS_KEY)||'{}')||{}; }catch(e){ return {}; }
+  }
+  function tulisSimpanan(){
+    try{ localStorage.setItem(PG_LS_KEY, JSON.stringify({ guru:guruKey(), mapel:PG.mapel, bulan:PG.bulan })); }catch(e){}
+  }
+  function mapelCocok(list, v){
+    var lc=String(v||'').toLowerCase();
+    for(var i=0;i<(list||[]).length;i++){ if(String(list[i]).toLowerCase()===lc) return list[i]; }
+    return String(v||'');
+  }
+  /* Tentukan mapel aktif saat muat: pertahankan mapel yang sedang dipakai bila
+     ada datanya; kalau tidak, pakai pilihan tersimpan; kalau tidak, pakai mapel
+     yang sudah ada datanya (terbaru); terakhir baru mapel pertama. */
+  function pilihMapelJikaPerlu(rows){
+    if(PG.mapelManual) return;
+    var list=mapelOpts();
+    var adaLi=function(x){ return list.some(function(m){ return String(m).toLowerCase()===String(x||'').toLowerCase(); }); };
+    var adaData=function(x){ return (rows||[]).some(function(r){ return String(r.mapel||'').toLowerCase()===String(x||'').toLowerCase(); }); };
+    if(PG.mapel && adaData(PG.mapel)) return;
+    var s=bacaSimpanan(); if(s && s.guru && s.guru!==guruKey()) s={};
+    if(s && s.mapel && adaLi(s.mapel) && adaData(s.mapel)){ PG.mapel=mapelCocok(list,s.mapel); return; }
+    if(rows && rows.length){
+      var urut=rows.slice().sort(function(a,b){ return String(b.updated_at||'').localeCompare(String(a.updated_at||'')); });
+      if(urut[0] && urut[0].mapel){ PG.mapel=mapelCocok(list,urut[0].mapel); return; }
+    }
+    if(s && s.mapel && adaLi(s.mapel)){ PG.mapel=mapelCocok(list,s.mapel); return; }
+    if(!(PG.mapel && adaLi(PG.mapel))) PG.mapel=list.length?list[0]:'';
+  }
+
+  function bulanIni(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1); }
+  function tanggalISO(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function labelTanggal(iso){
+    var m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/); if(!m) return '';
+    return parseInt(m[3],10)+' '+BULAN_NAMA[parseInt(m[2],10)-1].slice(0,3);
+  }
+
+  /* Pecah bulan 'YYYY-MM' menjadi minggu-minggu (Senin-Minggu), dibatasi pada
+     tanggal yang benar-benar berada di bulan tersebut. */
+  function daftarMinggu(bulan){
+    var m=String(bulan||'').match(/^(\d{4})-(\d{2})$/); if(!m) return [];
+    var th=parseInt(m[1],10), bl=parseInt(m[2],10);
+    var awalBulan=new Date(th, bl-1, 1);
+    var akhirBulan=new Date(th, bl, 0);
+    var dow=awalBulan.getDay();
+    var geser=(dow===0?6:dow-1);
+    var senin=new Date(th, bl-1, 1-geser);
+    var hasil=[], n=0;
+    while(senin<=akhirBulan){
+      var minggu=new Date(senin);
+      var min=new Date(minggu.getFullYear(),minggu.getMonth(),minggu.getDate()+6);
+      var mulai=(minggu<awalBulan)?new Date(awalBulan):minggu;
+      var selesai=(min>akhirBulan)?new Date(akhirBulan):min;
+      n++;
+      hasil.push({ minggu:n, mulai:tanggalISO(mulai), selesai:tanggalISO(selesai) });
+      senin=new Date(minggu.getFullYear(),minggu.getMonth(),minggu.getDate()+7);
+    }
+    return hasil;
+  }
+
+  function rowUntuk(mg){ var r=null; (PG.rows||[]).forEach(function(x){ if(Number(x.minggu)===Number(mg)) r=x; }); return r; }
+  function nilai(field, mg){
+    var d=PG.draft[mg];
+    if(d && d[field]!=null) return d[field];
+    var r=rowUntuk(mg);
+    return r?(r[field]==null?'':String(r[field])):'';
+  }
+  function statusMinggu(mg){
+    var a=String(nilai('rencana_pembelajaran',mg)||'').trim();
+    var b=String(nilai('capaian_pembelajaran',mg)||'').trim();
+    var c=String(nilai('kendala_pembelajaran',mg)||'').trim();
+    var isi=[a,b,c].filter(Boolean).length;
+    if(isi===0) return { kode:'kosong', label:'Belum diisi' };
+    if(isi===3) return { kode:'lengkap', label:'Lengkap' };
+    return { kode:'sebagian', label:'Sebagian' };
+  }
+  function daftarMingguTab(){ return daftarMinggu(PG.bulan); }
+
+  function loadPG(){
+    if(PG.loading) return;
+    PG.loading=true; PG.galat='';
+    if(!PG.bulan){ PG.loaded=true; PG.loading=false; return; }
+    var api=SB();
+    if(!api || typeof api.select!=='function'){ PG.rows=[]; PG.loaded=true; PG.loading=false; if(activePG()&&typeof render==='function') render(); return; }
+    return api.select(TABEL, { eq:{ client_key:CLIENT_KEY, guru_key:guruKey(), bulan:PG.bulan }, limit:200 })
+      .then(function(res){
+        if(res && res.error) throw res.error;
+        var all=(res&&Array.isArray(res.data))?res.data:[];
+        pilihMapelJikaPerlu(all);
+        var mapel=String(PG.mapel||'').trim();
+        PG.rows=all.filter(function(r){ return String(r.mapel||'').trim()===mapel; });
+        PG.inited=true;
+        PG.loaded=true; PG.loading=false;
+        tulisSimpanan();
+        if(activePG() && typeof render==='function') render();
+      })
+      .catch(function(e){
+        PG.rows=[]; PG.loaded=true; PG.loading=false; PG.galat=(e&&e.message)?e.message:String(e);
+        toast('Gagal memuat data pengembangan: '+PG.galat,'error','&#9888;');
+        if(activePG() && typeof render==='function') render();
+      });
+  }
+
+  async function simpanMinggu(mg){
+    if(PG.saving) return;
+    var mapel=String(PG.mapel||'').trim();
+    if(!mapel){ toast('Pilih mapel dulu','error','&#9888;'); return; }
+    var info=null; daftarMingguTab().forEach(function(w){ if(Number(w.minggu)===Number(mg)) info=w; });
+    var api=SB(); if(!api||typeof api.upsert!=='function'){ toast('Koneksi Supabase belum siap','error','&#9888;'); return; }
+    var a=String(nilai('rencana_pembelajaran',mg)||'').trim();
+    var b=String(nilai('capaian_pembelajaran',mg)||'').trim();
+    var c=String(nilai('kendala_pembelajaran',mg)||'').trim();
+    if(!a && !b && !c){ toast('Isi minimal satu kolom minggu ini','error','&#9888;'); return; }
+    var lama=rowUntuk(mg);
+    var body={
+      client_key: CLIENT_KEY,
+      row_uid: (lama&&lama.row_uid)||('pg-'+guruKey()+'-'+PG.bulan+'-'+mg),
+      guru_key: guruKey(),
+      guru_nama: namaSaya(),
+      guru_nip: nipSaya(),
+      mapel: mapel,
+      bulan: PG.bulan,
+      tahun: parseInt(String(PG.bulan).slice(0,4),10)||null,
+      minggu: Number(mg),
+      periode_mulai: info?info.mulai:null,
+      periode_selesai: info?info.selesai:null,
+      rencana_pembelajaran: a,
+      capaian_pembelajaran: b,
+      kendala_pembelajaran: c,
+      status: (a&&b&&c)?'Lengkap':'Sebagian'
+    };
+    PG.saving=true;
+    if(activePG()&&typeof render==='function') render();
+    try{
+      var res=await api.upsert(TABEL, body, KONFLIK);
+      if(res&&res.error) throw res.error;
+      PG.saving=false;
+      toast('Minggu '+mg+' disimpan','success','&#10003;');
+      PG.draft={}; PG.rows=[]; PG.loaded=false;
+      loadPG();
+    }catch(e){
+      PG.saving=false;
+      var m2=(e&&e.message)?e.message:String(e);
+      if(/does not exist|relation|schema cache/i.test(m2)) toast('Tabel pengembangan_guru belum ada di Supabase','error','&#9888;');
+      else toast('Gagal menyimpan: '+m2,'error','&#9888;');
+      if(activePG()&&typeof render==='function') render();
+    }
+  }
+
+  function styleTag(){
+    return '<style id="pg-style">'
+      + '.pgw{padding:0 2px}'
+      + '.pg-head{background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:14px;margin-bottom:12px}'
+      + '.pg-eyebrow{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--indigo);font-weight:800}'
+      + '.pg-title{font-size:18px;font-weight:800;color:#e8ebf2;margin:3px 0 4px}'
+      + '.pg-sub{font-size:12px;color:#94a3b8;line-height:1.5}'
+      + '.pg-sum{display:flex;gap:8px;margin-bottom:12px}'
+      + '.pg-stat{flex:1;background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:14px;padding:11px 12px}'
+      + '.pg-stat b{display:block;font-size:20px;color:#e8ebf2;font-weight:800;line-height:1.15}'
+      + '.pg-stat small{font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em}'
+      + '.pg-box{background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:14px;margin-bottom:12px}'
+      + '.pg-lbl{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#94a3b8;margin-bottom:5px;display:block}'
+      + '.pg-inp{width:100%;box-sizing:border-box;border:1px solid rgba(148,163,184,.22);border-radius:10px;padding:9px 11px;font-size:14px;background:#0f1629;color:#e8ebf2;margin-bottom:10px;font-family:inherit}'
+      + '.pg-inp:focus{outline:none;border-color:var(--indigo);box-shadow:0 0 0 3px rgba(31,199,180,.15)}'
+      + '.pg-card{background:#161d2e;border:1px solid rgba(148,163,184,.16);border-radius:14px;padding:12px;margin-bottom:10px}'
+      + '.pg-card.kini{border-color:rgba(31,199,180,.5)}'
+      + '.pg-ctop{display:flex;align-items:center;gap:10px;margin-bottom:10px}'
+      + '.pg-cn{flex:1;min-width:0}'
+      + '.pg-cn b{display:block;font-size:14px;color:#e8ebf2;font-weight:700}'
+      + '.pg-cn small{font-size:11.5px;color:#94a3b8}'
+      + '.pg-badge{flex:none;font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:999px;background:rgba(148,163,184,.16);color:#94a3b8}'
+      + '.pg-badge.lengkap{background:rgba(31,199,180,.16);color:var(--indigo)}'
+      + '.pg-badge.sebagian{background:rgba(245,158,11,.16);color:#f59e0b}'
+      + '.pg-lbl2{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#94a3b8;margin-bottom:4px;display:block}'
+      + '.pg-lbl2 small{text-transform:none;letter-spacing:0;color:#7381a0;font-weight:600}'
+      + '.pg-txt{width:100%;box-sizing:border-box;border:1px solid rgba(148,163,184,.22);border-radius:10px;padding:9px 11px;font-size:13.5px;background:#0f1629;color:#e8ebf2;margin-bottom:11px;font-family:inherit;line-height:1.5;resize:vertical;min-height:52px}'
+      + '.pg-txt:focus{outline:none;border-color:var(--indigo);box-shadow:0 0 0 3px rgba(31,199,180,.15)}'
+      + '.pg-txt::placeholder{color:#7381a0}'
+      + '.pg-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:12px;padding:10px 14px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}'
+      + '.pg-b1{background:linear-gradient(135deg,var(--indigo) 0%,var(--indigo-dark) 100%);color:#fff}'
+      + '.pg-b1[disabled]{opacity:.6}'
+      + '.pg-b2{background:#0f1629;color:#94a3b8;border:1px solid rgba(148,163,184,.22)}'
+      + '.pg-baris{display:flex;gap:8px;align-items:center}'
+      + '.pg-kosong{background:#161d2e;border:1px dashed rgba(148,163,184,.24);border-radius:14px;padding:26px 14px;text-align:center;color:#94a3b8;font-size:12.5px}'
+      + '.pg-note{font-size:11.5px;color:#94a3b8;line-height:1.55;margin-top:8px}'
+      + '</style>';
+  }
+
+  function mingguIni(info){
+    try{ var now=tanggalISO(new Date()); return now>=info.mulai && now<=info.selesai; }catch(e){ return false; }
+  }
+
+  function opsiMapel(){
+    var list=mapelOpts();
+    if(!list.length) return '<option value="">(belum ada mapel)</option>';
+    return list.map(function(m){ return '<option value="'+esc(m)+'"'+(m===PG.mapel?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
+  }
+
+  function kartuMinggu(info){
+    var st=statusMinggu(info.minggu);
+    var kelas='pg-card'+(mingguIni(info)?' kini':'');
+    var h='<div class="'+kelas+'">';
+    h+='<div class="pg-ctop"><div class="pg-cn"><b>Minggu '+info.minggu+(mingguIni(info)?' &middot; pekan ini':'')+'</b>'
+      +'<small>'+esc(labelTanggal(info.mulai))+' \u2013 '+esc(labelTanggal(info.selesai))+'</small></div>'
+      +'<span class="pg-badge '+st.kode+'">'+esc(st.label)+'</span></div>';
+    h+='<label class="pg-lbl2">Rencana Pembelajaran <small>(awal pekan)</small></label>'
+      +'<textarea class="pg-txt" data-pg-f="rencana_pembelajaran" data-pg-minggu="'+info.minggu+'" placeholder="Materi/kegiatan yang akan dilaksanakan pekan ini...">'+esc(nilai('rencana_pembelajaran',info.minggu))+'</textarea>';
+    h+='<label class="pg-lbl2">Capaian Pembelajaran <small>(akhir pekan)</small></label>'
+      +'<textarea class="pg-txt" data-pg-f="capaian_pembelajaran" data-pg-minggu="'+info.minggu+'" placeholder="Kemampuan yang sudah tercapai pekan ini...">'+esc(nilai('capaian_pembelajaran',info.minggu))+'</textarea>';
+    h+='<label class="pg-lbl2">Kendala Pembelajaran <small>(akhir pekan)</small></label>'
+      +'<textarea class="pg-txt" data-pg-f="kendala_pembelajaran" data-pg-minggu="'+info.minggu+'" placeholder="Kendala yang dihadapi & tindak lanjutnya...">'+esc(nilai('kendala_pembelajaran',info.minggu))+'</textarea>';
+    h+='<div class="pg-baris">'
+      +'<button class="pg-btn pg-b1" onclick="zPg.simpan('+info.minggu+')"'+(PG.saving?' disabled':'')+'>'+(PG.saving?'Menyimpan...':'Simpan Minggu '+info.minggu)+'</button>'
+      +'</div></div>';
+    return h;
+  }
+
+  window.renderPengembanganGuruModule=function(detail){
+    detail=detail||{};
+    if(!PG.inited){
+      var s0=bacaSimpanan(); if(s0 && s0.guru && s0.guru!==guruKey()) s0={};
+      if(!PG.bulan) PG.bulan=(s0 && /^\d{4}-\d{2}$/.test(s0.bulan||''))?s0.bulan:bulanIni();
+      if(!PG.mapel && s0 && s0.mapel){ var l0=mapelOpts(); if(l0.some(function(m){ return String(m).toLowerCase()===String(s0.mapel).toLowerCase(); })) PG.mapel=mapelCocok(l0,s0.mapel); }
+    }
+    if(!PG.bulan) PG.bulan=bulanIni();
+    if(!PG.mapel){ var list0=mapelOpts(); PG.mapel=list0.length?list0[0]:''; }
+
+    var head='<div class="pg-head">'
+      +'<div class="pg-eyebrow">'+esc(detail.eyebrow||'Perkembangan')+'</div>'
+      +'<div class="pg-title">'+esc(detail.title||'Pengembangan')+'</div>'
+      +'<div class="pg-sub">'+esc(detail.subtitle||'Rencana, capaian, dan kendala pembelajaran mingguan per mapel.')+'</div>'
+      +'</div>';
+
+    var minggu=daftarMingguTab();
+    if(!PG.loaded && !PG.loading) loadPG();
+
+    var lengkap=0;
+    minggu.forEach(function(w){ if(statusMinggu(w.minggu).kode==='lengkap') lengkap++; });
+
+    var mapelList=mapelOpts();
+    var controls='<div class="pg-box">'
+      +'<label class="pg-lbl">Mata Pelajaran</label>'
+      + (mapelList.length
+          ? '<select class="pg-inp" onchange="zPg.setMapel(this.value)">'+opsiMapel()+'</select>'
+          : '<div class="pg-kosong" style="padding:14px;margin-bottom:10px">Daftar mapel guru belum tersedia.</div>')
+      +'<label class="pg-lbl">Bulan</label>'
+      +'<input type="month" class="pg-inp" value="'+esc(PG.bulan)+'" onchange="zPg.setBulan(this.value)"/>'
+      +'<button class="pg-btn pg-b2" onclick="zPg.muatUlang()">Muat ulang</button>'
+      +'<div class="pg-note">Isi <b>Rencana Pembelajaran</b> di awal pekan, lalu lengkapi <b>Capaian</b> dan <b>Kendala Pembelajaran</b> di akhir pekan. Tanpa pilih kelas \u2014 cukup mapel dan minggu.</div>'
+      +'</div>';
+
+    var sum='<div class="pg-sum">'
+      +'<div class="pg-stat"><b>'+minggu.length+'</b><small>Minggu</small></div>'
+      +'<div class="pg-stat"><b>'+lengkap+'</b><small>Lengkap</small></div>'
+      +'<div class="pg-stat"><b>'+(minggu.length-lengkap)+'</b><small>Belum lengkap</small></div>'
+      +'</div>';
+
+    var h=styleTag()+head+'<section class="section"><div class="pgw">'+sum+controls;
+    if(PG.loading && !PG.loaded){
+      h+='<div class="pg-kosong">Memuat data pengembangan...</div>';
+    } else if(!mapelList.length){
+      h+='';
+    } else if(!minggu.length){
+      h+='<div class="pg-kosong">Pilih bulan yang benar untuk menampilkan minggu.</div>';
+    } else {
+      h+=minggu.map(kartuMinggu).join('');
+    }
+    h+='</div></section>';
+    return h;
+  };
+
+  /* Simpan isi textarea yang sedang diketik supaya tidak hilang saat shell
+     merender ulang layar. */
+  function catatDraft(e){
+    var el=e&&e.target; if(!el||!el.getAttribute) return;
+    var f=el.getAttribute('data-pg-f'); if(!f) return;
+    var mg=el.getAttribute('data-pg-minggu'); if(!mg) return;
+    if(!PG.draft[mg]) PG.draft[mg]={};
+    PG.draft[mg][f]=el.value;
+  }
+  document.addEventListener('input', catatDraft, true);
+  document.addEventListener('change', catatDraft, true);
+
+  window.zPg={
+    setMapel:function(v){ PG.mapel=String(v||''); PG.mapelManual=true; PG.loaded=false; PG.rows=[]; PG.draft={}; tulisSimpanan(); loadPG(); if(typeof render==='function') render(); },
+    setBulan:function(v){ PG.bulan=String(v||'')||bulanIni(); PG.loaded=false; PG.rows=[]; PG.draft={}; tulisSimpanan(); loadPG(); if(typeof render==='function') render(); },
+    muatUlang:function(){ PG.loaded=false; PG.rows=[]; PG.draft={}; loadPG(); if(typeof render==='function') render(); },
+    simpan:function(mg){ simpanMinggu(mg); }
+  };
+
+  modulePlaceholders['pengembangan'] = {
+    eyebrow:'Perkembangan',
+    title:'Pengembangan',
+    subtitle:'Rencana, capaian, dan kendala pembelajaran mingguan per mapel.',
+    stats:[], focus:[]
+  };
+  console.log('[Zymata Guru] Modul Pengembangan v1 aktif');   /* [PENGEMBANGAN GURU] */
 })();
