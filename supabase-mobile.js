@@ -1092,7 +1092,8 @@
       {key:'mapel_id',label:'Mapel',type:'text'},
       {key:'jam_ke',label:'Jam Ke',type:'text'},
       {key:'status',label:'Status',type:'text',options:['Disetor','Draft','Diverifikasi']},
-      {key:'materi',label:'Materi Jurnal',type:'textarea'}
+      {key:'materi',label:'Materi Jurnal',type:'textarea'},
+      {key:'kegiatan',label:'Kegiatan Belajar',type:'textarea'}
     ]},
     'guru:surat-izin': { title:'Buat Surat', fields:[
       {key:'tanggal',label:'Tanggal',type:'date'},
@@ -1280,7 +1281,7 @@
     absensi_siswa: ['siswa_id','kelas','tanggal','status','keterangan','petugas'],
     nilai_siswa: ['siswa_id','kelas','mapel','semester','nilai_tugas','nilai_ujian','nilai_akhir','catatan','jenis'],
     jurnal_guru: ['tanggal','guru','guru_nama','kelas','mapel','jam_ke','materi','kegiatan','catatan','metode','tindak_lanjut','status'],
-    jurnal_kelas: ['tanggal','kelas','guru_nama','mapel','jam_ke','status','materi'],
+    jurnal_kelas: ['tanggal','kelas','guru_nama','mapel','jam_ke','status','materi','kegiatan'],
     jurnal_siswa: ['tanggal','siswa_id','siswa_nis','siswa_nama','kelas','kategori','catatan','tindak_lanjut','status_visibilitas'],
     hafalan: ['siswa_id','nama_siswa','kelas','surat','juz','ayat','nilai','tgl','at_tanzil','halaman','ayat_ke','catatan'],
     ibadah: ['siswa_id','nama_siswa','kelas','bulan','tahun','shalat','sunnah','puasa','sedekah','catatan'],
@@ -1505,6 +1506,13 @@
     let lastError = null;
     if(table) {
       try {
+        /* [JURNAL KELAS RIWAYAT SEGERA] createSpecificOrFallback menulis lewat
+           client mentah (postgrest), jadi cache select() (60 dtk) tidak ikut
+           dibuang seperti halnya insert()/upsert(). Akibatnya setelah simpan
+           jurnal, hydrateGuruFromSupabase() masih membaca daftar LAMA dari cache
+           dan baris baru tidak tampil di riwayat sampai refresh penuh. Buang cache
+           tabel ini sebelum menulis, sama seperti insert()/upsert(). */
+        try { if(window.__zmSelCache) window.__zmSelCache.drop(table); } catch(eC){}
         const body = makeSpecificPayload(moduleKey, payload);
         // Jika tabel ini perlu merge (gabung dengan isian wali), cari baris yang cocok dulu.
         const matchCols = UPSERT_MATCH_COLS[table];
@@ -1682,6 +1690,24 @@
       }
       return out;
     };
+    /* [EGRESS MUTABAAH RUMAH GURU] Laporan rumah guru dibatasi jendela 2 bulan
+       (bulan berjalan + bulan sebelumnya) dan 30 baris TERBARU per kelas. Terukur
+       pada kelas nyata: bentuk lama (semua bulan, 80/kelas, 26 kolom) = 49-60 KB
+       per kelas, dan untuk 17 kelas tiap kali modul dibuka menyisakan juga satu
+       query or= besar yang langsung terbuang begitu kena limit (batchFilters
+       menyusul dengan loop per-kelas). Tanpa or=, satu kelas turun ke ~18-20 KB
+       dan tidak ada query ganda. Dropdown bulan guru-shell (agRiwayatFilterUI)
+       otomatis hanya berisi bulan yang ada di jendela ini. */
+    const _pkMutabaahRumahGuru = function(){
+      const _now = new Date();
+      const _pad = function(n){ return (n < 10 ? '0' : '') + n; };
+      const _dari = new Date(_now.getFullYear(), _now.getMonth() - 1, 1);
+      const _sampai = new Date(_now.getFullYear(), _now.getMonth() + 1, 0);
+      return Object.assign(_pk(_KOL_G_MUTABAAH_RUMAH), {
+        gte: { tanggal: _dari.getFullYear() + '-' + _pad(_dari.getMonth() + 1) + '-01' },
+        lte: { tanggal: _sampai.getFullYear() + '-' + _pad(_sampai.getMonth() + 1) + '-' + _pad(_sampai.getDate()) }
+      });
+    };
     const _homeAbsensiFilters = _homeToday ? classFilters : allKelasFilters;
     const _presensiOpts = { strict: true, select: _KOL_G_ABSENSI_GURU, order: 'tanggal', ascending: false, nullsFirst: false };
     if(_homeToday){
@@ -1728,7 +1754,7 @@
       ekskul: mobile.ekskul.concat(_want('ekskul') ? await safeList('ekskul', { select: _KOL_EKSKUL_GURU, limit: 50 }) : []),
       pelanggaran: mobile.pelanggaran.concat(_want('pelanggaran') ? await tryFilteredList('pelanggaran_siswa', pelanggaranFilters, 80, _pkPelanggaran(_KOL_G_PELANGGARAN)) : []),
       kalender: mobile.kalender.concat(_want('kalender') ? await safeList('kalender_events', { select: _KOL_G_KALENDER, order: 'tahun', ascending: false, nullsFirst: false, limit: 80 }) : []),
-      mutabaahRumah: mobile.mutabaahRumah.concat(_want('mutabaahRumah') ? await tryFilteredList('mutabaah_rumah', allKelasFilters, 80, _pkKelas(_KOL_G_MUTABAAH_RUMAH)) : []),
+      mutabaahRumah: mobile.mutabaahRumah.concat(_want('mutabaahRumah') ? await tryFilteredList('mutabaah_rumah', allKelasFilters, 30, _pkMutabaahRumahGuru()) : []),
       /* [EGRESS TABEL HANTU] Tabel `mutabaah_quran` TIDAK ADA di database (dicek ke
          REST: HTTP 404 PGRST205 "Could not find the table"). Sebelumnya tetap
          ditembak 17x per hydrate dan selalu gagal. `mutabaahQuran` juga tidak ada
@@ -2022,7 +2048,10 @@
         const cols = String(onConflict).split(',').map(function(c){ return c.trim(); }).filter(Boolean);
         const punyaSemua = cols.length && cols.every(function(c){ return body[c] !== undefined && body[c] !== null && body[c] !== ''; });
         if(punyaSemua){
-          let q = client.from(table).select('*');
+          // [EGRESS KOLOM CEK] Hasil cek ini hanya dipakai untuk `id` (dan penanda
+          // baris ada/tidak), jadi tak perlu menarik semua kolom. absensi_guru
+          // tetap '*' karena barisnya dikembalikan ke pemanggil.
+          let q = client.from(table).select(table === 'absensi_guru' ? '*' : 'id');
           cols.forEach(function(c){ q = q.eq(c, body[c]); });
           const existing = await q.limit(1);
           if(existing && !existing.error && Array.isArray(existing.data) && existing.data.length){
