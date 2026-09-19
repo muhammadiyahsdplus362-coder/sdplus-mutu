@@ -4673,10 +4673,14 @@ animateWaliContent();
   async function loadRiwayatBulan(nis, konteks, ym){
     var api=SB(); if(!api||!nis) return [];
     var rg=zlbRentangBulan(ym); ym=rg.ym;
-    var box=zlbRiwayatBox();
+    // [CACHE PER ANAK] Dulu cache dikunci 'konteks+bulan' saja, jadi wali dengan
+    // 2+ anak melihat riwayat anak pertama saat ganti anak. Sekarang NIS ikut
+    // dikunci supaya tiap anak punya cache bulanannya sendiri.
+    var box=zlbRiwayatBox(), nk=String(nis);
     if(!box[konteks]) box[konteks]={};
-    if(box[konteks][ym]) return box[konteks][ym];
-    var k=konteks+'|'+ym;
+    if(!box[konteks][nk]) box[konteks][nk]={};
+    if(box[konteks][nk][ym]) return box[konteks][nk][ym];
+    var k=konteks+'|'+nk+'|'+ym;
     if(WT.rwLoading[k]) return await WT.rwLoading[k];
     var jalan=(async function(){
       try{
@@ -4687,7 +4691,7 @@ animateWaliContent();
           order:'tanggal', ascending:false, nullsFirst:false, limit:RW_LIMIT
         });
         var rows=(res&&res.data)?res.data:[];
-        box[konteks][ym]=rows;
+        box[konteks][nk][ym]=rows;
         return rows;
       }catch(e){ return []; } // galat: JANGAN di-cache, biar percobaan berikutnya mengulang
     })();
@@ -4706,11 +4710,11 @@ animateWaliContent();
   }
   // Susun WT.riwayat/WT.riwayatSekolah dari cache: bulan lembar + bulan tanggal form.
   function zlbSusunRiwayat(){
-    var box=zlbRiwayatBox();
+    var box=zlbRiwayatBox(); var nk=childNis()?String(childNis()):'';
     var mSheet=WT.lembarBulan||zlbBulanIni(), mTgl=zlbBulanDariTgl(WT.tgl);
     var months=[mSheet]; if(mTgl!==mSheet) months.push(mTgl);
     var ambil=function(konteks){
-      var out=[], bag=box[konteks]||{};
+      var out=[], bag=(box[konteks]||{})[nk]||{};
       for(var i=0;i<months.length;i++){ if(bag[months[i]]) out=out.concat(bag[months[i]]); }
       return out;
     };
@@ -4761,8 +4765,8 @@ animateWaliContent();
       var y=parseInt(a[0],10), m=parseInt(a[1],10)+(parseInt(delta,10)||0);
       if(m<1){ m=12; y--; } if(m>12){ m=1; y++; }
       var nym=y+'-'+zlbPad2(m); WT.lembarBulan=nym;
-      var nis=childNis(), box=zlbRiwayatBox();
-      if(nis && !((box.wali_murid||{})[nym] && (box.sekolah||{})[nym])){
+      var nis=childNis(), box=zlbRiwayatBox(), nk=nis?String(nis):'';
+      if(nis && !(((box.wali_murid||{})[nk]||{})[nym] && ((box.sekolah||{})[nk]||{})[nym])){
         WT.loading=true; render();
         await zlbPastikanBulan(nis, [nym]);
         WT.loading=false;
@@ -4772,8 +4776,8 @@ animateWaliContent();
     },
     setTanggal: async function(v){
       WT.tgl=String(v||'').slice(0,10)||todayStr(); WT.cleared=false; WT.draft={};
-      var nis=childNis(), mTgl=zlbBulanDariTgl(WT.tgl), box=zlbRiwayatBox();
-      if(nis && !((box.wali_murid||{})[mTgl] && (box.sekolah||{})[mTgl])){
+      var nis=childNis(), mTgl=zlbBulanDariTgl(WT.tgl), box=zlbRiwayatBox(), nk=nis?String(nis):'';
+      if(nis && !(((box.wali_murid||{})[nk]||{})[mTgl] && ((box.sekolah||{})[nk]||{})[mTgl])){
         WT.loading=true; render();
         await zlbPastikanBulan(nis, [mTgl]);
         WT.loading=false;
@@ -5064,13 +5068,13 @@ animateWaliContent();
       +'.zlb-chip{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:4px 9px;font-size:11.5px;color:#64748b;font-weight:700}'
       +'.zlb-chip b{color:#0f766e}'
       +'.zlb-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #e5e7eb;border-radius:12px}'
-      +'.zlb-tab{border-collapse:collapse;width:100%;min-width:520px;font-size:12px;background:#fff}'
+      +'.zlb-tab{border-collapse:collapse;width:100%;min-width:480px;font-size:12px;background:#fff}'
       +'.zlb-tab th{background:#f8fafc;color:#475569;font-size:10.5px;letter-spacing:.03em;padding:8px 6px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;font-weight:800}'
       +'.zlb-tab td{padding:6px;border:1px solid #eef2f7;color:#0f172a;vertical-align:top;line-height:1.35}'
       +'.zlb-tab tr.on td{background:#f0fdfa}'
       +'.zlb-tgl{text-align:center;font-weight:800;width:38px;white-space:nowrap;color:#475569}'
       +'.zlb-tgl small{display:block;font-weight:700;color:#94a3b8;font-size:9.5px}'
-      +'.zlb-cat{color:#64748b;font-size:11.5px;min-width:120px}'
+      +'.zlb-note{display:block;color:#64748b;font-size:11px;font-weight:600;margin-top:2px;word-break:break-word}'
       +'.zlb-pct{color:#0f766e;font-weight:800}'
       +'.zlb-d{color:#cbd5e1}'
       +'</style>';
@@ -5147,20 +5151,27 @@ animateWaliContent();
     for(var d1=1; d1<=nd; d1++){
       var ds=ym+'-'+zlbPad2(d1), list=perTgl[ds]||[];
       var sel=function(re){
-        return list.filter(function(r){ return re.test(String(r.kategori||'')); }).map(zlbIsiSel).filter(Boolean).join('<br>');
+        // [CATATAN PER SEL] Catatan kategori tampil di sel kategori pemiliknya,
+        // bukan dikumpulkan jadi satu kolom. Info At-Tanzil/Halaman sudah tampil
+        // lewat zlbIsiSel, jadi bagian itu dibuang supaya tidak dobel.
+        return list.filter(function(r){ return re.test(String(r.kategori||'')); }).map(function(r){
+          var isi=zlbIsiSel(r);
+          var nt=String(r.catatan||'').trim();
+          if(isTilawahKat(r.kategori||'')) nt=stripTanzilNote(nt).trim();
+          var out=isi||'';
+          if(nt) out+='<span class="zlb-note">'+esc(nt)+'</span>';
+          return out;
+        }).filter(Boolean).join('<br>');
       };
       var cT=sel(reT), cM=sel(reM), cZ=sel(reZ);
       if(cT) isiT++; if(cM) isiM++; if(cZ) isiZ++;
-      var cats=list.map(function(r){ return String(r.catatan||'').trim(); }).filter(Boolean);
-      var cC=cats.length?esc(cats.join(' \u00b7 ')):'';
-      var ada=!!(cT||cM||cZ||cC); if(ada) adaTotal++;
+      var ada=!!(cT||cM||cZ); if(ada) adaTotal++;
       var dt=new Date(th, bl-1, d1);
       trs+='<tr'+(ada?' class="on"':'')+'>'
         +'<td class="zlb-tgl">'+d1+'<small>'+ZLB_HARI[dt.getDay()]+'</small></td>'
         +'<td>'+(cT||'<span class="zlb-d">&ndash;</span>')+'</td>'
         +'<td>'+(cM||'<span class="zlb-d">&ndash;</span>')+'</td>'
-        +'<td>'+(cZ||'<span class="zlb-d">&ndash;</span>')+'</td>'
-        +'<td class="zlb-cat">'+cC+'</td></tr>';
+        +'<td>'+(cZ||'<span class="zlb-d">&ndash;</span>')+'</td></tr>';
     }
     var h=head;
     h+='<div class="zlb-stat">'
@@ -5170,7 +5181,7 @@ animateWaliContent();
       +'<span class="zlb-chip">Ziyadah <b>'+isiZ+'</b></span>'
       +'</div>';
     h+='<div class="zlb-scroll"><table class="zlb-tab"><thead><tr>'
-      +'<th>TGL</th><th>TILAWAH</th><th>MUROJA\u2019AH</th><th>ZIYADAH</th><th>CATATAN</th>'
+      +'<th>TGL</th><th>TILAWAH</th><th>MUROJA\u2019AH</th><th>ZIYADAH</th>'
       +'</tr></thead><tbody>'+trs+'</tbody></table></div>';
     if(WT.loading) h+='<p class="zwtf-note">Memuat lembar bulanan...</p>';
     else if(!adaTotal) h+='<p class="zwtf-note">Belum ada setoran pada bulan ini. Geser bulan dengan tombol &lsaquo; &rsaquo;.</p>';
